@@ -31,11 +31,17 @@ from sqlalchemy.exc import SQLAlchemyError
 
 import logging
 from code.logics.types import DataFrameJSON
+from code.logics.cache_utils import TTLCache
 # from code.settings import setup_logging
 
 # setup_logging()
 
 logger = logging.getLogger(__name__)
+
+# Cache for get_distinct_values() queries to avoid redundant DB queries
+# Example: When cascading through filters, Main_LOB query is reused across 4 endpoints
+# TTL: 5 minutes (same as filters_cache), Max: 50 entries
+_distinct_values_cache = TTLCache(max_size=50, ttl_seconds=300)
 
 
 def normalize_month(month_str):
@@ -281,6 +287,13 @@ class ForecastModel(SQLModel, table=True):
         sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     )
     UpdatedBy:str
+
+    # Indexes for cascade filter performance
+    __table_args__ = (
+        Index('idx_forecast_year_month', 'Year', 'Month'),
+        Index('idx_forecast_main_lob', 'Centene_Capacity_Plan_Main_LOB'),
+        Index('idx_forecast_case_type', 'Centene_Capacity_Plan_Case_Type'),
+    )
 
 class ForecastMonthsModel(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
@@ -864,6 +877,116 @@ class DBManager:
             if month and year:
                 query=self.filter_by_month_and_year(query, month, year)
             return self._execute_query(query)
+
+    def get_distinct_values(
+        self,
+        column_name: str,
+        month: Optional[str] = None,
+        year: Optional[int] = None,
+        filter_values: Optional[Dict[str, List[str]]] = None
+    ) -> List[str]:
+        """
+        Get distinct non-null values for a column using optimized database query.
+        Database-agnostic: works with both SQLite and MSSQL.
+
+        **Internal Caching**: Results are cached for 5 minutes to avoid redundant queries.
+        Example: When cascading filters, Main_LOB query is reused across platforms/markets/localities/worktypes.
+
+        Args:
+            column_name: Column to get distinct values from (e.g., 'Year', 'Centene_Capacity_Plan_Main_LOB')
+            month: Optional month filter (full name like "February")
+            year: Optional year filter
+            filter_values: Optional dict of {column_name: [allowed_values]} for additional filtering
+                          Example: {"Centene_Capacity_Plan_Main_LOB": ["Amisys Medicaid", "Facets Medicare"]}
+                          Used for worktype endpoint to filter Case_Type by matching Main_LOBs
+
+        Returns:
+            Sorted list of distinct values (None/empty excluded)
+
+        Example:
+            # Get all years
+            >>> db_manager.get_distinct_values("Year")
+            [2023, 2024, 2025]
+
+            # Get distinct Main_LOB for February 2025
+            >>> db_manager.get_distinct_values("Centene_Capacity_Plan_Main_LOB", "February", 2025)
+            ['Amisys Medicaid Domestic', 'Facets Medicare', ...]
+
+            # Get distinct Case_Type WHERE Main_LOB IN [matching_lobs]
+            >>> db_manager.get_distinct_values(
+                "Centene_Capacity_Plan_Case_Type",
+                "February",
+                2025,
+                filter_values={"Centene_Capacity_Plan_Main_LOB": ["Amisys Medicaid"]}
+            )
+            ['Claims Processing', 'Enrollment']
+        """
+        # Generate cache key
+        model_name = self.Model.__name__
+        filter_key = ""
+        if filter_values:
+            # Convert filter_values dict to sorted string for cache key
+            filter_parts = []
+            for col, vals in sorted(filter_values.items()):
+                sorted_vals = sorted(vals) if vals else []
+                filter_parts.append(f"{col}=[{','.join(sorted_vals)}]")
+            filter_key = f"&filters={';'.join(filter_parts)}"
+
+        cache_key = f"distinct:{model_name}:{column_name}:month={month or 'None'}&year={year or 'None'}{filter_key}"
+
+        # Check cache first
+        cached_result = _distinct_values_cache.get(cache_key)
+        if cached_result is not None:
+            logger.debug(f"[DBManager] Cache hit for get_distinct_values: {cache_key}")
+            return cached_result
+
+        # Cache miss - execute query
+        logger.debug(f"[DBManager] Cache miss for get_distinct_values: {cache_key}")
+
+        with self.SessionLocal() as session:
+            try:
+                # Get column object using getattr (database-agnostic)
+                column = getattr(self.Model, column_name)
+
+                # Build query using func.distinct() - translates to native DISTINCT on both DBs
+                query = session.query(func.distinct(column))
+
+                # Apply month/year filter using existing method
+                if month and year:
+                    query = self.filter_by_month_and_year(query, month, year)
+
+                # Apply additional column filters (for worktype filtering by Main_LOB)
+                if filter_values:
+                    for col_name, allowed_values in filter_values.items():
+                        if allowed_values:
+                            filter_column = getattr(self.Model, col_name)
+                            # Use .in_() for SQL IN clause (database-agnostic)
+                            query = query.filter(filter_column.in_(allowed_values))
+
+                # Filter out None/empty values (database-agnostic NULL check)
+                query = query.filter(column.isnot(None), column != '')
+
+                # Execute query
+                results = query.all()
+
+                # Extract values from result tuples
+                values = [row[0] for row in results if row[0]]
+
+                # Sort
+                sorted_values = sorted(values)
+
+                # Cache the result before returning
+                _distinct_values_cache.set(cache_key, sorted_values)
+                logger.debug(f"[DBManager] Cached result for: {cache_key} ({len(sorted_values)} values)")
+
+                return sorted_values
+
+            except AttributeError:
+                logger.error(f"[DBManager] Column '{column_name}' does not exist on {self.Model.__name__}")
+                return []
+            except Exception as e:
+                logger.error(f"[DBManager] Error getting distinct values for {column_name}: {e}", exc_info=True)
+                return []
 
     def update_records(self, df:pd.DataFrame, month:str, year:int, keys:List[str]=None, updated_by='system'):
         """

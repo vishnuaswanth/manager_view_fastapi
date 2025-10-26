@@ -21,8 +21,10 @@ from code.logics.db import (
     ForecastMonthsModel,
     ForecastModel,
     RawData,
-    UploadDataTimeDetails
+    UploadDataTimeDetails,
+    _distinct_values_cache
 )
+from sqlalchemy import func
 # from logics.allocation import process_files
 from fastapi.responses import StreamingResponse, HTMLResponse
 
@@ -89,137 +91,16 @@ app = FastAPI(
 filters_cache = TTLCache(max_size=8, ttl_seconds=300)
 data_cache = TTLCache(max_size=64, ttl_seconds=60)
 
-
-# ==================== CASCADE FILTER HELPER FUNCTIONS ====================
-
-# Known platforms and localities (case-insensitive matching)
-CASCADE_PLATFORMS = ["amisys", "facets", "xcelys"]
-CASCADE_LOCALITIES = ["domestic", "global", "(domestic)", "(global)"]
-
-
-def parse_main_lob_preserve_case(main_lob: str) -> Dict[str, Optional[str]]:
-    """
-    Parse main_lob into platform, market, and locality components while PRESERVING original case.
-
-    This is similar to manager_view.parse_main_lob but keeps original case for filter values.
-
-    Format: <platform> <market> [<locality>]
-    - Platform: Amisys, Facets, or Xcelys (first word if it matches known platforms)
-    - Locality: Domestic or Global (last word if it matches known localities)
-    - Market: Everything in between
-
-    Args:
-        main_lob: String like "Amisys Medicaid Domestic" or "Facets OIC Volumes"
-
-    Returns:
-        Dict with keys: platform, market, locality (preserving original case)
-    """
-    if not main_lob or not isinstance(main_lob, str):
-        return {"platform": None, "market": None, "locality": None}
-
-    main_lob_cleaned = main_lob.strip()
-    if not main_lob_cleaned:
-        return {"platform": None, "market": None, "locality": None}
-
-    parts = main_lob_cleaned.split()
-
-    if len(parts) == 1:
-        single_token = parts[0]
-        if single_token.lower() in CASCADE_PLATFORMS:
-            return {"platform": single_token, "market": None, "locality": None}
-        elif single_token.lower() in CASCADE_LOCALITIES:
-            return {"platform": None, "market": None, "locality": single_token}
-        else:
-            return {"platform": None, "market": single_token, "locality": None}
-
-    platform = None
-    locality = None
-    market_parts = []
-
-    # Check first part for platform (case-insensitive match, preserve original)
-    if parts[0].lower() in CASCADE_PLATFORMS:
-        platform = parts[0]  # Preserve original case
-        remaining_parts = parts[1:]
-    else:
-        remaining_parts = parts
-
-    # Check last part for locality (case-insensitive match, preserve original)
-    if remaining_parts and remaining_parts[-1].lower() in CASCADE_LOCALITIES:
-        locality = remaining_parts[-1]  # Preserve original case
-        market_parts = remaining_parts[:-1]
-    else:
-        market_parts = remaining_parts
-
-    # Everything else is market (preserve original case)
-    market = " ".join(market_parts) if market_parts else None
-
-    return {
-        "platform": platform,
-        "market": market,
-        "locality": locality
-    }
-
-
-def extract_unique_cascade_values(
-    records: List[Dict],
-    component: str,
-    platform_filter: Optional[str] = None,
-    market_filter: Optional[str] = None,
-    locality_filter: Optional[str] = None
-) -> List[str]:
-    """
-    Extract unique values for a specific LOB component from forecast records.
-
-    Args:
-        records: List of forecast records with Centene_Capacity_Plan_Main_LOB field
-        component: Which component to extract ('platform', 'market', or 'locality')
-        platform_filter: Filter by platform before extracting (case-insensitive)
-        market_filter: Filter by market before extracting (case-insensitive)
-        locality_filter: Filter by locality before extracting (case-insensitive)
-
-    Returns:
-        List of unique values for the component (sorted, case preserved)
-    """
-    unique_values = set()
-
-    for record in records:
-        main_lob = record.get("Centene_Capacity_Plan_Main_LOB", "")
-        if not main_lob:
-            continue
-
-        parsed = parse_main_lob_preserve_case(main_lob)
-
-        # Apply filters (case-insensitive comparison)
-        if platform_filter and (not parsed.get("platform") or parsed["platform"].lower() != platform_filter.lower()):
-            continue
-        if market_filter and (not parsed.get("market") or parsed["market"].lower() != market_filter.lower()):
-            continue
-        if locality_filter and (not parsed.get("locality") or parsed["locality"].lower() != locality_filter.lower()):
-            continue
-
-        # Extract the requested component
-        value = parsed.get(component)
-        if value:
-            unique_values.add(value)
-
-    return sorted(list(unique_values))
-
-
-def generate_cascade_cache_key(prefix: str, **params) -> str:
-    """
-    Generate a cache key for cascade endpoints with sorted parameters.
-
-    Args:
-        prefix: Cache key prefix (e.g., 'cascade:platforms')
-        **params: Query parameters to include in cache key
-
-    Returns:
-        Cache key string with sorted params
-    """
-    sorted_params = "&".join(f"{k}={v}" for k, v in sorted(params.items()) if v is not None)
-    if sorted_params:
-        return f"{prefix}:{sorted_params}"
-    return f"{prefix}:ALL"
+# Import cascade filter helper functions
+from code.logics.cascade_filters import (
+    generate_cascade_cache_key,
+    extract_platforms_from_main_lobs,
+    extract_markets_from_main_lobs,
+    extract_localities_from_main_lobs,
+    filter_main_lobs_by_criteria,
+    get_month_name_from_number,
+    get_month_number_from_name
+)
 
 
 def invalidate_forecast_cache(month: str, year: int):
@@ -228,7 +109,8 @@ def invalidate_forecast_cache(month: str, year: int):
 
     This clears:
     - Manager view filters cache (report months, categories)
-    - Cascade filter caches (years, months, platforms, markets, localities, worktypes)
+    - Cascade filter endpoint caches (years, months, platforms, markets, localities, worktypes)
+    - Database query cache (distinct values - Main_LOB, Case_Type, etc.)
     - Data caches for the specific month
 
     Args:
@@ -242,9 +124,14 @@ def invalidate_forecast_cache(month: str, year: int):
         month_num = list(cal_month_name).index(month.strip().capitalize())
         report_month_key = f"{year}-{month_num:02d}"
 
-        # Clear filters cache (includes manager view filters and ALL cascade filters)
+        # Clear filters cache (includes manager view filters and ALL cascade endpoint caches)
         filters_cache.clear()
-        logger.info(f"[Cache] Cleared filters cache (manager view + cascade) due to forecast upload: {month} {year}")
+        logger.info(f"[Cache] Cleared filters cache (manager view + cascade endpoints) due to forecast upload: {month} {year}")
+
+        # Clear database query cache (distinct values cache)
+        # This cache stores results from get_distinct_values() queries (Main_LOB, Case_Type, etc.)
+        _distinct_values_cache.clear()
+        logger.info(f"[Cache] Cleared distinct values cache (database queries) due to forecast upload: {month} {year}")
 
         # Clear all data cache entries for this month (all categories)
         # Pattern: "data:v1:YYYY-MM:" will match all categories for this month
@@ -918,6 +805,7 @@ def get_forecast_filter_years():
     GET /forecast/filter-years
 
     Returns all years that have forecast data available.
+    Uses optimized database query (SELECT DISTINCT Year).
 
     Response:
         {"years": [{"value": "2025", "display": "2025"}, ...]}
@@ -933,23 +821,12 @@ def get_forecast_filter_years():
         return cached_response
 
     try:
-        # Get distinct years from ForecastModel
-        db_manager = core_utils.get_db_manager(ForecastModel, limit=100000, skip=0, select_columns=["Year"])
-        data = db_manager.read_db()
-        records = data.get("records", [])
+        # Get distinct years using database query (efficient!)
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+        years = db_manager.get_distinct_values("Year")
 
-        # Extract unique years
-        years_set = set()
-        for record in records:
-            year = record.get("Year")
-            if year:
-                years_set.add(year)
-
-        # Sort in descending order (newest first)
-        sorted_years = sorted(list(years_set), reverse=True)
-
-        # Format response
-        years_list = [{"value": str(year), "display": str(year)} for year in sorted_years]
+        # Sort in descending order (newest first) and format response
+        years_list = [{"value": str(y), "display": str(y)} for y in sorted(years, reverse=True)]
         response = {"years": years_list}
 
         # Cache the response
@@ -969,6 +846,7 @@ def get_forecast_months_for_year(year: int):
     GET /forecast/months/{year}
 
     Returns available months for the selected year based on data availability.
+    Uses optimized database query (SELECT DISTINCT Month WHERE Year=X).
 
     Path Parameters:
         year: Selected year (e.g., 2025)
@@ -991,19 +869,16 @@ def get_forecast_months_for_year(year: int):
         return cached_response
 
     try:
-        # Get distinct months from ForecastModel for the given year
-        db_manager = core_utils.get_db_manager(ForecastModel, limit=100000, skip=0, select_columns=["Month", "Year"])
-        data = db_manager.read_db()
-        records = data.get("records", [])
+        # Get distinct months for this year using database query (efficient!)
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
 
-        # Extract unique months for this year
-        from calendar import month_name as cal_month_name
-        months_set = set()
-        for record in records:
-            if record.get("Year") == year:
-                month_str = record.get("Month", "").strip()
-                if month_str:
-                    months_set.add(month_str)
+        # Use direct query for year filtering since get_distinct_values doesn't support year-only filter
+        with db_manager.SessionLocal() as session:
+            query = session.query(func.distinct(ForecastModel.Month))
+            query = query.filter(ForecastModel.Year == year)
+            query = query.filter(ForecastModel.Month.isnot(None), ForecastModel.Month != '')
+            results = query.all()
+            months_set = [row[0] for row in results if row[0]]
 
         if not months_set:
             raise HTTPException(status_code=404, detail=f"No data available for year {year}")
@@ -1012,10 +887,10 @@ def get_forecast_months_for_year(year: int):
         month_list = []
         for month_str in months_set:
             try:
-                month_num = list(cal_month_name).index(month_str)
+                month_num = get_month_number_from_name(month_str)
                 month_list.append((month_num, month_str))
             except ValueError:
-                logger.warning(f"[Cascade] Invalid month name found: {month_str}")
+                logger.warning(f"[Cascade] Invalid month name: {month_str}")
                 continue
 
         # Sort by month number
@@ -1043,6 +918,7 @@ def get_forecast_platforms(year: int, month: int):
     GET /forecast/platforms
 
     Returns available platforms (BOC - Basis of Calculation) for selected year and month.
+    Uses optimized database query to fetch only distinct Main_LOB values (~10-50 rows).
 
     Query Parameters:
         year: Selected year
@@ -1069,27 +945,20 @@ def get_forecast_platforms(year: int, month: int):
 
     try:
         # Convert month number to month name
-        from calendar import month_name as cal_month_name
-        month_name_str = list(cal_month_name)[month]
+        month_name_str = get_month_name_from_number(month)
 
-        # Get forecast records for the given year and month
-        db_manager = core_utils.get_db_manager(
-            ForecastModel,
-            limit=100000,
-            skip=0,
-            select_columns=["Centene_Capacity_Plan_Main_LOB", "Month", "Year"]
-        )
-        data = db_manager.read_db(month_name_str, year)
-        records = data.get("records", [])
+        # Get distinct Main_LOB values using database query (efficient! ~10-50 rows instead of 100k)
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+        main_lob_values = db_manager.get_distinct_values("Centene_Capacity_Plan_Main_LOB", month_name_str, year)
 
-        if not records:
+        if not main_lob_values:
             raise HTTPException(
                 status_code=404,
                 detail=f"No platforms found for year={year}, month={month}"
             )
 
-        # Extract unique platforms
-        platforms = extract_unique_cascade_values(records, "platform")
+        # Extract platforms from Main_LOB strings (only ~10-50 parsing operations!)
+        platforms = extract_platforms_from_main_lobs(main_lob_values)
 
         if not platforms:
             raise HTTPException(
@@ -1119,6 +988,7 @@ def get_forecast_markets(year: int, month: int, platform: str):
     GET /forecast/markets
 
     Returns available markets (insurance types) filtered by platform, year, and month.
+    Uses optimized database query to fetch only distinct Main_LOB values (~10-50 rows).
 
     Query Parameters:
         year: Selected year
@@ -1146,27 +1016,20 @@ def get_forecast_markets(year: int, month: int, platform: str):
 
     try:
         # Convert month number to month name
-        from calendar import month_name as cal_month_name
-        month_name_str = list(cal_month_name)[month]
+        month_name_str = get_month_name_from_number(month)
 
-        # Get forecast records for the given year and month
-        db_manager = core_utils.get_db_manager(
-            ForecastModel,
-            limit=100000,
-            skip=0,
-            select_columns=["Centene_Capacity_Plan_Main_LOB", "Month", "Year"]
-        )
-        data = db_manager.read_db(month_name_str, year)
-        records = data.get("records", [])
+        # Get distinct Main_LOB values using database query (efficient!)
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+        main_lob_values = db_manager.get_distinct_values("Centene_Capacity_Plan_Main_LOB", month_name_str, year)
 
-        if not records:
+        if not main_lob_values:
             raise HTTPException(
                 status_code=404,
                 detail=f"No markets found for platform={platform}, year={year}, month={month}"
             )
 
-        # Extract unique markets filtered by platform
-        markets = extract_unique_cascade_values(records, "market", platform_filter=platform)
+        # Extract markets filtered by platform (only ~10-50 parsing operations!)
+        markets = extract_markets_from_main_lobs(main_lob_values, platform)
 
         if not markets:
             raise HTTPException(
@@ -1197,6 +1060,7 @@ def get_forecast_localities(year: int, month: int, platform: str, market: str):
 
     Returns available localities for selected platform and market.
     Always includes "-- All Localities --" as first option.
+    Uses optimized database query to fetch only distinct Main_LOB values (~10-50 rows).
 
     Query Parameters:
         year: Selected year
@@ -1229,28 +1093,17 @@ def get_forecast_localities(year: int, month: int, platform: str, market: str):
 
     try:
         # Convert month number to month name
-        from calendar import month_name as cal_month_name
-        month_name_str = list(cal_month_name)[month]
+        month_name_str = get_month_name_from_number(month)
 
-        # Get forecast records for the given year and month
-        db_manager = core_utils.get_db_manager(
-            ForecastModel,
-            limit=100000,
-            skip=0,
-            select_columns=["Centene_Capacity_Plan_Main_LOB", "Month", "Year"]
-        )
-        data = db_manager.read_db(month_name_str, year)
-        records = data.get("records", [])
+        # Get distinct Main_LOB values using database query (efficient!)
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+        main_lob_values = db_manager.get_distinct_values("Centene_Capacity_Plan_Main_LOB", month_name_str, year)
 
-        if not records:
+        if not main_lob_values:
             raise HTTPException(status_code=404, detail="No localities found for given filters")
 
-        # Extract unique localities filtered by platform and market
-        localities = extract_unique_cascade_values(
-            records, "locality",
-            platform_filter=platform,
-            market_filter=market
-        )
+        # Extract localities filtered by platform and market (only ~10-50 parsing operations!)
+        localities = extract_localities_from_main_lobs(main_lob_values, platform, market)
 
         # Always include "All Localities" option as first item
         response = [{"value": "", "display": "-- All Localities --"}]
@@ -1284,6 +1137,9 @@ def get_forecast_worktypes(
     GET /forecast/worktypes
 
     Returns available worktypes (processes) for selected filters. This is the final step in the cascade.
+    Uses TWO optimized database queries (no Python looping through 100k records!):
+    1. Get distinct Main_LOB values (~10-50 rows)
+    2. Get distinct Case_Type WHERE Main_LOB IN [matching_lobs] (~10-20 rows)
 
     Query Parameters:
         year: Selected year
@@ -1327,59 +1183,36 @@ def get_forecast_worktypes(
 
     try:
         # Convert month number to month name
-        from calendar import month_name as cal_month_name
-        month_name_str = list(cal_month_name)[month]
+        month_name_str = get_month_name_from_number(month)
 
-        # Get forecast records for the given year and month
-        db_manager = core_utils.get_db_manager(
-            ForecastModel,
-            limit=100000,
-            skip=0,
-            select_columns=["Centene_Capacity_Plan_Main_LOB", "Centene_Capacity_Plan_Case_Type", "Month", "Year"]
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+
+        # Step 1: Get distinct Main_LOB values using database query (efficient! ~10-50 rows)
+        main_lob_values = db_manager.get_distinct_values("Centene_Capacity_Plan_Main_LOB", month_name_str, year)
+
+        if not main_lob_values:
+            raise HTTPException(status_code=404, detail="No worktypes found for given filters")
+
+        # Step 2: Filter Main_LOBs that match platform/market/locality criteria (Python, ~10-50 operations)
+        matching_lobs = filter_main_lobs_by_criteria(main_lob_values, platform, market, locality_normalized)
+
+        if not matching_lobs:
+            raise HTTPException(status_code=404, detail="No worktypes found for given filters")
+
+        # Step 3: Query database for distinct Case_Type WHERE Main_LOB IN matching_lobs (database query!)
+        # This is the KEY optimization - we use filter_values to query only matching Main_LOBs
+        worktypes = db_manager.get_distinct_values(
+            "Centene_Capacity_Plan_Case_Type",
+            month_name_str,
+            year,
+            filter_values={"Centene_Capacity_Plan_Main_LOB": matching_lobs}
         )
-        data = db_manager.read_db(month_name_str, year)
-        records = data.get("records", [])
 
-        if not records:
+        if not worktypes:
             raise HTTPException(status_code=404, detail="No worktypes found for given filters")
 
-        # Filter records by platform, market, and optionally locality
-        filtered_records = []
-        for record in records:
-            main_lob = record.get("Centene_Capacity_Plan_Main_LOB", "")
-            if not main_lob:
-                continue
-
-            parsed = parse_main_lob_preserve_case(main_lob)
-
-            # Check platform match (case-insensitive)
-            if not parsed.get("platform") or parsed["platform"].lower() != platform.lower():
-                continue
-
-            # Check market match (case-insensitive)
-            if not parsed.get("market") or parsed["market"].lower() != market.lower():
-                continue
-
-            # Check locality match if specified (case-insensitive)
-            if locality_normalized:
-                if not parsed.get("locality") or parsed["locality"].lower() != locality_normalized.lower():
-                    continue
-
-            filtered_records.append(record)
-
-        # Extract unique worktypes from filtered records
-        worktypes_set = set()
-        for record in filtered_records:
-            worktype = record.get("Centene_Capacity_Plan_Case_Type", "").strip()
-            if worktype:
-                worktypes_set.add(worktype)
-
-        if not worktypes_set:
-            raise HTTPException(status_code=404, detail="No worktypes found for given filters")
-
-        # Sort and format response
-        sorted_worktypes = sorted(list(worktypes_set))
-        response = [{"value": worktype, "display": worktype} for worktype in sorted_worktypes]
+        # Format response (worktypes already sorted by get_distinct_values)
+        response = [{"value": wt, "display": wt} for wt in worktypes]
 
         # Cache the response
         filters_cache.set(cache_key, response)
