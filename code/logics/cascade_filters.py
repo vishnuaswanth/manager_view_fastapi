@@ -160,20 +160,30 @@ def extract_markets_from_main_lobs(
     Returns:
         Sorted list of unique markets (original case preserved)
 
+    Raises:
+        ValueError: If platform_filter is None or empty
+
     Example:
         >>> main_lobs = ["Amisys Medicaid Domestic", "Amisys Medicare", "Facets Commercial"]
         >>> extract_markets_from_main_lobs(main_lobs, "Amisys")
         ['Medicaid', 'Medicare']
     """
+    # Validate input
+    if not platform_filter or not isinstance(platform_filter, str) or not platform_filter.strip():
+        raise ValueError("platform_filter cannot be None, empty, or whitespace-only")
+
     markets = set()
+    platform_filter_lower = platform_filter.strip().lower()
 
     for main_lob in main_lob_values:
         parsed = parse_main_lob_preserve_case(main_lob)
 
         # Filter by platform (case-insensitive comparison)
-        if parsed.get("platform", "").lower() == platform_filter.lower():
-            if parsed.get("market"):
-                markets.add(parsed["market"])
+        parsed_platform = parsed.get("platform", "")
+        if parsed_platform and parsed_platform.lower() == platform_filter_lower:
+            parsed_market = parsed.get("market")
+            if parsed_market:
+                markets.add(parsed_market)
 
     return sorted(list(markets))
 
@@ -194,21 +204,36 @@ def extract_localities_from_main_lobs(
     Returns:
         Sorted list of unique localities (original case preserved)
 
+    Raises:
+        ValueError: If platform_filter or market_filter is None or empty
+
     Example:
         >>> main_lobs = ["Amisys Medicaid Domestic", "Amisys Medicaid Global", "Amisys Medicare"]
         >>> extract_localities_from_main_lobs(main_lobs, "Amisys", "Medicaid")
         ['Domestic', 'Global']
     """
+    # Validate inputs
+    if not platform_filter or not isinstance(platform_filter, str) or not platform_filter.strip():
+        raise ValueError("platform_filter cannot be None, empty, or whitespace-only")
+    if not market_filter or not isinstance(market_filter, str) or not market_filter.strip():
+        raise ValueError("market_filter cannot be None, empty, or whitespace-only")
+
     localities = set()
+    platform_filter_lower = platform_filter.strip().lower()
+    market_filter_lower = market_filter.strip().lower()
 
     for main_lob in main_lob_values:
         parsed = parse_main_lob_preserve_case(main_lob)
 
         # Filter by platform and market (case-insensitive)
-        if (parsed.get("platform", "").lower() == platform_filter.lower() and
-            parsed.get("market", "").lower() == market_filter.lower()):
-            if parsed.get("locality"):
-                localities.add(parsed["locality"])
+        parsed_platform = parsed.get("platform", "")
+        parsed_market = parsed.get("market", "")
+
+        if (parsed_platform and parsed_platform.lower() == platform_filter_lower and
+            parsed_market and parsed_market.lower() == market_filter_lower):
+            parsed_locality = parsed.get("locality")
+            if parsed_locality:
+                localities.add(parsed_locality)
 
     return sorted(list(localities))
 
@@ -232,6 +257,9 @@ def filter_main_lobs_by_criteria(
     Returns:
         List of Main_LOB strings that match all criteria
 
+    Raises:
+        ValueError: If platform_filter or market_filter is None or empty
+
     Example:
         >>> main_lobs = ["Amisys Medicaid Domestic", "Amisys Medicaid Global", "Amisys Medicare"]
         >>> filter_main_lobs_by_criteria(main_lobs, "Amisys", "Medicaid", "Domestic")
@@ -240,22 +268,34 @@ def filter_main_lobs_by_criteria(
         >>> filter_main_lobs_by_criteria(main_lobs, "Amisys", "Medicaid", None)
         ['Amisys Medicaid Domestic', 'Amisys Medicaid Global']
     """
+    # Validate required inputs
+    if not platform_filter or not isinstance(platform_filter, str) or not platform_filter.strip():
+        raise ValueError("platform_filter cannot be None, empty, or whitespace-only")
+    if not market_filter or not isinstance(market_filter, str) or not market_filter.strip():
+        raise ValueError("market_filter cannot be None, empty, or whitespace-only")
+
     matching_lobs = []
+    platform_filter_lower = platform_filter.strip().lower()
+    market_filter_lower = market_filter.strip().lower()
+    locality_filter_lower = locality_filter.strip().lower() if locality_filter and locality_filter.strip() else None
 
     for main_lob in main_lob_values:
         parsed = parse_main_lob_preserve_case(main_lob)
 
         # Check platform match (case-insensitive)
-        if parsed.get("platform", "").lower() != platform_filter.lower():
+        parsed_platform = parsed.get("platform", "")
+        if not parsed_platform or parsed_platform.lower() != platform_filter_lower:
             continue
 
         # Check market match (case-insensitive)
-        if parsed.get("market", "").lower() != market_filter.lower():
+        parsed_market = parsed.get("market", "")
+        if not parsed_market or parsed_market.lower() != market_filter_lower:
             continue
 
         # Check locality match if specified (case-insensitive)
-        if locality_filter:
-            if parsed.get("locality", "").lower() != locality_filter.lower():
+        if locality_filter_lower:
+            parsed_locality = parsed.get("locality", "")
+            if not parsed_locality or parsed_locality.lower() != locality_filter_lower:
                 continue
 
         # This Main_LOB matches all criteria

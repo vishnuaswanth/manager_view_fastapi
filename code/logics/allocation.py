@@ -101,6 +101,9 @@ def get_value(row, month, filetype, df:pd.DataFrame=None, unnamed_count=None):
             if not filtered_df.empty:
                 return filtered_df[(file_name, "Vendor Eligible Forecast (WFM)", month, "")].values[0]
             return 0
+    except KeyError as e:
+        logging.warning(f"Missing month column '{month}' in get_value for {file_name}, {filetype}, returning 0")
+        return 0
     except Exception as e:
         logging.warning(f"Error in get_value for {file_name}, {filetype}, {month}: {e}")
         return 0
@@ -157,10 +160,18 @@ class Calculations():
 #     return filtered_target_df['Target CPH'].iloc[0] if not filtered_target_df.empty else 0
 
 def get_fte_required(row, month, calculations: Calculations):
-    target_cph = row[('Centene Capacity plan', 'Target CPH')]
-    month_value = row[('Client Forecast', month)]
-    no_of_days = calculations.month_with_days[month]
-    return month_value / (target_cph * calculations.workhours * calculations.occupancy * (1 - calculations.shrinkage) * no_of_days) if target_cph != 0 else 0
+    try:
+        target_cph = row[('Centene Capacity plan', 'Target CPH')]
+        month_value = row[('Client Forecast', month)]
+        no_of_days = calculations.month_with_days.get(month, 0)
+
+        if target_cph == 0 or no_of_days == 0:
+            return 0
+
+        return month_value / (target_cph * calculations.workhours * calculations.occupancy * (1 - calculations.shrinkage) * no_of_days)
+    except (KeyError, TypeError, ValueError):
+        logging.warning(f"Missing month data for {month} in get_fte_required, returning 0")
+        return 0
 
 def get_temp_casetype(casetype):
     casetype = str(casetype)
@@ -236,13 +247,19 @@ def get_temp_casetype(casetype):
 def get_skills_split_count(row, month, df):
     # pdb.set_trace()
     global state_with_worktype_volume_dict
-    platform = row[('Centene Capacity plan', 'Main LOB')]
-    platform= str(platform).split(" ")[0]
-    worktype = row[('Centene Capacity plan', 'Case type')]
-    state = row[('Centene Capacity plan', 'State')]
-    fte_required = row[('FTE Required', month)]
+
+    try:
+        platform = row[('Centene Capacity plan', 'Main LOB')]
+        platform= str(platform).split(" ")[0]
+        worktype = row[('Centene Capacity plan', 'Case type')]
+        state = row[('Centene Capacity plan', 'State')]
+        fte_required = row[('FTE Required', month)]
+    except KeyError as e:
+        logging.warning(f"Missing month column '{month}' in get_skills_split_count, returning 0")
+        return 0
+
     key = f"{platform}_{state}_{month}"
-    
+
     logging.debug(f"~~ ENTER get_skills_split_count: state={state!r}, month={month!r}, worktype={worktype!r}, fte_required={fte_required}")
     # pdb.set_trace()
     # initialize bucket if missing

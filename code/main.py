@@ -1048,6 +1048,9 @@ def get_forecast_markets(year: int, month: int, platform: str):
 
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"[Cascade] Validation error in markets endpoint: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"[Cascade] Error in markets endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve markets")
@@ -1120,6 +1123,9 @@ def get_forecast_localities(year: int, month: int, platform: str, market: str):
 
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"[Cascade] Validation error in localities endpoint: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"[Cascade] Error in localities endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve localities")
@@ -1222,6 +1228,9 @@ def get_forecast_worktypes(
 
     except HTTPException:
         raise
+    except ValueError as ve:
+        logger.error(f"[Cascade] Validation error in worktypes endpoint: {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         logger.error(f"[Cascade] Error in worktypes endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve worktypes")

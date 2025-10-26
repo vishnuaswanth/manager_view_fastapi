@@ -104,6 +104,44 @@ def convert_to_month(x):
     except Exception:
         return x
 
+def generate_consecutive_months(start_month: str, count: int = 6) -> List[str]:
+    """
+    Generate a list of consecutive month names starting from start_month.
+    Handles year wraparound automatically.
+
+    Args:
+        start_month: Starting month name (e.g., "November", "January")
+        count: Number of consecutive months to generate (default: 6)
+
+    Returns:
+        List of month names in consecutive order
+
+    Examples:
+        >>> generate_consecutive_months("January", 6)
+        ['January', 'February', 'March', 'April', 'May', 'June']
+
+        >>> generate_consecutive_months("November", 6)
+        ['November', 'December', 'January', 'February', 'March', 'April']
+
+    Raises:
+        ValueError: If start_month is not a valid month name
+    """
+    months = list(month_name)[1:]  # ['January', 'February', ..., 'December']
+
+    # Validate start_month
+    if start_month not in months:
+        raise ValueError(f"Invalid month name: {start_month}")
+
+    # Find starting index
+    start_idx = months.index(start_month)
+
+    # Generate consecutive months with wraparound
+    result = []
+    for i in range(count):
+        result.append(months[(start_idx + i) % 12])
+
+    return result
+
 def get_columns_between_column_names(
     df: pd.DataFrame,
     col_level: int = 0,
@@ -574,11 +612,15 @@ class PreProcessing:
                 if df.columns.nlevels == 4:
                     unique_months = get_columns_between_column_names(df, 2, 'CPH', 'Work Type')
                     break
-        month_codes = {f"Month{i+1}": month for i, month in enumerate(unique_months)}
 
-        if len(unique_months) <6:
-            for i in range(len(unique_months),6):
-                month_codes[f"Month{i+1}"]=""
+        # Error if no months found
+        if not unique_months or len(unique_months) == 0:
+            raise ValueError("No forecast months found in summary file")
+
+        # Generate exactly 6 consecutive months from first month found
+        first_month = unique_months[0]
+        consecutive_months = generate_consecutive_months(first_month, 6)
+        month_codes = {f"Month{i+1}": month for i, month in enumerate(consecutive_months)}
 
         self.month_codes = month_codes
         return dfs
