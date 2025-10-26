@@ -1,0 +1,953 @@
+{
+  "categories": [
+    {
+      "id": "amisys-onshore",
+      "name": "Amisys Onshore",
+      "level": 1,
+      "rules": {
+        "platform": ["Amisys", "AMISYS"]
+      },
+      "children": [
+        {
+          "id": "amisys-onshore-manual",
+          "name": "Manual",
+          "level": 2,
+          "rules": {
+            "state": ["FL", "GA", "MI", "TX", "OH", "LA", "WA", "DE", "MO", "NM", "PA", "IA", "NH", "MS", "OK", "AZ", "IN", "N/A"]
+          },
+          "children": [
+            {
+              "id": "amisys-onshore-manual-FL&GA",
+              "name": "FL & GA (NON MMP)",
+              "level": 3,
+              "rules": {
+                "state": ["FL", "GA"],
+                "locality": ["Domestic", "DOMESTIC"]
+
+              },
+              "children": [
+                {
+                  "id": "amisys-onshore-manual-FL&GA-ADJ",
+                  "name": "ADJ",
+                  "level": 4,
+                  "rules": {
+                    "worktype_id": ["ADJ"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-ADJ-Basic",
+                      "name": "ADJ BASIC",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["ADJ-Basic/Non MMP"]
+                      },
+                      "children":[]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-ADJ-COB",
+                      "name": "ADJ COB",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["ADJ-COB Non MMP"]
+                      },
+                      "children":[]
+                    }
+                  ]
+                },
+                {
+                  "id": "amisys-onshore-manual-FL&GA-APP",
+                  "name": "APP",
+                  "level": 4,
+                  "rules": {
+                    "worktype_id": ["Appeal"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-APP-Basic",
+                      "name": "APP BASIC",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["APP-Basic/Non MMP"]
+                      },
+                      "children":[]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-APP-COB",
+                      "name": "APP COB",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["APP-COB Non MMP"]
+                      },
+                      "children":[]
+                    }
+                  ]
+                },
+                {
+                  "id": "amisys-onshore-manual-FL&GA-COR",
+                  "name": "COR",
+                  "level": 4,
+                  "rules": {
+                    "worktype_id": ["cor"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-COR-Basic",
+                      "name": "COR BASIC",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["COR-Basic/Non MMP"]
+                      },
+                      "children":[]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-COR-COB",
+                      "name": "COR COB",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["COR-COB Non MMP"]
+                      },
+                      "children":[]
+                    }
+                  ]
+                },
+                {
+                  "id": "amisys-onshore-manual-FL&GA-FTC",
+                  "name": "FTC",
+                  "level": 4,
+                  "rules": {
+                    "worktype_id": ["ftc"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-FTC-Basic",
+                      "name": "FTC BASIC",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["FTC-Basic/Non MMP"]
+                      },
+                      "children":[]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-FTC-COB",
+                      "name": "FTC COB",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["FTC-COB Non MMP"]
+                      },
+                      "children":[]
+                    }
+                  ]
+                },
+                {
+                  "id": "amisys-onshore-manual-FL&GA-OMN",
+                  "name": "OMN",
+                  "level": 4,
+                  "rules": {
+                    "worktype_id": ["omn", "omni"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-OMN-Basic",
+                      "name": "OMN BASIC",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["OMN-Basic/Non MMP"]
+                      },
+                      "children":[]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-FL&GA-OMN-COB",
+                      "name": "OMN COB",
+                      "level": 5,
+                      "rules": {
+                        "worktype": ["OMN-COB Non MMP"]
+                      },
+                      "children":[]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "amisys-onshore-manual-MI",
+              "name": "MI",
+              "level": 3,
+              "rules": {
+                "state": ["MI"],
+                "locality": ["Domestic", "DOMESTIC"]
+              },
+              "children": [
+                {
+                  "id": "amisys-onshore-manual-MI-MMP",
+                  "name": "MMP",
+                  "level": 4,
+                  "rules": {
+                    "market": ["MMP"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-MI-MMP-FTC",
+                      "name": "FTC",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["FTC"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-FTC-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-FTC-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-MMP-ADJ",
+                      "name": "ADJ",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["ADJ"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-ADJ-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-ADJ-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-MMP-COR",
+                      "name": "COR",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["COR"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-COR-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-COR-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-MMP-OMN",
+                      "name": "OMN",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["OMN"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-OMN-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-OMN-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-MMP-APP",
+                      "name": "APP",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["APP"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-APP-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-MMP-APP-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "amisys-onshore-manual-MI-NON-MMP",
+                  "name": "NON MMP",
+                  "level": 4,
+                  "rules": {
+                    "market": ["Medicaid"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-MI-NON-MMP-ADJ",
+                      "name": "ADJ",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["ADJ"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-ADJ-Basic",
+                          "name": "ADJ BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-ADJ-COB",
+                          "name": "ADJ COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-NON-MMP-APP",
+                      "name": "APP",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["Appeal"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-APP-Basic",
+                          "name": "APP BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-APP-COB",
+                          "name": "APP COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-NON-MMP-COR",
+                      "name": "COR",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["cor"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-COR-Basic",
+                          "name": "COR BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-COR-COB",
+                          "name": "COR COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-NON-MMP-FTC",
+                      "name": "FTC",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["ftc"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-FTC-Basic",
+                          "name": "FTC BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-FTC-COB",
+                          "name": "FTC COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-MI-NON-MMP-OMN",
+                      "name": "OMN",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["omn", "omni"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-OMN-Basic",
+                          "name": "OMN BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-MI-NON-MMP-OMN-COB",
+                          "name": "OMN COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "amisys-onshore-manual-AMR",
+              "name": "AMR",
+              "level": 3,
+              "rules": {
+                "state": ["TX", "OH", "LA", "WA", "DE", "MO", "NM", "PA", "IA", "NH", "MS", "OK", "AZ", "IN"],
+                "locality": ["Domestic", "DOMESTIC"]
+              },
+              "children": [
+                {
+                  "id": "amisys-onshore-manual-AMR-MMP",
+                  "name": "MMP",
+                  "level": 4,
+                  "rules": {
+                    "market": ["MMP"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-AMR-MMP-FTC",
+                      "name": "FTC",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["FTC"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-FTC-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-FTC-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-MMP-ADJ",
+                      "name": "ADJ",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["ADJ"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-ADJ-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-ADJ-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-MMP-COR",
+                      "name": "COR",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["COR"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-COR-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-COR-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-MMP-OMN",
+                      "name": "OMN",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["OMN"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-OMN-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-OMN-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-MMP-APP",
+                      "name": "APP",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["APP"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-APP-MCARE",
+                          "name": "MCARE",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP MCARE"]
+                          },
+                          "children": []
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-MMP-APP-MCAID",
+                          "name": "MCAID",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP MCAID"]
+                          },
+                          "children": []
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "amisys-onshore-manual-AMR-NON-MMP",
+                  "name": "MMP",
+                  "level": 4,
+                  "rules": {
+                    "market": ["Medicaid"]
+                  },
+                  "children": [
+                    {
+                      "id": "amisys-onshore-manual-AMR-NON-MMP-ADJ",
+                      "name": "ADJ",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["ADJ"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-ADJ-Basic",
+                          "name": "ADJ BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-ADJ-COB",
+                          "name": "ADJ COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["ADJ-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-NON-MMP-APP",
+                      "name": "APP",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["Appeal"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-APP-Basic",
+                          "name": "APP BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-APP-COB",
+                          "name": "APP COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["APP-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-NON-MMP-COR",
+                      "name": "COR",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["cor"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-COR-Basic",
+                          "name": "COR BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-COR-COB",
+                          "name": "COR COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["COR-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-NON-MMP-FTC",
+                      "name": "FTC",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["ftc"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-FTC-Basic",
+                          "name": "FTC BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-FTC-COB",
+                          "name": "FTC COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["FTC-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    },
+                    {
+                      "id": "amisys-onshore-manual-AMR-NON-MMP-OMN",
+                      "name": "OMN",
+                      "level": 5,
+                      "rules": {
+                        "worktype_id": ["omn", "omni"]
+                      },
+                      "children": [
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-OMN-Basic",
+                          "name": "OMN BASIC",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN-Basic/Non MMP"]
+                          },
+                          "children":[]
+                        },
+                        {
+                          "id": "amisys-onshore-manual-AMR-NON-MMP-OMN-COB",
+                          "name": "OMN COB",
+                          "level": 6,
+                          "rules": {
+                            "worktype": ["OMN-COB Non MMP"]
+                          },
+                          "children":[]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "amisys-onshore-manual-OIC",
+              "name": "OIC Volumes",
+              "level": 3,
+              "rules": {
+                "market": ["OIC Volumes"],
+                "worktype_id": ["domestic"]
+              },
+              "children": [
+
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "amisys-offshore",
+      "name": "Amisys Offshore",
+      "level": 1,
+      "rules": {
+        "platform": ["Amisys"],
+        "worktype_id": ["global", "High Dollar"]
+      },
+      "children": [
+        {
+          "id": "amisys-offshore-MC",
+          "name": "Medicare",
+          "level": 2,
+          "rules": {
+            "worktype_id": ["mcare", "medicare"]
+          },
+          "children": []
+        },
+        {
+          "id": "amisys-offshore-MCD",
+          "name": "Medicaid",
+          "level": 2,
+          "rules": {
+            "worktype_id": ["mcaid", "Medicaid"]
+          },
+          "children": []
+        },
+        {
+          "id": "amisys-offshore-MP",
+          "name": "Marketplace",
+          "level": 2,
+          "rules": {
+            "worktype_id": ["marketplace"]
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "facets",
+      "name": "Facets",
+      "level": 1,
+      "rules": {
+        "platform": ["Facets"]
+      },
+      "children": [
+        {
+          "id": "facets-MC",
+          "name": "Medicare",
+          "level": 2,
+          "rules": {
+            "market": ["Medicare"]
+          },
+          "children": []
+        },
+        {
+          "id": "facets-MCD",
+          "name": "Medicaid",
+          "level": 2,
+          "rules": {
+            "market": ["Medicaid"]
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "xcelys-offshore",
+      "name": "Xcelys Offshore",
+      "level": 1,
+      "rules": {
+        "platform": ["Xcelys"],
+        "worktype_id": ["Global"]
+      },
+      "children": [
+        {
+          "id": "xcelys-offshore-MC",
+          "name": "Medicare",
+          "level": 2,
+          "rules": {
+            "market": ["Medicare"]
+          },
+          "children": []
+        },
+        {
+          "id": "xcelys-offshore-MCD",
+          "name": "Medicaid",
+          "level": 2,
+          "rules": {
+            "market": ["Medicaid"]
+          },
+          "children": []
+        },
+        {
+          "id": "xcelys-offshore-OIC",
+          "name": "OIC Volumes",
+          "level": 2,
+          "rules": {
+            "market": ["OIC Volumes"]
+          },
+          "children": []
+        }
+
+      ]
+    },
+    {
+      "id": "xcelys-onshore",
+      "name": "Xcelys Onshore",
+      "level": 1,
+      "rules": {
+        "platform": ["Xcelys"],
+        "worktype_id": ["Domestic"]
+      },
+      "children": [
+        {
+          "id": "xcelys-onshore-MC",
+          "name": "Medicare",
+          "level": 2,
+          "rules": {
+            "market": ["Medicare"]
+          },
+          "children": []
+        },
+        {
+          "id": "xcelys-onshore-MCD",
+          "name": "Medicaid",
+          "level": 2,
+          "rules": {
+            "market": ["Medicaid"]
+          },
+          "children": []
+        },
+        {
+          "id": "xcelys-onshore-OIC",
+          "name": "OIC Volumes",
+          "level": 2,
+          "rules": {
+            "market": ["OIC Volumes"]
+          },
+          "children": []
+        }
+      ]
+    }
+  ]
+}
