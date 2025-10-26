@@ -137,11 +137,24 @@ def extract_platforms_from_main_lobs(main_lob_values: List[str]) -> List[str]:
         ['Amisys', 'Facets']
     """
     platforms = set()
+    lobs_without_platform = []
 
     for main_lob in main_lob_values:
         parsed = parse_main_lob_preserve_case(main_lob)
-        if parsed.get("platform"):
-            platforms.add(parsed["platform"])
+        platform = parsed.get("platform")
+
+        if platform:
+            platforms.add(platform)
+        else:
+            # Track Main_LOBs that don't have a recognized platform
+            lobs_without_platform.append(main_lob)
+
+    # Log warning if some Main_LOBs don't have platforms
+    if lobs_without_platform:
+        logger.warning(
+            f"[CascadeFilters] {len(lobs_without_platform)} Main_LOB values don't have a recognized platform: "
+            f"{lobs_without_platform[:3]}{'...' if len(lobs_without_platform) > 3 else ''}"
+        )
 
     return sorted(list(platforms))
 
@@ -174,6 +187,7 @@ def extract_markets_from_main_lobs(
 
     markets = set()
     platform_filter_lower = platform_filter.strip().lower()
+    matching_lobs_without_market = []
 
     for main_lob in main_lob_values:
         parsed = parse_main_lob_preserve_case(main_lob)
@@ -184,6 +198,16 @@ def extract_markets_from_main_lobs(
             parsed_market = parsed.get("market")
             if parsed_market:
                 markets.add(parsed_market)
+            else:
+                # Track Main_LOBs with matching platform but no market
+                matching_lobs_without_market.append(main_lob)
+
+    # Log warning if some Main_LOBs don't have markets
+    if matching_lobs_without_market:
+        logger.warning(
+            f"[CascadeFilters] {len(matching_lobs_without_market)} Main_LOB values for platform '{platform_filter}' don't have a market: "
+            f"{matching_lobs_without_market[:3]}{'...' if len(matching_lobs_without_market) > 3 else ''}"
+        )
 
     return sorted(list(markets))
 

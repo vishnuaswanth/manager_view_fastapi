@@ -643,7 +643,7 @@ def get_manager_view_data(report_month: str, category: Optional[str] = None):
         month_name_str = list(cal_month_name)[month_num]
 
         # Get forecast months from database
-        db_manager_forecast_months = core_utils.get_db_manager(ForecastMonthsModel, limit=1000, skip=0, select_columns=None)
+        db_manager_forecast_months = core_utils.get_db_manager(ForecastModel, limit=1000, skip=0, select_columns=None)
         forecast_months = get_forecast_months_from_db(db_manager_forecast_months, month_name_str, year)
 
         if not forecast_months:
