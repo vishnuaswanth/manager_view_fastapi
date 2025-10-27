@@ -124,19 +124,21 @@ def generate_cascade_cache_key(prefix: str, **params) -> str:
 def extract_platforms_from_main_lobs(main_lob_values: List[str]) -> List[str]:
     """
     Extract unique platforms from list of Main_LOB strings.
+    Uses case-insensitive deduplication (e.g., "AMISYS" and "Amisys" become one value).
 
     Args:
         main_lob_values: List of Main_LOB strings from database (distinct values)
 
     Returns:
-        Sorted list of unique platforms (original case preserved)
+        Sorted list of unique platforms (title case format)
 
     Example:
-        >>> main_lobs = ["Amisys Medicaid Domestic", "Amisys Medicare", "Facets Commercial"]
+        >>> main_lobs = ["Amisys Medicaid Domestic", "AMISYS Medicare", "Facets Commercial"]
         >>> extract_platforms_from_main_lobs(main_lobs)
         ['Amisys', 'Facets']
     """
-    platforms = set()
+    # Use dict for case-insensitive deduplication: {lowercase: title_case}
+    platforms_dict = {}
     lobs_without_platform = []
 
     for main_lob in main_lob_values:
@@ -144,7 +146,10 @@ def extract_platforms_from_main_lobs(main_lob_values: List[str]) -> List[str]:
         platform = parsed.get("platform")
 
         if platform:
-            platforms.add(platform)
+            # Store with lowercase key, title case value
+            platform_lower = platform.lower()
+            if platform_lower not in platforms_dict:
+                platforms_dict[platform_lower] = platform.title()
         else:
             # Track Main_LOBs that don't have a recognized platform
             lobs_without_platform.append(main_lob)
@@ -156,7 +161,7 @@ def extract_platforms_from_main_lobs(main_lob_values: List[str]) -> List[str]:
             f"{lobs_without_platform[:3]}{'...' if len(lobs_without_platform) > 3 else ''}"
         )
 
-    return sorted(list(platforms))
+    return sorted(list(platforms_dict.values()))
 
 
 def extract_markets_from_main_lobs(

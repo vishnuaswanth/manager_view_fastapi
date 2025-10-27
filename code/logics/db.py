@@ -2,18 +2,18 @@
 from typing import List, Dict, Optional, Type, Union
 
 from sqlalchemy import (
-    create_engine, 
-    Column, 
-    Integer, 
-    String, 
-    and_, 
-    inspect, 
-    extract, 
-    func, 
-    case, 
-    or_, 
-    Index, 
-    true, 
+    create_engine,
+    Column,
+    Integer,
+    String,
+    and_,
+    inspect,
+    extract,
+    func,
+    case,
+    or_,
+    Index,
+    true,
     literal_column
 )
 
@@ -62,18 +62,18 @@ def normalize_month(month_str):
 # class MonthData(SQLModel, table=True):
 #     id: int | None = Field(default=None, primary_key=True)
 
-#     month: Optional[str]	
-#     no_of_days_occupancy: Optional[int]	
+#     month: Optional[str]
+#     no_of_days_occupancy: Optional[int]
 #     occcupancy: Optional[float]
-#     shrinkage: Optional[float]	
+#     shrinkage: Optional[float]
 #     work_hours: Optional[int]
 
 
 # class TargetCPH(SQLModel, table=True):
 #     id: int | None = Field(default=None, primary_key=True)
 
-#     main_lob: Optional[str]	
-#     case_type: 	
+#     main_lob: Optional[str]
+#     case_type:
 #     Target CPH
 
 
@@ -349,7 +349,7 @@ class RawData(SQLModel, table=True):
         default=None,
         sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     )
-    
+
     # Add indexes for faster queries
     __table_args__ = (
         Index('idx_data_current','data_model', 'data_model_type', 'month', 'year', 'is_current'),
@@ -418,7 +418,7 @@ class DBManager:
             "Capacity_Month1": 0, "Capacity_Month2": 0, "Capacity_Month3": 0,
             "Capacity_Month4": 0, "Capacity_Month5": 0, "Capacity_Month6": 0,
         }
-    
+
     def filter_by_month_and_year(self, query, month_str: str, year: int):
         """
         Filter Event table by month and year.
@@ -452,9 +452,9 @@ class DBManager:
             #         extract('year', effective_date) == year
             #     )
         return results
-    
+
     def _execute_query(self, query):
-        
+
         if self.select_columns:
             records = query.with_entities(*self.select_columns).distinct().all()
             records = [tuple_to_dict(row, self.select_columns) for row in records]
@@ -464,9 +464,9 @@ class DBManager:
             total = query.count()
             query = query.order_by(self.Model.id)
             records = query.offset(self.skip).limit(self.limit)
-            records = records.all() 
+            records = records.all()
             record_dicts = [OrderedDict((column.name, getattr(row, column.name)) for column in row.__table__.columns) for row in records]
-            
+
             records = record_dicts
         return {"total": total, "records": records}
 
@@ -481,7 +481,7 @@ class DBManager:
         try:
             # Step 1: delete existing rows if needed
             if replace and "Month" in df.columns and "Year" in df.columns:
-                
+
                 month = df["Month"].iloc[0].strip().capitalize()
                 year = int(df["Year"].iloc[0])
 
@@ -524,7 +524,7 @@ class DBManager:
     ):
         """
         Bulk insert/update summaries with history retention.
-        
+
         Args:
             summary_data: List of dictionaries containing:
                 - df: pandas DataFrame
@@ -539,7 +539,7 @@ class DBManager:
         """
         session = self.SessionLocal()
         Model = RawData
-        
+
         try:
             for data in bulk_data:
                 df = data['df']
@@ -549,7 +549,7 @@ class DBManager:
                 year = data['year']
                 created_by = data['created_by']
                 updated_by = data.get('updated_by', created_by)
-                
+
                 if retain_history:
                     # Mark existing current record as historical
                     session.query(Model).filter(
@@ -561,7 +561,7 @@ class DBManager:
                             Model.is_current == True
                         )
                     ).update({Model.is_current: False})
-                    
+
                     # Get next version number
                     max_version = session.query(func.max(Model.version)).filter(
                         and_(
@@ -571,9 +571,9 @@ class DBManager:
                             Model.year == year
                         )
                     ).scalar() or 0
-                    
+
                     next_version = max_version + 1
-                    
+
                     # Clean up old versions if exceeding max_versions
                     if max_versions > 0:
                         old_versions = session.query(Model).filter(
@@ -585,10 +585,10 @@ class DBManager:
                                 Model.is_current == False
                             )
                         ).order_by(Model.version.desc()).offset(max_versions - 1).all()
-                        
+
                         for old_record in old_versions:
                             session.delete(old_record)
-                    
+
                 else:
                     # Delete all existing records (no history)
                     session.query(Model).filter(
@@ -600,7 +600,7 @@ class DBManager:
                         )
                     ).delete(synchronize_session=False)
                     next_version = 1
-                
+
                 # Create new record
                 record = Model(
                     data_model=data_model,
@@ -614,20 +614,20 @@ class DBManager:
                     updated_by=updated_by,
                 )
                 session.add(record)
-                
+
                 logger.info(f"[DBManager] Added raw data v{next_version} for ({data_model},{data_model_type}, {month}, {year})")
-            
+
             session.commit()
             logger.info(f"[DBManager] Bulk saved {len(bulk_data)} raw data")
-            
+
         except Exception as e:
             session.rollback()
             logger.error(f"[DBManager] Error in bulk save: {e}")
             raise
         finally:
             session.close()
-    
-    
+
+
     def get_raw_data_df_current(
         self,
         data_model: str,
@@ -640,7 +640,7 @@ class DBManager:
         """
         session = self.SessionLocal()
         Model = RawData
-        
+
         try:
             record = session.query(Model).filter(
                 and_(
@@ -651,7 +651,7 @@ class DBManager:
                     Model.is_current == True
                 )
             ).first()
-            
+
             if record:
                 logger.info(f"[DBManager] Retrieved current raw data v{record.version} for ({data_model}, {data_model_type}, {month}, {year})")
                 return record.dataframe_json  # Auto-deserialized by DataFrameJSON
@@ -663,7 +663,7 @@ class DBManager:
             raise
         finally:
             session.close()
-    
+
     def get_raw_data_df_by_version(
         self,
         data_model: str,
@@ -675,7 +675,7 @@ class DBManager:
         """Retrieve specific version of DataFrame."""
         session = self.SessionLocal()
         Model = RawData
-        
+
         try:
             record = session.query(Model).filter(
                 and_(
@@ -686,7 +686,7 @@ class DBManager:
                     Model.version == version
                 )
             ).first()
-            
+
             if record:
                 logger.info(f"[DBManager] Retrieved raw data v{version} for ({data_model}, {data_model_type}, {month}, {year})")
                 return record.dataframe_json
@@ -709,7 +709,7 @@ class DBManager:
         session = self.SessionLocal()
         Model = RawData
 
-        
+
         month_num = case(
             (Model.month == 'January', 1),
             (Model.month == 'February', 2),
@@ -725,7 +725,7 @@ class DBManager:
             (Model.month == 'December', 12),
             else_=0
         )
-        
+
         try:
             if month and year:
                 subq = (
@@ -757,7 +757,7 @@ class DBManager:
                         Model.is_current == true()
                     )
                 ).subquery()
-            
+
 
             m_alias = aliased(Model)
 
@@ -780,7 +780,7 @@ class DBManager:
             raise
         finally:
             session.close()
-    
+
     def get_raw_data_history(
         self,
         data_model: str,
@@ -791,7 +791,7 @@ class DBManager:
         """Get version history metadata (no DataFrame data)."""
         session = self.SessionLocal()
         Model = RawData
-        
+
         try:
             records = session.query(
                 Model.version,
@@ -808,7 +808,7 @@ class DBManager:
                     Model.year == year
                 )
             ).order_by(Model.version.desc()).all()
-            
+
             history = [
                 {
                     'version': r.version,
@@ -820,17 +820,17 @@ class DBManager:
                 }
                 for r in records
             ]
-            
+
             logger.info(f"[DBManager] Retrieved {len(history)} versions for ({data_model}, {data_model_type}, {month}, {year})")
             return history
-            
+
         except Exception as e:
             logger.error(f"[DBManager] Error retrieving raw data history: {e}")
             raise
         finally:
             session.close()
 
-    
+
     def search_db(self, searchable_fields:List[str], keywords:List[str], month: str = None, year: int = None):
         if not searchable_fields and not (month and year):
             raise InValidSearchException('Column based seach is called but searchable_fields are empty or Month data is missing')
@@ -838,24 +838,24 @@ class DBManager:
             query = session.query(self.Model)
             if month and year:
                 query=self.filter_by_month_and_year(query, month, year)
-            
+
             # if searchable_field and keyword:
-            #     query = query.filter(getattr(self.Model, searchable_field).contains(keyword))         
+            #     query = query.filter(getattr(self.Model, searchable_field).contains(keyword))
 
             if searchable_fields and keywords:
-                
+
                 # filters = [
                 #     getattr(self.Model, field).contains(keyword)
                 #     for field in searchable_fields
                 #     for keyword in keywords
                 # ]
                 # query = query.filter(or_(*filters))
-                
+
                 filters = [
                     or_(*[getattr(self.Model, field).ilike(f"%{keyword}%") for field in searchable_fields])
                     for keyword in keywords
                 ]
-               
+
                 query = query.filter(and_(*filters))
 
             return self._execute_query(query)
@@ -866,19 +866,19 @@ class DBManager:
             if month or year:
                 query = self.filter_by_month_and_year(query, month, year)
             columns = []
-            
+
             for key, value in typing.get_type_hints(self.Model).items():
                 if value==str or Optional[str]:
                     columns.append(key)
             for c in ['__tablename__', '__sqlmodel_relationships__', '__name__', 'metadata']:
                 columns.remove(c)
-            
+
             if len(columns)<1:
                 raise InValidSearchException(f'Data model does not have sufficent columns to search{str([str(c) for c in columns])}')
             conditions = [getattr(self.Model, column).contains(keyword) for column in columns]
             query = query.filter(or_(*conditions))
             return self._execute_query(query)
-    
+
     def read_db(self, month=None, year=None):
         with self.SessionLocal() as session:
             query = session.query(self.Model)
@@ -1026,7 +1026,7 @@ class DBManager:
                     # Set audit fields
                     record.UpdatedBy = updated_by
                     updates += 1
-                # else: If you want to log that a row was not found, log here  
+                # else: If you want to log that a row was not found, log here
             session.commit()
             logger.info(f"updates done - {updates}")
         except Exception as e:
@@ -1034,8 +1034,8 @@ class DBManager:
             logger.error(f"Error during forecast record update: {e}")
             raise
         finally:
-            session.close()  
-    
+            session.close()
+
     def sum_metrics(
         self,
         month: str,
@@ -1059,8 +1059,8 @@ class DBManager:
 
         # Trim incoming inputs; keep case as-is (case-sensitive comparison)
         month_val = month.strip()
-        lob_val = main_lob.strip()
-        case_type_val = case_type.strip()
+        lob_val = main_lob.strip().lower()
+        case_type_val = case_type.strip().lower()
 
         logger.info("[DBManager] sum_metrics start")
         logger.debug(
@@ -1086,8 +1086,8 @@ class DBManager:
                     .filter(
                         func.trim(Model.Month) == month_val,
                         Model.Year == year,
-                        func.trim(Model.Centene_Capacity_Plan_Main_LOB) == lob_val,
-                        func.trim(Model.Centene_Capacity_Plan_Case_Type) == case_type_val,
+                        func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)) == lob_val,
+                        func.lower(func.trim(Model.Centene_Capacity_Plan_Case_Type)) == case_type_val,
                     )
                     .one()
                 )
@@ -1107,7 +1107,7 @@ class DBManager:
             except Exception as e:
                 logger.error("[DBManager] sum_metrics failed: %s", str(e), exc_info=True)
                 raise
-    
+
     def download_db(self, month:str, year:int):
         with self.SessionLocal() as session:
             query = session.query(self.Model)
@@ -1115,16 +1115,16 @@ class DBManager:
                 query = self.filter_by_month_and_year(query, month, year)
             records = self._execute_query(query)
 
-        
+
             df = pd.DataFrame(records['records'])
             return df
-        
+
     def get_totals(self):
         with self.SessionLocal() as session:
             query = session.query(self.Model)
             total = query.count()
         return total
-    
+
     def get_latest_month_year(self):
         """
         Returns the latest (most recent) Month and Year, assuming entries exist.
@@ -1163,12 +1163,12 @@ class DBManager:
                     query=self.filter_by_month_and_year(query, month, year)
                     query = query.order_by(ForecastModel.UpdatedDateTime.desc()).limit(1)
                     forecast_record = query.first()
-            
+
 
                     if not forecast_record:
                         logger.error(f"Forecast data not availbale for the month: {month} year: {year}")
                         return []
-                    
+
                     forecast_months_record = session.query(ForecastMonthsModel).filter(
                         ForecastMonthsModel.UploadedFile == forecast_record.UploadedFile
                     ).order_by(
@@ -1181,7 +1181,7 @@ class DBManager:
         return [
             getattr(forecast_months_record, f"Month{i}", None) for i in range(1,7)
         ]
-    
+
     def insert_upload_data_time_details_if_not_exists(self, month: str, year: int):
         """
         Insert (month, year) into UploadDataTimeDetails if not already present.
@@ -1209,8 +1209,8 @@ class DBManager:
         finally:
             session.close()
 
-    
-    
+
+
 
 
 if __name__=="__main__":

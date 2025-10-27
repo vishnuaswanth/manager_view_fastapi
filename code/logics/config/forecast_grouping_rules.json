@@ -5,7 +5,8 @@
       "name": "Amisys Onshore",
       "level": 1,
       "rules": {
-        "platform": ["Amisys", "AMISYS"]
+        "platform": ["Amisys"],
+        "market": ["MMP", "Medicaid", "OIC Volumes"]
       },
       "children": [
         {
