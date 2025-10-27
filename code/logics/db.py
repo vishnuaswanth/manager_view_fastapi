@@ -284,18 +284,17 @@ class ForecastModel(SQLModel, table=True):
     Capacity_Month4 :Optional[int]
     Capacity_Month5 :Optional[int]
     Capacity_Month6 :Optional[int]
-    Month: str
+    Month: str = Field(sa_column=Column(String(15), nullable=False))  # Max length: "September" = 9 chars
     Year: int
-    UploadedFile:str
-    CreatedBy: str
+    UploadedFile: str = Field(sa_column=Column(String(255), nullable=False))
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
     CreatedDateTime: datetime = Field(
-    sa_column=Column(DateTime, nullable=False, server_default=func.now())
-)
-
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
     UpdatedDateTime: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
     )
-    UpdatedBy:str
+    UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
 
     # Indexes for cascade filter performance
     __table_args__ = (
@@ -306,17 +305,17 @@ class ForecastModel(SQLModel, table=True):
 
 class ForecastMonthsModel(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    Month1 :str
-    Month2 :str
-    Month3 :str
-    Month4 :str
-    Month5 :str
-    Month6 :str
-    UploadedFile:str
-    CreatedBy: str
+    Month1: str = Field(sa_column=Column(String(15), nullable=False))
+    Month2: str = Field(sa_column=Column(String(15), nullable=False))
+    Month3: str = Field(sa_column=Column(String(15), nullable=False))
+    Month4: str = Field(sa_column=Column(String(15), nullable=False))
+    Month5: str = Field(sa_column=Column(String(15), nullable=False))
+    Month6: str = Field(sa_column=Column(String(15), nullable=False))
+    UploadedFile: str = Field(sa_column=Column(String(255), nullable=False))
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
     CreatedDateTime: datetime = Field(
-    sa_column=Column(DateTime, nullable=False, server_default=func.now())
-)
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
 
 class RawData(SQLModel, table=True):
     __tablename__ = "raw_data"
