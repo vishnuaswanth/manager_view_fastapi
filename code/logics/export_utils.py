@@ -43,62 +43,99 @@ def get_processed_dataframe(file_id: str, month: str = None, year: int = None) -
     """
     Returns a processed DataFrame similar to the download endpoint,
     based on file_id, month, and year.
+
+    Raises:
+        ValueError: If file_id is invalid, no data found, or missing column mappings
+        Exception: For database connection errors or DataFrame processing errors
     """
+    try:
+        # Get the model based on file_id
+        Model = get_model_or_all_models(file_id)
 
-    # Get the model based on file_id
-    Model = get_model_or_all_models(file_id)
+        if not Model:
+            raise ValueError(f"Invalid file_id provided: {file_id}")
 
-    if not Model:
-        raise ValueError(f"Invalid file_id provided: {file_id}")
+        # Get the columns from PreProcessing
+        try:
+            preprocessor = PreProcessing(file_id)
+            select_columns = preprocessor.MAPPING.get(file_id)
+        except Exception as e:
+            logger.error(f"Error initializing PreProcessing for {file_id}: {e}")
+            raise ValueError(f"Failed to get column mapping for file_id: {file_id}") from e
 
-    # Get the columns from PreProcessing
-    preprocessor = PreProcessing(file_id)
-    select_columns = preprocessor.MAPPING.get(file_id)
+        if not select_columns:
+            raise ValueError(f"No column mapping found for file_id: {file_id}")
 
-    if not select_columns:
-        raise ValueError(f"No column mapping found for file_id: {file_id}")
+        # Get total records with database error handling
+        try:
+            db_manager = core_utils.get_db_manager(Model, limit=1, skip=0)
+            total = db_manager.get_totals()
+        except Exception as e:
+            logger.error(f"Database error while getting totals for {file_id}: {e}", exc_info=True)
+            raise ValueError(f"Database error: Could not retrieve total records for file_id: {file_id}") from e
 
-    # Get total records
-    db_manager = core_utils.get_db_manager(Model, limit=1, skip=0)
-    total = db_manager.get_totals()
-    if total is None:
-        raise ValueError(f"Could not retrieve total records for file_id: {file_id}")
-    if total == 0:
-        raise ValueError(f"No records found for file_id: {file_id}")
-    # Fetch complete data for the given file_id, month/year
-    db_manager = core_utils.get_db_manager(Model, limit=total, skip=0, select_columns=select_columns)
-    df = db_manager.download_db(month, year)
-    if df is None or df.empty:
-        logger.info(f"No data found for file_id: {file_id} with month: {month} and year: {year}")
-        return pd.DataFrame()
-    # Post-process columns
-    post_processor = PostProcessing(core_utils)
+        if total is None:
+            raise ValueError(f"Could not retrieve total records for file_id: {file_id}")
+        if total == 0:
+            raise ValueError(f"No records found for file_id: {file_id}")
 
-    if file_id == 'forecast':
-        # Get label mappings if forecast
-        # column_tuples = post_processor.MAPPING[file_id]
-        db_manager_forecast = core_utils.get_db_manager(Model, limit=1, skip=0)
-        forecast_data = db_manager_forecast.read_db(month, year)
-        mappings = [list(pair) for pair in PostProcessing(core_utils=core_utils).MAPPING[file_id]]
+        # Fetch complete data for the given file_id, month/year
+        try:
+            db_manager = core_utils.get_db_manager(Model, limit=total, skip=0, select_columns=select_columns)
+            df = db_manager.download_db(month, year)
+        except Exception as e:
+            logger.error(f"Database error while downloading data for {file_id} (month={month}, year={year}): {e}", exc_info=True)
+            raise ValueError(f"Database error: Failed to download data for {file_id}") from e
 
-        if 'records' in forecast_data and len(forecast_data['records']) == 1:
-            file_name = forecast_data['records'][0].get('UploadedFile', '')
-            db_manager_months = core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
-            months_data = db_manager_months.search_db(['UploadedFile'], [file_name])
+        if df is None or df.empty:
+            logger.info(f"No data found for file_id: {file_id} with month: {month} and year: {year}")
+            return pd.DataFrame()
 
-            if 'records' in months_data and len(months_data['records']) == 1:
-                month_data = months_data['records'][0]
+        # Post-process columns
+        try:
+            post_processor = PostProcessing(core_utils)
+        except Exception as e:
+            logger.error(f"Error initializing PostProcessing: {e}")
+            raise ValueError(f"Failed to initialize post-processing for {file_id}") from e
 
-                for i, (group, key) in enumerate(mappings):
-                    if key in month_data:
-                        mappings[i][1] = month_data[key]
+        if file_id == 'forecast':
+            try:
+                # Get label mappings if forecast
+                db_manager_forecast = core_utils.get_db_manager(Model, limit=1, skip=0)
+                forecast_data = db_manager_forecast.read_db(month, year)
+                mappings = [list(pair) for pair in PostProcessing(core_utils=core_utils).MAPPING[file_id]]
 
-        df.columns = pd.MultiIndex.from_tuples([tuple(pair) for pair in mappings])
-        # df.columns = pd.MultiIndex.from_tuples(column_tuples)
-    else:
-        df.columns = post_processor.MAPPING[file_id]
+                if 'records' in forecast_data and len(forecast_data['records']) == 1:
+                    file_name = forecast_data['records'][0].get('UploadedFile', '')
+                    db_manager_months = core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
+                    months_data = db_manager_months.search_db(['UploadedFile'], [file_name])
 
-    return df
+                    if 'records' in months_data and len(months_data['records']) == 1:
+                        month_data = months_data['records'][0]
+
+                        for i, (group, key) in enumerate(mappings):
+                            if key in month_data:
+                                mappings[i][1] = month_data[key]
+
+                df.columns = pd.MultiIndex.from_tuples([tuple(pair) for pair in mappings])
+            except Exception as e:
+                logger.error(f"Error processing forecast column mappings: {e}", exc_info=True)
+                raise ValueError(f"Failed to process forecast column mappings") from e
+        else:
+            try:
+                df.columns = post_processor.MAPPING[file_id]
+            except Exception as e:
+                logger.error(f"Error applying column mappings for {file_id}: {e}")
+                raise ValueError(f"Failed to apply column mappings for {file_id}") from e
+
+        return df
+
+    except ValueError:
+        # Re-raise ValueError as-is (already has descriptive message)
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in get_processed_dataframe for {file_id}: {e}", exc_info=True)
+        raise ValueError(f"Unexpected error while processing dataframe for {file_id}: {str(e)}") from e
 
 def get_forecast_months_list(month:str, year:int, filename:str = None) -> list[str]:
     """
@@ -238,30 +275,87 @@ def get_summary_data_by_summary_type(month: str, year: int, summary_type:str) ->
         return pd.DataFrame()
 
 def get_combined_summary_excel(month: str, year: int) -> BytesIO:
-    """   Generates a combined summary Excel file for the given month and year  """
+    """
+    Generates a combined summary Excel file for the given month and year.
+
+    Args:
+        month: Month name (e.g., "January", "February")
+        year: Year as integer (e.g., 2025)
+
+    Returns:
+        BytesIO: Excel file stream with multiple summary sheets
+
+    Raises:
+        ValueError: If no summaries found or data access fails
+    """
     try:
-        db_manager = core_utils.get_db_manager(RawData)
-        summaries = db_manager.get_all_current_data_models_of_raw_data("medicare_medicaid_summary",month, year)
+        # Get database manager
+        try:
+            db_manager = core_utils.get_db_manager(RawData)
+        except Exception as e:
+            logger.error(f"Failed to initialize database manager: {e}")
+            raise ValueError(f"Database connection error: {str(e)}") from e
+
+        # Retrieve summaries
+        try:
+            summaries = db_manager.get_all_current_data_models_of_raw_data("medicare_medicaid_summary", month, year)
+        except Exception as e:
+            logger.error(f"Database error retrieving summaries for {month} {year}: {e}", exc_info=True)
+            raise ValueError(f"Failed to retrieve summaries: {str(e)}") from e
+
         if not summaries:
-            logger.info("No summaries found for the specified month and year.")
-            raise ValueError(f"data not found for month: {month} and year: {year}")  # Return empty stream if no summaries
-        logger.debug(f"summaries - {summaries}")
+            logger.warning(f"No summaries found for month={month}, year={year}")
+            raise ValueError(f"Data not found for month: {month} and year: {year}")
+
+        logger.debug(f"Found {len(summaries)} summaries for {month} {year}")
+
+        # Create Excel file
         output = BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            for summary in summaries:
-                df = summary.dataframe_json
-                sheet_name = summary.data_model_type[:31]  # Excel sheet names max length is 31
-                df.to_excel(writer, sheet_name=sheet_name, index=True)
+        sheets_written = 0
+
+        try:
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                for idx, summary in enumerate(summaries):
+                    try:
+                        # Extract dataframe
+                        df = summary.dataframe_json
+                        if df is None or (hasattr(df, 'empty') and df.empty):
+                            logger.warning(f"Empty dataframe for summary type: {getattr(summary, 'data_model_type', f'index {idx}')}")
+                            continue
+
+                        # Generate sheet name (max 31 characters for Excel)
+                        sheet_name = str(getattr(summary, 'data_model_type', f'Sheet{idx}'))[:31]
+
+                        # Write to Excel
+                        df.to_excel(writer, sheet_name=sheet_name, index=True)
+                        sheets_written += 1
+                        logger.debug(f"Written sheet: {sheet_name}")
+
+                    except Exception as e:
+                        logger.error(f"Error writing summary sheet {idx} ({getattr(summary, 'data_model_type', 'unknown')}): {e}")
+                        # Continue with other summaries instead of failing completely
+                        continue
+
+                if sheets_written == 0:
+                    raise ValueError(f"No valid summary data could be written for {month} {year}")
+
+        except ValueError:
+            # Re-raise ValueError (already has descriptive message)
+            raise
+        except Exception as e:
+            logger.error(f"Error creating Excel writer or writing sheets: {e}", exc_info=True)
+            raise ValueError(f"Failed to create Excel file: {str(e)}") from e
 
         output.seek(0)
+        logger.info(f"Successfully created combined summary Excel with {sheets_written} sheets for {month} {year}")
         return output
-    except ValueError as ve:
-        logger.error(f"ValueError: {ve}")
-        raise ValueError(f"data not found for month: {month} and year: {year}")  # Return empty stream if no summaries
 
+    except ValueError:
+        # Re-raise ValueError as-is
+        raise
     except Exception as e:
-        logger.error(f"Error generating combined summary Excel: {e}")
-        return BytesIO()  # Return empty stream on error
+        logger.error(f"Unexpected error generating combined summary Excel for {month} {year}: {e}", exc_info=True)
+        raise ValueError(f"Unexpected error creating summary file: {str(e)}") from e
 
 
 def create_combined_summary_excel(folder_path: str) -> BytesIO:
@@ -791,17 +885,68 @@ def export_with_total_formatting(df_with_total: pd.DataFrame, total_row_idx: int
 
 
 def download_forecast_excel(month, year) -> BytesIO:
+    """
+    Download forecast data as formatted Excel file with totals row.
+
+    Args:
+        month: Month name (e.g., "January", "February")
+        year: Year as integer (e.g., 2025)
+
+    Returns:
+        BytesIO: Excel file stream
+
+    Raises:
+        ValueError: If data not found or processing fails
+        TypeError: If DataFrame doesn't have MultiIndex columns
+    """
     file_id = "forecast"
-    df = get_processed_dataframe(file_id, month, year)
+
+    try:
+        # Get processed dataframe
+        df = get_processed_dataframe(file_id, month, year)
+    except ValueError as ve:
+        logger.error(f"Failed to get processed dataframe: {ve}")
+        raise ValueError(f"Cannot download forecast: {str(ve)}") from ve
+    except Exception as e:
+        logger.error(f"Unexpected error getting forecast data for {month} {year}: {e}", exc_info=True)
+        raise ValueError(f"Unexpected error retrieving forecast data: {str(e)}") from e
+
     if df.empty:
         logger.error(f"No data found for {file_id} - {month} {year}")
         raise ValueError(f"Data not found for the month {month} - year {year}")
-    else:
-        logger.info(f"Fetched Data for {file_id} - month: {month} year: {year}")
+
+    logger.info(f"Fetched Data for {file_id} - month: {month} year: {year}")
+
+    try:
+        # Find month columns for totals calculation
         indexes = month_columns_by_level(df)
+        if not indexes:
+            logger.warning(f"No month columns found in forecast data for {month} {year}")
+    except TypeError as te:
+        logger.error(f"DataFrame structure error: {te}")
+        raise ValueError(f"Invalid forecast data structure: DataFrame must have MultiIndex columns") from te
+    except Exception as e:
+        logger.error(f"Error identifying month columns: {e}", exc_info=True)
+        raise ValueError(f"Failed to identify month columns in forecast data: {str(e)}") from e
+
+    try:
+        # Add totals row
         mod_df, total_row = add_totals_row_by_index(df, indexes, label_col_idx=0)
+    except (IndexError, TypeError) as e:
+        logger.error(f"Error adding totals row: {e}")
+        raise ValueError(f"Failed to add totals row to forecast data: {str(e)}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error adding totals row: {e}", exc_info=True)
+        raise ValueError(f"Unexpected error processing forecast data: {str(e)}") from e
+
+    try:
+        # Export to Excel with formatting
         output = export_with_total_formatting(mod_df, total_row, header_offset=3)
+        logger.info(f"Successfully created Excel file for {month} {year}")
         return output
+    except Exception as e:
+        logger.error(f"Error exporting to Excel: {e}", exc_info=True)
+        raise ValueError(f"Failed to create Excel file: {str(e)}") from e
 
 def drop_keys_many(dicts: Iterable[Mapping], keys_to_remove: Iterable) -> List[Dict]:
     """
