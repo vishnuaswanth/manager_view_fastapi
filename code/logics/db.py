@@ -246,9 +246,18 @@ class ProdTeamRosterModel(SQLModel, table=True):
 
 class ForecastModel(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    Centene_Capacity_Plan_Main_LOB : Optional[str]
-    Centene_Capacity_Plan_State : Optional[str]
-    Centene_Capacity_Plan_Case_Type : Optional[str]
+    Centene_Capacity_Plan_Main_LOB: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True)
+    )
+    Centene_Capacity_Plan_State: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(100), nullable=True)
+    )
+    Centene_Capacity_Plan_Case_Type: Optional[str] = Field(
+        default=None,
+        sa_column=Column(String(255), nullable=True)
+    )
     Centene_Capacity_Plan_Call_Type_ID : Optional[str]
     Centene_Capacity_Plan_Target_CPH :Optional[int]
     Client_Forecast_Month1 :Optional[int]

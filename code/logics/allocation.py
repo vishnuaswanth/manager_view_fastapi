@@ -67,7 +67,7 @@ state_with_worktype_volume_dict = {}
 def get_value(row, month, filetype, df:pd.DataFrame=None, unnamed_count=None):
     if df is None or getattr(df, 'empty', True):
         return 0
-    
+
     file_name = row[('Centene Capacity plan', 'Main LOB')]
     state = row[('Centene Capacity plan', 'State')]
     work_type = row[('Centene Capacity plan', 'Case type')]
@@ -149,7 +149,7 @@ class Calculations():
         ]
         # logger.debug(f"filtered target df head - {filtered_target_df.head()}")
         return filtered_target_df['Target CPH'].iloc[0] if not filtered_target_df.empty else 0
-       
+
 
 
 # def get_target_cph(row):
@@ -273,13 +273,13 @@ def get_skills_split_count(row, month, df):
             else:
                 filtered_df = df_copy[df_copy['State'].str.contains(state, na=False)]
             logging.debug(f"    filtered_df.shape = {filtered_df.shape}")
-            
+
             volume = {}
             # count occurrences by your combination logic
             work_types = sorted(filtered_df['NewWorkType'].tolist(), key=len, reverse=True)
             logging.debug(f"    vendor NewWorkType list (sample 10): {work_types[:10]}")
             logging.debug(f"    vendor NewWorkType list (sample 10): {work_types[:-11:-1]}")
-            
+
             for wt in work_types:
                 for comb in combination_list:
                     if len(comb) > 1:
@@ -292,14 +292,14 @@ def get_skills_split_count(row, month, df):
         except Exception as e:
             logging.warning(f"    ERROR initializing bucket for {key}: {e}")
             state_with_worktype_volume_dict[key] = {}
-    
+
     bucket = state_with_worktype_volume_dict.get(key, {})
     logging.debug(f"    existing bucket for {key}: {bucket}")
-    
+
     # now allocate from bucket
     available = 0.0
     remaining = fte_required
-    
+
     # first try the exact single-type slot
     single = (worktype,)
     if single in bucket:
@@ -309,7 +309,7 @@ def get_skills_split_count(row, month, df):
         available += take
         remaining  -= take
         logging.debug(f"    took {take} from single bucket {single}, now bucket={bucket[single]}, remaining={remaining}")
-    
+
     # then try multi-type slots that include our worktype
     if remaining > 0:
         for comb, cnt in list(bucket.items()):
@@ -321,7 +321,7 @@ def get_skills_split_count(row, month, df):
                 available   += take
                 remaining   -= take
                 logging.debug(f"    took {take} from combo bucket {comb}, now bucket={bucket[comb]}, remaining={remaining}")
-    
+
     logging.debug(f"~~ EXIT get_skills_split_count returning {available} (needed {fte_required}) for key={key}")
     return available
 
@@ -369,7 +369,7 @@ def filter_vendor_df(file_name, vendor_df):
     #     (vendor_df['PrimaryPlatform'] == platform) &
     #     (vendor_df['PrimaryMarket'].str.lower() == market.lower())
     # ]
-    #removed Primary market value as it goes empty df after this filter 07242025 
+    #removed Primary market value as it goes empty df after this filter 07242025
     filtered_df = vendor_df[
         (vendor_df['PartofProduction'].isin(['Production', 'Ramp'])) &
         (vendor_df['Location'].str.lower() == location.lower()) &
@@ -468,7 +468,7 @@ def get_columns_between_column_names(
 
 def get_nonmmp_columns(df:pd.DataFrame) -> List[str]:
     """
-    Returns a list of unique third-level column names 
+    Returns a list of unique third-level column names
     from a multi-indexed DataFrame, where:
     - First-level column contains 'Forecast - Volume'
     - Third-level column does not contain 'Total'
@@ -476,13 +476,13 @@ def get_nonmmp_columns(df:pd.DataFrame) -> List[str]:
     # Ensure we are working with MultiIndex columns
     if not isinstance(df.columns, pd.MultiIndex):
         raise ValueError("DataFrame must have MultiIndex columns (3 levels).")
-    
+
     # Filter columns where first level contains 'Forecast - Volume'
     filtered = [col for col in df.columns if "Forecast - Volume" in str(col[0])]
-    
+
     # Extract the third-level names
     third_level_names = [col[2] for col in filtered if "Total" not in str(col[2])]
-    
+
     # Return unique names as a list
     return sorted(set(third_level_names))
 
@@ -507,7 +507,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         'nonmmp': os.path.join(curpth,"data", 'constants', "medicare_medicaid_nonmmp"),
         'summary': os.path.join(curpth, "data", 'constants',"medicare_medicaid_summary")
     }
-    
+
     for file_type, directory in file_types.items():
         for file_name, df in directory.items():
             # if not file_name.endswith('.xlsx'):
@@ -553,7 +553,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                     # while index < len(third_level_headers):
                     #     work_types.extend([str(third_level_headers[index]).strip(), str(third_level_headers[index + 1]).strip()] if index + 1 < len(third_level_headers) else [str(third_level_headers[index]).strip()])
                     #     index += 11
-                    
+
                     work_types = get_nonmmp_columns(df)
                     logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
                     states = list(set(df[('', '', 'State')].dropna()))
@@ -616,7 +616,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                 output_df[('Centene Capacity plan', 'State')] = states_expanded
                 output_df[('Centene Capacity plan', 'Case type')] = work_types_expanded
                 output_df[('Centene Capacity plan', 'temp_Case type')] = output_df[('Centene Capacity plan', 'Case type')].apply(get_temp_casetype)
-                output_df[('Centene Capacity plan', 'Call Type ID')] = output_df[('Centene Capacity plan', 'Main LOB')].astype(str) + output_df[('Centene Capacity plan', 'temp_Case type')].astype(str)
+                output_df[('Centene Capacity plan', 'Call Type ID')] = output_df[('Centene Capacity plan', 'Main LOB')].astype(str)+ " " + output_df[('Centene Capacity plan', 'temp_Case type')].astype(str)
                 output_df.drop(columns=[('Centene Capacity plan', 'temp_Case type')], inplace=True)
             except ValueError as e:
                 logging.error(f"Length mismatch in {file_name}: {e}")
