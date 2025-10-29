@@ -10,20 +10,20 @@ import json
 
 from code.settings import BASE_DIR
 from code.logics.db import (
-    DBManager, 
-    RosterModel, 
+    DBManager,
+    RosterModel,
     SkillingModel,
     ProdTeamRosterModel,
-    InValidSearchException, 
-    RosterTemplate, 
-    ForecastModel, 
+    InValidSearchException,
+    RosterTemplate,
+    ForecastModel,
     ForecastMonthsModel
 )
 import warnings
 # warnings.filterwarnings("ignore")
 from code.settings import  (
     MODE,
-    SQLITE_DATABASE_URL, 
+    SQLITE_DATABASE_URL,
     MSSQL_DATABASE_URL,
     BASE_DIR
 )
@@ -69,28 +69,28 @@ def get_model_or_all_models(file_id:str=None)-> Union[Dict[str, Type], Type]:
 
     if file_id is None:
         raise HTTPException(status_code=400, detail="file_id must be provided")
-    
+
     # Define the mapping of models and params
     MODEL_FIELD_MAPPING: Dict[str, Union[Type, Dict[str, Type]]] = {
         'roster': RosterModel,
-        'skilling': SkillingModel,  
+        'skilling': SkillingModel,
         'roster_template': RosterTemplate,
         'forecast': ForecastModel,
         'upload_roster': {
             'Roster': RosterModel,
             'Skilling': SkillingModel
         },
-        'prod_team_roster': ProdTeamRosterModel,   
+        'prod_team_roster': ProdTeamRosterModel,
     }
     ALL_MODELS_KEY = 'All'
 
     if file_id.lower() == ALL_MODELS_KEY.lower():
         return {key: value for key, value in MODEL_FIELD_MAPPING.items() if key != 'upload_roster'}
-    
+
     model = MODEL_FIELD_MAPPING.get(file_id.lower())
     if model is None:
         raise HTTPException(status_code=404, detail="Model not found")
-    
+
     return model
 
 def _safe_filename(text: str) -> str:
@@ -239,13 +239,12 @@ def clean_multiindex_df(df_multi: pd.DataFrame) -> pd.DataFrame:
     # Drop columns where header row index 3 contains '.1' or '.2'
     # if df_multi.empty:
     #     return df_multi
-    df_multi = df_multi.loc[:, ~df_multi.columns.duplicated()] 
+    df_multi = df_multi.loc[:, ~df_multi.columns.duplicated()]
     cols_to_drop = [col for col in df_multi.columns if any(str(col[3]) == suffix for suffix in ('.1', '.2'))]
-    df_multi = df_multi.drop(columns=cols_to_drop, axis=0)
+    df_multi = df_multi.drop(columns=cols_to_drop)
     try:
         # Process each column for type and fill NaNs
-        for j in range(df_multi.shape[1]):
-            df_multi.iloc[:, j] = clean_series(df_multi.iloc[:, j])
+        df_multi = df_multi.apply(clean_series, axis=0)
     except Exception as e:
         logger.error(f"Error occured while cleaning summary data: {e}")
     return df_multi
@@ -304,15 +303,19 @@ def extract_summary_tables(filestream) -> dict[str, pd.DataFrame]:
         table_df = table_df.dropna(axis=1, how='all')
         if "OIC" in safe_filename:
             print(table_df.head())
-        table_df = table_df[~table_df.astype(str).apply(lambda row: row.str.startswith("YYYY", na=False)).any(axis=1)]
+        # Convert to string once for efficient filtering
+        str_df = table_df.astype(str)
+        # Filter out rows where any cell starts with "YYYY"
+        yyyy_mask = ~str_df.apply(lambda x: x.str.startswith("YYYY", na=False)).any(axis=1)
+        # Filter out rows where any cell contains "Total" (including "Total Excluding BOT", etc.)
+        total_mask = ~str_df.apply(lambda x: x.str.contains("Total", case=False, na=False)).any(axis=1)
+        table_df = table_df[yyyy_mask & total_mask]
 
-        if "OIC" in safe_filename:
-            print(table_df.head())
         # Skip storing if safe_filename contains 'MMP' or 'Combined'
         if any(x in safe_filename.upper() for x in ["MMP", "COMBINED"]):
             start_index = end_index + 2
             continue
-        
+
         # Try to read as multi-index header if possible
         try:
             from io import BytesIO
@@ -328,11 +331,11 @@ def extract_summary_tables(filestream) -> dict[str, pd.DataFrame]:
                 )
                 for col in df_multi.columns
             )
-            df_multi.reset_index(drop=True, inplace=True)
+            df_multi = df_multi.reset_index(drop=True)
             df_multi = clean_multiindex_df(df_multi)
             tables_dict[safe_filename] = df_multi
         except Exception:
-            table_df.reset_index(drop=True, inplace=True)
+            table_df = table_df.reset_index(drop=True)
             tables_dict[safe_filename] = table_df
 
         start_index = end_index + 2
@@ -359,22 +362,22 @@ class PreProcessing:
                         'ADJ_COB_END_TRAINING', 'CourseType', 'BH', 'SplProj', 'DualPends',
                         'RampStartDate', 'RampEndDate', 'Ramp', 'CPH',
                         'CrossTrainedTrainingDate', 'CrossTrainedProdDate',
-                        'ProductionStartDate', 'Facilitator_Cofacilitator',                
+                        'ProductionStartDate', 'Facilitator_Cofacilitator',
                         'Centene_WellCareEmail', 'Additional_Email_NTT'
                         ],
             'roster_template':[
-                        'FirstName', 'LastName', 'CN', 'OPID', 'Location', 'ZIPCode', 'City', 
-                        'BeelineTitle', 'Status', 'PrimaryPlatform', 'PrimaryMarket', 'Worktype', 
-                        'LOB', 'SupervisorFullName', 'SupervisorCNNo', 'UserStatus', 'PartofProduction', 
+                        'FirstName', 'LastName', 'CN', 'OPID', 'Location', 'ZIPCode', 'City',
+                        'BeelineTitle', 'Status', 'PrimaryPlatform', 'PrimaryMarket', 'Worktype',
+                        'LOB', 'SupervisorFullName', 'SupervisorCNNo', 'UserStatus', 'PartofProduction',
                         'ProductionPercentage', 'NewWorkType', 'State', 'CenteneMailId', 'NTTMailID'
                         ],
             'forecast':[
-                    'Centene_Capacity_Plan_Main_LOB', 'Centene_Capacity_Plan_State', 'Centene_Capacity_Plan_Case_Type', 
-                    'Centene_Capacity_Plan_Call_Type_ID', 'Centene_Capacity_Plan_Target_CPH', 
-                    'Client_Forecast_Month1', 'Client_Forecast_Month2', 'Client_Forecast_Month3', 'Client_Forecast_Month4', 
-                    'Client_Forecast_Month5', 'Client_Forecast_Month6', 'FTE_Required_Month1', 'FTE_Required_Month2', 'FTE_Required_Month3', 
-                    'FTE_Required_Month4', 'FTE_Required_Month5', 'FTE_Required_Month6', 'FTE_Avail_Month1', 'FTE_Avail_Month2', 'FTE_Avail_Month3', 
-                    'FTE_Avail_Month4', 'FTE_Avail_Month5', 'FTE_Avail_Month6', 'Capacity_Month1', 'Capacity_Month2', 'Capacity_Month3', 'Capacity_Month4', 
+                    'Centene_Capacity_Plan_Main_LOB', 'Centene_Capacity_Plan_State', 'Centene_Capacity_Plan_Case_Type',
+                    'Centene_Capacity_Plan_Call_Type_ID', 'Centene_Capacity_Plan_Target_CPH',
+                    'Client_Forecast_Month1', 'Client_Forecast_Month2', 'Client_Forecast_Month3', 'Client_Forecast_Month4',
+                    'Client_Forecast_Month5', 'Client_Forecast_Month6', 'FTE_Required_Month1', 'FTE_Required_Month2', 'FTE_Required_Month3',
+                    'FTE_Required_Month4', 'FTE_Required_Month5', 'FTE_Required_Month6', 'FTE_Avail_Month1', 'FTE_Avail_Month2', 'FTE_Avail_Month3',
+                    'FTE_Avail_Month4', 'FTE_Avail_Month5', 'FTE_Avail_Month6', 'Capacity_Month1', 'Capacity_Month2', 'Capacity_Month3', 'Capacity_Month4',
                     'Capacity_Month5', 'Capacity_Month6'
             ],
             'skilling':[
@@ -394,12 +397,12 @@ class PreProcessing:
         }
         self.model_keys = {
             'forecast': [
-                'Centene_Capacity_Plan_Main_LOB', 'Centene_Capacity_Plan_State', 
+                'Centene_Capacity_Plan_Main_LOB', 'Centene_Capacity_Plan_State',
                 'Centene_Capacity_Plan_Case_Type', 'Centene_Capacity_Plan_Call_Type_ID',
             ],
         }
 
-    
+
     def _normalize_month(self, month_str):
         month_str = month_str.strip().capitalize()
         # Handle abbreviations
@@ -413,7 +416,7 @@ class PreProcessing:
 
     def get_month_year(self,filename):
         # List of month names and abbreviations
-        
+
         months = [item for pair in self.abbr_to_full.items() for item in pair]
         # Build a regex pattern for months
         month_pattern = '|'.join(months)
@@ -427,7 +430,7 @@ class PreProcessing:
             return {"Month": month, "Year": year}
         else:
             return None
-    
+
     def _process_forecast_df(self, df: pd.DataFrame) -> pd.DataFrame:
         """Processes the forecast DataFrame to ensure it has the correct columns and formats"""
         # Get the second level of the MultiIndex columns
@@ -445,7 +448,7 @@ class PreProcessing:
         ]
 
         return df
-        
+
 
 
     def _process_forecast(self, contents:bytes|str, header_rows:int=2):
@@ -455,28 +458,28 @@ class PreProcessing:
         Args:
             content (bytes): Excel file as bytes. contents:bytes
             header_rows (int): Number of header rows to read (default 2).
-            
+
         Returns:
             pd.DataFrame: DataFrame with flattened column headers.
         """
         # Read the Excel file with multi-level headers
         df = pd.read_excel(contents, header=list(range(header_rows)))
-        
+
         df = self._process_forecast_df(df)
-        
+
         return df
-    
+
     def preprocess_file(self,contents:bytes|str):
         columns = self.MAPPING[self.file_id]
         if self.file_id in ['roster', 'roster_template', 'prod_team_roster']:
-            
+
             df = pd.read_excel(contents, names=columns)
         if self.file_id in ['forecast']:
             df = self._process_forecast(contents)
             df.columns = columns
 
         return df
-    
+
     def preprocess_forecast_df(self, df:pd.DataFrame) -> pd.DataFrame:
         columns = self.MAPPING[self.file_id]
         df = self._process_forecast_df(df)
@@ -487,8 +490,8 @@ class PreProcessing:
         expected = self.MAPPING["roster"]
         df.columns = df.columns.str.strip()
         df = df[expected] if all(col in df.columns for col in expected) else pd.read_excel(df, names=expected)
-        for col in df.columns:
-            df[col] = df[col].fillna("").astype(str).str.strip()
+        # Vectorized string processing for all columns
+        df = df.apply(lambda x: x.fillna("").astype(str).str.strip())
         return df
 
     def preprocess_skilling(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -497,15 +500,20 @@ class PreProcessing:
         int_cols = ['Unique_Agent', 'Multi_Skill']
         float_cols = ['Skill_Split']
 
-        for col in df.columns:
-            if col in int_cols:
+        # Process numeric columns
+        for col in int_cols:
+            if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
-            elif col in float_cols:
+        for col in float_cols:
+            if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
-            else:               
-                df[col] = df[col].fillna("").astype(str).str.strip()
+
+        # Process all string columns at once with vectorized operations
+        string_cols = [col for col in df.columns if col not in int_cols and col not in float_cols]
+        if string_cols:
+            df[string_cols] = df[string_cols].apply(lambda x: x.fillna("").astype(str).str.strip())
         return df
-    
+
     def get_model_keys(self):
         return self.model_keys.get(self.file_id,[])
 
@@ -626,7 +634,7 @@ class PreProcessing:
         return dfs
 
 
-   
+
 def insert_file_id(db_manager:DBManager, file_id):
     result = db_manager.read_db()
     output = {'total':result['total'], 'records':[]}
@@ -640,9 +648,9 @@ def insert_file_id(db_manager:DBManager, file_id):
 
 
 class PostProcessing:
-    def __init__(self, core_utils: CoreUtils):      
+    def __init__(self, core_utils: CoreUtils):
         self.core_utils = core_utils
-        
+
         self.MAPPING = {
             'forecast':[
                 ('Centene Capacity plan', 'Main LOB'),
@@ -676,21 +684,21 @@ class PostProcessing:
                 ('Capacity', 'Month6'),
             ],
             'roster':[
-                        'Platform', 'WorkType', 'State', 
-                        'Product', 'Location', 'ResourceStatus', 
-                        'Status', 'FirstName', 'LastName', 'PortalId', 
-                        'CN', 'WorkdayId', 'HireDate_AmisysStartDate', 
-                        'OPID', 'Position', 'TL', 'Supervisor', 'PrimarySkills', 
-                        'SecondarySkills', 'City', 'ClassName', 'FTC_START_TRAINING', 
-                        'FTC_END_TRAINING ', 'ADJ_COB_START_TRAINING', 'ADJ_COB_END_TRAINING ', 
-                        'CourseType', 'BH', 'SplProj', 'DualPends', 'RampStartDate', 'RampEndDate', 
-                        'Ramp', 'CPH', 'CrossTrainedTrainingDate', 'CrossTrainedProdDate', 'ProductionStartDate', 
+                        'Platform', 'WorkType', 'State',
+                        'Product', 'Location', 'ResourceStatus',
+                        'Status', 'FirstName', 'LastName', 'PortalId',
+                        'CN', 'WorkdayId', 'HireDate_AmisysStartDate',
+                        'OPID', 'Position', 'TL', 'Supervisor', 'PrimarySkills',
+                        'SecondarySkills', 'City', 'ClassName', 'FTC_START_TRAINING',
+                        'FTC_END_TRAINING ', 'ADJ_COB_START_TRAINING', 'ADJ_COB_END_TRAINING ',
+                        'CourseType', 'BH', 'SplProj', 'DualPends', 'RampStartDate', 'RampEndDate',
+                        'Ramp', 'CPH', 'CrossTrainedTrainingDate', 'CrossTrainedProdDate', 'ProductionStartDate',
                         'Facilitator_Cofacilitator', ' Centene_WellCareEmail', 'Additional_Email_NTT'
                     ],
             'roster_template':[
-                                'FirstName', 'LastName', 'CN', 'OPID', 'Location', 'ZIPCode', 'City', 'BeelineTitle', 
-                             'Status\n[inTrainingorProduction]', 'PrimaryPlatform', 'PrimaryMarket', 'Worktype(FTC/ADJ/COB)', 
-                             'LOB', "Supervisor'sFullName", "Supervisor'sCN#", 'UserStatus', 'PartofProduction', 'Production%', 
+                                'FirstName', 'LastName', 'CN', 'OPID', 'Location', 'ZIPCode', 'City', 'BeelineTitle',
+                             'Status\n[inTrainingorProduction]', 'PrimaryPlatform', 'PrimaryMarket', 'Worktype(FTC/ADJ/COB)',
+                             'LOB', "Supervisor'sFullName", "Supervisor'sCN#", 'UserStatus', 'PartofProduction', 'Production%',
                              'NewWorkType', 'State', 'CenteneMailId', 'NTTMailID'
                              ],
             'skilling':[
@@ -699,12 +707,12 @@ class PostProcessing:
                 "Multi Skill", "Skill Name", "Skill Split"
             ],
             'prod_team_roster':[
-                'FirstName', 'LastName', 'CN', 'OPID', 'Location', 'ZIPCode', 'City', 'BeelineTitle', 
-                'Status\n[inTrainingorProduction]', 'PrimaryPlatform', 'PrimaryMarket', 'Worktype(FTC/ADJ/COB)', 
-                'LOB', "Supervisor'sFullName", "Supervisor'sCN#", 'UserStatus', 'PartofProduction', 'Production%', 
+                'FirstName', 'LastName', 'CN', 'OPID', 'Location', 'ZIPCode', 'City', 'BeelineTitle',
+                'Status\n[inTrainingorProduction]', 'PrimaryPlatform', 'PrimaryMarket', 'Worktype(FTC/ADJ/COB)',
+                'LOB', "Supervisor'sFullName", "Supervisor'sCN#", 'UserStatus', 'PartofProduction', 'Production%',
                 'NewWorkType', 'State', 'CenteneMailId', 'NTTMailID'
             ],
-            
+
         }
 
     def forecast_tabs(self,forecast_month, forecast_year):
@@ -717,16 +725,16 @@ class PostProcessing:
         tabs = db_manager.search_db(['UploadedFile'], [filename])
         tab_months = {k:v for k, v in tabs["records"][0].items() if k not in {'CreatedBy', 'id', 'CreatedDateTime', 'UploadedFile'}}
         return tab_months
-    
+
     def forecast_columns(self, forecast_month, forecast_year):
         tab_months = self.forecast_tabs(forecast_month, forecast_year)
-        
+
         column_tuple = self.MAPPING['forecast']
         return [
-            (t[0], tab_months.get(t[1], t[1])) 
+            (t[0], tab_months.get(t[1], t[1]))
             for t in column_tuple
         ]
-    
+
     def forecast_schema(self, month_map, input_data):
         output_schema = {}
         for m_key, month in month_map.items():
@@ -745,7 +753,7 @@ class PostProcessing:
             }
             output_schema[month] = [row]
         return output_schema
-    
+
     def forecast_totals(self, month_map, summation_data:Dict[str, int]):
         totals = {}
         for m_key, month in month_map.items():
@@ -766,11 +774,11 @@ class PostProcessing:
     def forecast_month_data(self,data, month):
         """
         Extracts and returns data for the specified month from the input structure.
-        
+
         Args:
             data (list): The input data list of dictionary.
             month (str): The month to extract (e.g., 'March').
-            
+
         Returns:
             list: A list of data entries for the specified month.
         """
@@ -779,7 +787,7 @@ class PostProcessing:
             if month in entry:
                 month_data.extend(entry[month])
         return month_data
-    
+
 
 def to_title_case(field):
     # 1. Replace underscores with spaces
@@ -823,7 +831,7 @@ def test_sum_metrics_example() -> None:
 
     # Pretty-print for quick manual verification
     print(json.dumps(result, indent=2, sort_keys=True))
-        
+
 if __name__ == "__main__":
     preprocessor = PreProcessing(file_id='forecast')
     # file_path = os.path.join(BASE_DIR, "logics", "data", "Input", "NTT Forecast - Capacity and HC - Feb 2025 V2.xlsx")
@@ -841,6 +849,6 @@ if __name__ == "__main__":
     # test_sum_metrics_example()
 
     # ...existing code...
-    
+
 
 
