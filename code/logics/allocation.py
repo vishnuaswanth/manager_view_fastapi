@@ -23,6 +23,14 @@ from code.logics.summary_utils import update_summary_data
 import pandas as pd
 from code.settings import BASE_DIR
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
 logger = logging.getLogger(__name__)
 
 pd.set_option('future.no_silent_downcasting', True)
@@ -61,7 +69,7 @@ month_with_days = dict(zip(req_vars_df['months'], req_vars_df['No.of days occupa
 # state_with_worktype_volume_dict = {}
 
 # Helper functions
-def get_value(row, month, filetype, df:pd.DataFrame=None, unnamed_count=None):
+def get_value(row, month, filetype, df:pd.DataFrame=None):
     if df is None or getattr(df, 'empty', True):
         return 0
 
@@ -283,19 +291,139 @@ class ResourceAllocator:
         self.month_headers = month_headers
         self.allocation_history = []
 
+        # Extract valid states from demand
+        self.valid_states = self._extract_valid_states(output_df)
+        logger.info(f"Valid states from demand: {sorted(self.valid_states)}")
+
         # Build vocabulary from demand (sorted longest-first)
         self.worktype_vocab = self._build_vocabulary(output_df)
         logger.info(f"Built vocabulary with {len(self.worktype_vocab)} unique worktypes")
+        logger.info(f"Sample worktypes: {self.worktype_vocab[:5]}")
 
         # Pre-compile regex for performance
         self.whitespace_pattern = re.compile(r'\s+')
 
+        # Clean and expand vendor data by state
+        vendor_df_clean = self._clean_and_expand_vendor_states(vendor_df)
+        logger.info(f"Cleaned vendor data: {vendor_df_clean.shape[0]} records after state expansion")
+
         # Parse vendors and build buckets
-        self.buckets = self._initialize_buckets(vendor_df)
+        self.buckets = self._initialize_buckets(vendor_df_clean)
 
         # Store initial state for reporting
         self.initial_state = self._snapshot_state()
-        logger.info(f"Initialized allocator with {sum(sum(b.values()) for b in self.buckets.values())} total resources across {len(self.buckets)} location-month combinations")
+        total_vendor_instances = sum(len(vendors) for vendors in self.buckets.values())
+        logger.info(f"Initialized allocator with {total_vendor_instances} total vendor-month instances across {len(self.buckets)} (platform, month, skillset) combinations")
+
+        # Debug: Show sample bucket structure
+        if self.buckets:
+            sample_key = list(self.buckets.keys())[0]
+            sample_vendors = self.buckets[sample_key]
+            logger.info(f"Sample bucket key: {sample_key}")
+            logger.info(f"Sample bucket vendor count: {len(sample_vendors)}")
+            if sample_vendors:
+                logger.info(f"Sample vendor states: {sample_vendors[0]['states']}")
+
+        # Export buckets to Excel for debugging
+        self._export_buckets_to_excel()
+
+    def _extract_valid_states(self, output_df: pd.DataFrame) -> set:
+        """
+        Extract valid state codes from demand DataFrame.
+
+        Returns:
+            set: Valid state codes (including "N/A")
+        """
+        states = output_df[('Centene Capacity plan', 'State')].unique()
+        valid_states = {
+            str(state).strip().upper()
+            for state in states
+            if state and str(state).lower() not in {'nan', 'none', ''}
+        }
+        return valid_states
+
+    def _clean_and_expand_vendor_states(self, vendor_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Clean vendor State column and parse as list of states.
+
+        CRITICAL: A vendor with "FL GA AR" is ONE resource that can work in FL, GA, or AR.
+        They should only be counted ONCE, not multiple times!
+
+        State mapping logic:
+        - Parse multi-state strings like "FL GA AR" → keep as list [FL, GA, AR]
+        - Filter: Keep matched states, convert unmatched to N/A
+        - Store as StateList column for allocation matching
+
+        Example:
+          Demand states: [FL, GA, MI, N/A]
+          Vendor state: "FL GA AR"
+          Result: ONE record with StateList = [FL, GA, N/A]
+                  (FL matches, GA matches, AR → N/A)
+
+        Returns:
+            DataFrame: Vendor data with StateList column (list of states vendor can work in)
+        """
+        vendor_df = vendor_df.copy()
+
+        # Common US state codes (2-letter) for validation
+        us_state_pattern = re.compile(r'^[A-Z]{2}$')
+
+        # Get specific states (excluding N/A)
+        specific_demand_states = self.valid_states - {'N/A'}
+
+        def parse_states(state_str):
+            """
+            Parse state string into list of valid states.
+
+            IMPORTANT: Every vendor can be used for N/A demands, so we ALWAYS add 'N/A' to StateList.
+            This makes it explicit that vendor is available when demand has state='N/A'.
+            """
+            state_str = str(state_str).strip().upper()
+
+            if not state_str or state_str in {'NAN', 'NONE', ''}:
+                return ['N/A']  # No state info → N/A only
+
+            # Split by whitespace
+            state_tokens = state_str.split()
+
+            parsed_states = []
+            for token in state_tokens:
+                if us_state_pattern.match(token):
+                    # Valid 2-letter code
+                    if token in specific_demand_states:
+                        parsed_states.append(token)  # Matched state
+                    else:
+                        # Unmatched valid state code → don't add to list
+                        # It will be available via N/A anyway
+                        pass
+                else:
+                    # Invalid code → ignore (will be available via N/A)
+                    pass
+
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_states = []
+            for s in parsed_states:
+                if s not in seen:
+                    seen.add(s)
+                    unique_states.append(s)
+
+            # ALWAYS add 'N/A' - every vendor can fulfill N/A demands
+            if 'N/A' not in unique_states:
+                unique_states.append('N/A')
+
+            return unique_states
+
+        vendor_df['StateList'] = vendor_df['State'].apply(parse_states)
+
+        logger.info(f"Parsed states for {len(vendor_df)} vendor records")
+        logger.info(f"Sample StateList: {vendor_df['StateList'].head().tolist()}")
+
+        # Debug: Count multi-state vendors
+        multi_state_count = vendor_df['StateList'].apply(lambda x: len(x) > 1).sum()
+        logger.info(f"Vendors with multiple states: {multi_state_count}")
+
+        return vendor_df
 
     def _build_vocabulary(self, output_df: pd.DataFrame) -> List[str]:
         """
@@ -373,30 +501,75 @@ class ResourceAllocator:
 
     def _initialize_buckets(self, vendor_df: pd.DataFrame) -> dict:
         """
-        Pre-compute all resource buckets grouped by (platform, state, month, skillset).
+        Pre-compute all resource buckets grouped by (platform, month, skillset).
+
+        CRITICAL: Vendors are stored with their StateList to avoid double-counting.
+        Each vendor can only be allocated ONCE, even if they can work in multiple states.
 
         Returns:
-            dict: {(platform, state, month): {frozenset(skills): count}}
+            dict: {(platform, month, skillset): [list of vendor records with StateList]}
         """
         # Parse vendor skills
         vendor_df = vendor_df.copy()
+
+        # Normalize platform: extract first word and uppercase for case-insensitive matching
+        # Example: "Amisys CROP" → "AMISYS", "amisys" → "AMISYS"
+        vendor_df['PlatformNormalized'] = vendor_df['PrimaryPlatform'].apply(
+            lambda x: str(x).strip().split()[0].upper() if x and str(x).lower() != 'nan' else ''
+        )
+
+        logger.info(f"Parsing skills for {len(vendor_df)} vendor records...")
         vendor_df['ParsedSkills'] = vendor_df['NewWorkType'].apply(self._parse_vendor_skills)
 
+        # Debug: Show parsing results
+        logger.info(f"Sample vendor PrimaryPlatform: {vendor_df['PrimaryPlatform'].head().tolist()}")
+        logger.info(f"Sample vendor PlatformNormalized: {vendor_df['PlatformNormalized'].head().tolist()}")
+        logger.info(f"Sample vendor StateList: {vendor_df['StateList'].head().tolist()}")
+        logger.info(f"Sample vendor NewWorkType: {vendor_df['NewWorkType'].head().tolist()}")
+        logger.info(f"Sample ParsedSkills: {vendor_df['ParsedSkills'].head().tolist()}")
+
         # Filter out vendors with no recognized skills
+        before_filter = len(vendor_df)
         vendor_df = vendor_df[vendor_df['ParsedSkills'].apply(len) > 0]
+        after_filter = len(vendor_df)
+        logger.info(f"Filtered vendors: {before_filter} → {after_filter} (removed {before_filter - after_filter} with no recognized skills)")
 
-        # Group by platform, state, and parsed skills
-        grouped = vendor_df.groupby(['PrimaryPlatform', 'State', 'ParsedSkills']).size()
+        if vendor_df.empty:
+            logger.error("No vendors with recognized skills! Check worktype vocabulary matching.")
+            return {}
 
-        # Convert to nested dict structure by month
+        # Debug: Show platforms
+        logger.info(f"Unique platforms (normalized) in vendor data: {sorted(vendor_df['PlatformNormalized'].unique())}")
+
+        # Create buckets: (platform, month, skillset) → list of vendor IDs with StateList
+        # We'll track vendors by their index to prevent double-counting
         buckets = {}
-        for (platform, state, skillset), count in grouped.items():
-            # Create bucket for each month
-            for month in self.month_headers:
-                key = (platform, state, month)
+        vendor_df['VendorID'] = range(len(vendor_df))  # Unique ID for each vendor
+
+        for month in self.month_headers:
+            month_normalized = str(month).strip().title()
+
+            for idx, row in vendor_df.iterrows():
+                platform = row['PlatformNormalized']
+                skillset = row['ParsedSkills']
+                vendor_id = row['VendorID']
+                state_list = row['StateList']
+
+                key = (platform, month_normalized, skillset)
+
                 if key not in buckets:
-                    buckets[key] = {}
-                buckets[key][skillset] = count
+                    buckets[key] = []
+
+                # Store vendor with their state list
+                buckets[key].append({
+                    'vendor_id': vendor_id,
+                    'states': state_list,
+                    'allocated': False  # Track if this vendor has been allocated
+                })
+
+        logger.info(f"Created buckets for {len(buckets)} (platform, month, skillset) combinations")
+        total_vendors = sum(len(v) for v in buckets.values())
+        logger.info(f"Total vendor-month instances: {total_vendors}")
 
         return buckets
 
@@ -405,11 +578,135 @@ class ResourceAllocator:
         import copy
         return copy.deepcopy(self.buckets)
 
+    def _export_buckets_to_excel(self):
+        """
+        Export bucket structure to Excel for debugging.
+
+        Creates two sheets:
+        1. Summary: Overview of all buckets with counts
+        2. Details: Full vendor details for each bucket
+        """
+        import os
+        from code.settings import BASE_DIR
+
+        try:
+            # Prepare summary data
+            summary_data = []
+            details_data = []
+
+            for (platform, month, skillset), vendors in sorted(self.buckets.items()):
+                # Convert skillset to readable string
+                skills_str = ' + '.join(sorted(skillset))
+
+                # Get all unique states from vendors in this bucket
+                all_states = set()
+                for v in vendors:
+                    all_states.update(v['states'])
+                states_str = ', '.join(sorted(all_states))
+
+                # Summary row
+                summary_data.append({
+                    'Platform': platform,
+                    'Month': month,
+                    'Skills': skills_str,
+                    'Skill_Count': len(skillset),  # Single-skill vs multi-skill
+                    'Vendor_Count': len(vendors),
+                    'States_Available': states_str
+                })
+
+                # Detail rows (one per vendor)
+                for vendor in vendors:
+                    details_data.append({
+                        'Platform': platform,
+                        'Month': month,
+                        'Skills': skills_str,
+                        'Vendor_ID': vendor['vendor_id'],
+                        'Vendor_States': ', '.join(vendor['states']),
+                        'Allocated': vendor['allocated']
+                    })
+
+            # Create DataFrames
+            summary_df = pd.DataFrame(summary_data)
+            details_df = pd.DataFrame(details_data)
+
+            # Export to Excel
+            curpth = os.path.join(BASE_DIR, 'logics')
+            output_path = os.path.join(curpth, 'buckets_debug.xlsx')
+
+            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                summary_df.to_excel(writer, sheet_name='Bucket_Summary', index=False)
+                details_df.to_excel(writer, sheet_name='Vendor_Details', index=False)
+
+            logger.info(f"✓ Exported bucket structure to: {output_path}")
+            logger.info(f"  - Summary sheet: {len(summary_df)} buckets")
+            logger.info(f"  - Details sheet: {len(details_df)} vendor-month instances")
+
+        except Exception as e:
+            logger.warning(f"Failed to export buckets to Excel: {e}")
+
+    def export_buckets_after_allocation(self):
+        """
+        Export bucket structure AFTER allocation to show what was allocated.
+        Creates a file showing allocated vs unallocated vendors.
+        """
+        import os
+        from code.settings import BASE_DIR
+
+        try:
+            allocation_data = []
+
+            for (platform, month, skillset), vendors in sorted(self.buckets.items()):
+                skills_str = ' + '.join(sorted(skillset))
+
+                # Count allocated vs unallocated
+                allocated_count = sum(1 for v in vendors if v['allocated'])
+                unallocated_count = sum(1 for v in vendors if not v['allocated'])
+
+                # Get states for allocated and unallocated vendors
+                allocated_states = set()
+                unallocated_states = set()
+                for v in vendors:
+                    if v['allocated']:
+                        allocated_states.update(v['states'])
+                    else:
+                        unallocated_states.update(v['states'])
+
+                allocation_data.append({
+                    'Platform': platform,
+                    'Month': month,
+                    'Skills': skills_str,
+                    'Skill_Count': len(skillset),
+                    'Total_Vendors': len(vendors),
+                    'Allocated': allocated_count,
+                    'Unallocated': unallocated_count,
+                    'Allocation_Rate': f"{allocated_count}/{len(vendors)}" if len(vendors) > 0 else "0/0",
+                    'Allocated_States': ', '.join(sorted(allocated_states)) if allocated_states else '-',
+                    'Unallocated_States': ', '.join(sorted(unallocated_states)) if unallocated_states else '-'
+                })
+
+            allocation_df = pd.DataFrame(allocation_data)
+
+            # Export to Excel
+            curpth = os.path.join(BASE_DIR, 'logics')
+            output_path = os.path.join(curpth, 'buckets_after_allocation.xlsx')
+
+            allocation_df.to_excel(output_path, index=False, engine='openpyxl')
+
+            logger.info(f"✓ Exported post-allocation buckets to: {output_path}")
+            logger.info(f"  - Total buckets: {len(allocation_df)}")
+            logger.info(f"  - Total allocated: {allocation_df['Allocated'].sum()}")
+            logger.info(f"  - Total unallocated: {allocation_df['Unallocated'].sum()}")
+
+        except Exception as e:
+            logger.warning(f"Failed to export post-allocation buckets: {e}")
+
     def allocate(self, platform: str, state: str, month: str, worktype: str, fte_required: float) -> tuple:
         """
         Allocate resources for a demand request.
 
-        Special case: If state == "N/A", searches across ALL states for the platform/month.
+        CRITICAL: Each vendor can only be allocated ONCE (no double-counting).
+        Vendors with StateList=[FL, GA, N/A] can fulfill FL, GA, or N/A demands,
+        but once allocated, they're marked and cannot be reused.
 
         Priority:
         1. Single-skill exact match (e.g., only "FTC-Basic/Non MMP")
@@ -425,76 +722,132 @@ class ResourceAllocator:
         Returns:
             tuple: (allocated_amount, shortage_amount)
         """
+        # Skip allocation if no FTE required
+        if fte_required <= 0:
+            return 0, 0
+
+        # Normalize inputs
+        platform_normalized = str(platform).strip().split()[0].upper() if platform and str(platform).lower() != 'nan' else platform
+        state_normalized = str(state).strip().upper()
+        month_normalized = str(month).strip().title()
         worktype_normalized = self._normalize_text(worktype).lower()
+
         allocated = 0
         remaining = fte_required
 
-        # Determine which buckets to search
-        if state.upper() == "N/A":
-            # Search ALL states for this platform and month
-            bucket_keys = [
-                (plat, st, mon)
-                for (plat, st, mon) in self.buckets.keys()
-                if plat == platform and mon == month
-            ]
-        else:
-            # Exact state match
-            bucket_keys = [(platform, state, month)]
+        # Debug logging for first few allocations
+        if len(self.allocation_history) < 5:
+            logger.info(f"ALLOCATE REQUEST: platform={platform!r} → {platform_normalized!r}, state={state!r} → {state_normalized!r}, month={month!r} → {month_normalized!r}, worktype={worktype!r} → {worktype_normalized!r}, fte_required={fte_required}")
 
-        if not bucket_keys:
-            # No resources for this platform-month combination
-            self.allocation_history.append({
-                'platform': platform,
-                'state': state,
-                'month': month,
-                'worktype': worktype,
-                'requested': fte_required,
-                'allocated': 0,
-                'shortage': fte_required
-            })
-            return 0, fte_required
-
-        # Priority 1: Single-skill exact match across all relevant buckets
+        # Priority 1: Single-skill exact match
         single_skillset = frozenset({worktype_normalized})
-        for key in bucket_keys:
-            if remaining <= 0:
-                break
-            if key in self.buckets:
-                bucket = self.buckets[key]
-                if single_skillset in bucket and bucket[single_skillset] > 0:
-                    take = min(bucket[single_skillset], remaining)
-                    bucket[single_skillset] -= take
-                    allocated += take
-                    remaining -= take
+        allocated_from_single = self._allocate_from_skillset(
+            platform_normalized, month_normalized, single_skillset,
+            state_normalized, remaining, "single-skill"
+        )
+        allocated += allocated_from_single
+        remaining -= allocated_from_single
 
         # Priority 2: Multi-skill containing this worktype
         if remaining > 0:
-            for key in bucket_keys:
+            if len(self.allocation_history) < 5:
+                logger.info(f"  Priority 2: Looking for multi-skill containing '{worktype_normalized}'")
+
+            # Find all buckets with multi-skills containing this worktype
+            for bucket_key, vendors in self.buckets.items():
                 if remaining <= 0:
                     break
-                if key in self.buckets:
-                    bucket = self.buckets[key]
-                    for skillset, count in list(bucket.items()):
-                        if remaining <= 0:
-                            break
-                        if len(skillset) > 1 and worktype_normalized in skillset and count > 0:
-                            take = min(count, remaining)
-                            bucket[skillset] -= take
-                            allocated += take
-                            remaining -= take
+
+                plat, mon, skillset = bucket_key
+                if plat == platform_normalized and mon == month_normalized:
+                    if len(skillset) > 1 and worktype_normalized in skillset:
+                        allocated_from_multi = self._allocate_from_vendor_list(
+                            vendors, state_normalized, remaining, bucket_key
+                        )
+                        allocated += allocated_from_multi
+                        remaining -= allocated_from_multi
 
         # Track history
         self.allocation_history.append({
             'platform': platform,
             'state': state,
             'month': month,
-            'worktype': worktype,  # Original from demand
+            'worktype': worktype,
             'requested': fte_required,
             'allocated': allocated,
             'shortage': remaining
         })
 
+        # Final debug log
+        if len(self.allocation_history) <= 5:
+            logger.info(f"  RESULT: Allocated {allocated}/{fte_required}, Shortage: {remaining}")
+
         return allocated, remaining
+
+    def _allocate_from_skillset(self, platform: str, month: str, skillset: frozenset,
+                                 demand_state: str, fte_required: float, label: str) -> float:
+        """
+        Allocate resources from a specific skillset bucket.
+
+        Args:
+            platform: Normalized platform
+            month: Normalized month
+            skillset: Skillset to search for
+            demand_state: State required by demand
+            fte_required: FTEs needed
+            label: Debug label
+
+        Returns:
+            float: Amount allocated
+        """
+        bucket_key = (platform, month, skillset)
+
+        if bucket_key not in self.buckets:
+            return 0.0
+
+        if len(self.allocation_history) < 5:
+            logger.info(f"  Priority 1: Looking for {label} match {skillset}")
+
+        vendors = self.buckets[bucket_key]
+        allocated = self._allocate_from_vendor_list(vendors, demand_state, fte_required, bucket_key)
+
+        return allocated
+
+    def _allocate_from_vendor_list(self, vendors: list, demand_state: str,
+                                     fte_required: float, bucket_key: tuple) -> float:
+        """
+        Allocate from a list of vendors, checking state compatibility.
+
+        Args:
+            vendors: List of vendor dicts with 'states' and 'allocated' flag
+            demand_state: State required by demand (can be N/A)
+            fte_required: FTEs needed
+            bucket_key: For debug logging
+
+        Returns:
+            float: Amount allocated
+        """
+        allocated = 0.0
+
+        for vendor in vendors:
+            if allocated >= fte_required:
+                break
+
+            # Skip if already allocated
+            if vendor['allocated']:
+                continue
+
+            # Check if vendor can work in this state
+            # Note: Every vendor has 'N/A' in their StateList, so N/A demands always match
+            if demand_state in vendor['states']:
+                # Allocate this vendor (1 FTE)
+                vendor['allocated'] = True
+                allocated += 1
+
+                if len(self.allocation_history) < 5:
+                    logger.info(f"    ✓ Allocated 1 FTE (vendor_id={vendor['vendor_id']}, states={vendor['states']}) from {bucket_key}")
+
+        return allocated
 
     def get_summary_report(self) -> dict:
         """
@@ -503,46 +856,57 @@ class ResourceAllocator:
         Returns:
             dict with keys: summary, by_category
         """
-        # Calculate totals
-        total_initial = sum(sum(skillset_counts.values()) for skillset_counts in self.initial_state.values())
-        total_current = sum(sum(skillset_counts.values()) for skillset_counts in self.buckets.values())
-        total_allocated = total_initial - total_current
+        # Calculate totals (count vendors, not duplicates)
+        total_initial = sum(len(vendors) for vendors in self.initial_state.values())
 
-        # Calculate by category
+        # Count allocated vendors
+        total_allocated = sum(
+            sum(1 for v in vendors if v['allocated'])
+            for vendors in self.buckets.values()
+        )
+
+        total_current = total_initial - total_allocated
+
+        # Calculate by category (based on skillset length)
         single_skill_initial = sum(
-            count for bucket in self.initial_state.values()
-            for skillset, count in bucket.items() if len(skillset) == 1
+            len(vendors) for (plat, mon, skillset), vendors in self.initial_state.items()
+            if len(skillset) == 1
         )
-        single_skill_current = sum(
-            count for bucket in self.buckets.values()
-            for skillset, count in bucket.items() if len(skillset) == 1
+        single_skill_allocated = sum(
+            sum(1 for v in vendors if v['allocated'])
+            for (plat, mon, skillset), vendors in self.buckets.items()
+            if len(skillset) == 1
         )
+
         multi_skill_initial = sum(
-            count for bucket in self.initial_state.values()
-            for skillset, count in bucket.items() if len(skillset) > 1
+            len(vendors) for (plat, mon, skillset), vendors in self.initial_state.items()
+            if len(skillset) > 1
         )
-        multi_skill_current = sum(
-            count for bucket in self.buckets.values()
-            for skillset, count in bucket.items() if len(skillset) > 1
+        multi_skill_allocated = sum(
+            sum(1 for v in vendors if v['allocated'])
+            for (plat, mon, skillset), vendors in self.buckets.items()
+            if len(skillset) > 1
         )
+
+        total_requested = sum(h['requested'] for h in self.allocation_history)
 
         return {
             'summary': {
                 'total_initial_fte': total_initial,
                 'total_allocated_fte': total_allocated,
                 'total_unutilized_fte': total_current,
-                'allocation_success_rate': total_allocated / sum(h['requested'] for h in self.allocation_history) if self.allocation_history else 0
+                'allocation_success_rate': total_allocated / total_requested if total_requested > 0 else 0
             },
             'by_category': {
                 'single_skill': {
                     'initial': single_skill_initial,
-                    'allocated': single_skill_initial - single_skill_current,
-                    'remaining': single_skill_current
+                    'allocated': single_skill_allocated,
+                    'remaining': single_skill_initial - single_skill_allocated
                 },
                 'multi_skill': {
                     'initial': multi_skill_initial,
-                    'allocated': multi_skill_initial - multi_skill_current,
-                    'remaining': multi_skill_current
+                    'allocated': multi_skill_allocated,
+                    'remaining': multi_skill_initial - multi_skill_allocated
                 }
             }
         }
@@ -580,7 +944,7 @@ class ResourceAllocator:
             output_df: The demand DataFrame to filter relevant worktypes
 
         Returns:
-            DataFrame with columns: Platform, State, Month, Skills, Count
+            DataFrame with columns: Platform, Month, Skills, States, Count
         """
         # Get set of demanded worktypes (normalized)
         demanded_worktypes = {
@@ -590,33 +954,41 @@ class ResourceAllocator:
         }
 
         unutilized = []
-        for (platform, state, month), skillsets in self.buckets.items():
-            for skillset, count in skillsets.items():
-                if count > 0:
-                    # Check if ANY skill in this skillset was demanded
-                    if skillset & demanded_worktypes:  # Set intersection
-                        skills_str = ' + '.join(sorted(skillset))
-                        unutilized.append({
-                            'Platform': platform,
-                            'State': state,
-                            'Month': month,
-                            'Skills': skills_str,
-                            'Count': count
-                        })
+        for (platform, month, skillset), vendors in self.buckets.items():
+            # Count unallocated vendors
+            unallocated_vendors = [v for v in vendors if not v['allocated']]
+
+            if len(unallocated_vendors) > 0:
+                # Check if ANY skill in this skillset was demanded
+                if skillset & demanded_worktypes:  # Set intersection
+                    skills_str = ' + '.join(sorted(skillset))
+
+                    # Collect unique states from unallocated vendors
+                    all_states = set()
+                    for v in unallocated_vendors:
+                        all_states.update(v['states'])
+
+                    unutilized.append({
+                        'Platform': platform,
+                        'Month': month,
+                        'Skills': skills_str,
+                        'States': ', '.join(sorted(all_states)),
+                        'Count': len(unallocated_vendors)
+                    })
 
         if not unutilized:
-            return pd.DataFrame(columns=['Platform', 'State', 'Month', 'Skills', 'Count'])
+            return pd.DataFrame(columns=['Platform', 'Month', 'Skills', 'States', 'Count'])
 
-        return pd.DataFrame(unutilized).sort_values(['Platform', 'State', 'Month', 'Skills'])
+        return pd.DataFrame(unutilized).sort_values(['Platform', 'Month', 'Skills'])
 
 
-def get_capacity(row, month):
+def get_capacity(row, month, calculations: Calculations):
     target_cph = row[('Centene Capacity plan', 'Target CPH')]
     fte_available = row[('FTE Avail', month)]  # Corrected key
-    no_of_days = month_with_days.get(month, 0)
+    no_of_days = calculations.month_with_days.get(month, 0)
     try:
         logging.debug(f"FTE Avail for {month}: {fte_available}")
-        return target_cph * fte_available * (1 - shrinkage) * no_of_days * workhours
+        return target_cph * fte_available * (1 - calculations.shrinkage) * no_of_days * calculations.workhours
     except Exception as e:
         logging.error(f"Error in get_capacity for {month}: {e}")
         return 0
@@ -892,7 +1264,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                 elif file_type == 'medicare_medicaid_nonmmp':
                     output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_nonmmp', df), axis=1)
                 elif file_type == 'medicare_medicaid_summary':
-                    output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_summary', df, 3 + month_headers.index(month)), axis=1)
+                    output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_summary', df), axis=1)
 
             output_df[('Centene Capacity plan', 'Target CPH')] = output_df.apply(calculations.get_target_cph, axis=1)
             for month in month_headers:
@@ -1047,8 +1419,14 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         consolidated_df = pd.concat(output_dfs, ignore_index=True)
         logging.info(f"Consolidated DataFrame shape: {consolidated_df.shape}")
 
+        # Debug: Show sample demand data
+        logging.info("=== DEMAND DATA SAMPLE ===")
+        logging.info(f"Unique platforms in demand: {consolidated_df[('Centene Capacity plan', 'Main LOB')].unique()[:10]}")
+        logging.info(f"Unique states in demand: {consolidated_df[('Centene Capacity plan', 'State')].unique()[:10]}")
+        logging.info(f"Unique worktypes in demand (first 10): {consolidated_df[('Centene Capacity plan', 'Case type')].unique()[:10]}")
+
         # Initialize ResourceAllocator with complete demand data
-        logging.info("Initializing ResourceAllocator...")
+        logging.info("=== INITIALIZING RESOURCE ALLOCATOR ===")
         allocator = ResourceAllocator(vendor_df, consolidated_df, month_headers)
 
         # Apply allocation row by row
@@ -1067,9 +1445,13 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         allocation_end = datetime.now()
         logging.info(f"Allocation completed in {allocation_end - allocation_start}")
 
+        # Export buckets after allocation for debugging
+        logging.info("Exporting post-allocation bucket state...")
+        allocator.export_buckets_after_allocation()
+
         # Calculate capacity
         for month in month_headers:
-            consolidated_df[('Capacity', month)] = consolidated_df.apply(lambda row: get_capacity(row, month), axis=1)
+            consolidated_df[('Capacity', month)] = consolidated_df.apply(lambda row: get_capacity(row, month, calculations), axis=1)
 
         # Final cleanup
         consolidated_df = consolidated_df.fillna(0).infer_objects(copy=False)
@@ -1123,6 +1505,94 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 #         logging.debug(f"FTE Avail for {month}: {row[('FTE Avail', month)]}")
 #     return row
 
+def test_allocation_debug():
+    """
+    Simple test to verify allocation logic and see debug logs.
+    Tests state mapping: matched states → specific buckets, unmatched → N/A bucket.
+    """
+    print("\n" + "="*80)
+    print("TESTING RESOURCE ALLOCATOR - DEBUG MODE")
+    print("="*80 + "\n")
+
+    # Create minimal test vendor data
+    # Note: "FL GA AR" - FL and GA match demand, AR doesn't (maps to N/A)
+    #       "facets" - invalid state (maps to N/A)
+    #       "AZ" - valid code but not in demand (maps to N/A)
+    vendor_test_data = {
+        'PrimaryPlatform': ['Amisys CROP', 'amisys', 'Facets', 'Amisys'],
+        'State': ['FL GA AR', 'MI', 'facets', 'AZ'],
+        'NewWorkType': ['FTC-Basic/Non MMP', 'ADJ-Basic/NON MMP', 'FTC MCARE', 'FTC-Basic/Non MMP'],
+        'PartofProduction': ['Production', 'Ramp', 'Production', 'Production'],
+        'BeelineTitle': ['Claims Analyst', 'Claims Analyst', 'Claims Analyst', 'Claims Analyst']
+    }
+    vendor_df = pd.DataFrame(vendor_test_data)
+
+    # Create minimal test demand data
+    # Demand states: FL, GA, MI, N/A
+    demand_test_data = {
+        ('Centene Capacity plan', 'Main LOB'): ['Amisys CROP', 'Amisys', 'Facets Global', 'Amisys'],
+        ('Centene Capacity plan', 'State'): ['FL', 'MI', 'N/A', 'GA'],
+        ('Centene Capacity plan', 'Case type'): ['FTC-Basic/Non MMP', 'ADJ-Basic/NON MMP', 'FTC MCARE', 'FTC-Basic/Non MMP']
+    }
+    demand_df = pd.DataFrame(demand_test_data)
+
+    month_headers = ['March', 'April']
+
+    print("\n--- TEST VENDOR DATA ---")
+    print(vendor_df)
+    print("\n--- TEST DEMAND DATA ---")
+    print(demand_df)
+    print("\n" + "="*80)
+    print("EXPECTED STATE MAPPING:")
+    print("  Vendor 'FL GA AR' → FL bucket, GA bucket, N/A bucket (AR unmapped)")
+    print("  Vendor 'MI' → MI bucket (matched)")
+    print("  Vendor 'facets' → N/A bucket (invalid)")
+    print("  Vendor 'AZ' → N/A bucket (valid but not in demand)")
+    print("="*80 + "\n")
+
+    print("INITIALIZING RESOURCE ALLOCATOR (Watch for debug logs below)")
+    print("="*80 + "\n")
+
+    # Initialize allocator - this will trigger all debug logs
+    allocator = ResourceAllocator(vendor_df, demand_df, month_headers)
+
+    print("\n" + "="*80)
+    print("TESTING ALLOCATION (First 5 requests will show detailed logs)")
+    print("="*80 + "\n")
+
+    # Test allocation - specific state match
+    print("\n--- Test 1: Demand FL (should find FL bucket from 'FL GA AR' vendor) ---")
+    allocated1, shortage1 = allocator.allocate('Amisys CROP', 'FL', 'March', 'FTC-Basic/Non MMP', 5)
+    print(f"Result: Allocated={allocated1}, Shortage={shortage1}")
+
+    # Test allocation - another specific state
+    print("\n--- Test 2: Demand MI (should find MI bucket) ---")
+    allocated2, shortage2 = allocator.allocate('Amisys', 'MI', 'March', 'ADJ-Basic/NON MMP', 3)
+    print(f"Result: Allocated={allocated2}, Shortage={shortage2}")
+
+    # Test allocation - N/A state (should access N/A buckets from AR, facets, AZ)
+    print("\n--- Test 3: Demand N/A (should find N/A buckets from unmapped states) ---")
+    allocated3, shortage3 = allocator.allocate('Facets Global', 'N/A', 'April', 'FTC MCARE', 2)
+    print(f"Result: Allocated={allocated3}, Shortage={shortage3}")
+
+    # Test allocation - GA state
+    print("\n--- Test 4: Demand GA (should find GA bucket from 'FL GA AR' vendor) ---")
+    allocated4, shortage4 = allocator.allocate('Amisys', 'GA', 'March', 'FTC-Basic/Non MMP', 2)
+    print(f"Result: Allocated={allocated4}, Shortage={shortage4}")
+
+    print("\n" + "="*80)
+    print("TEST COMPLETE - Verify state mapping worked correctly:")
+    print("  ✓ Matched states (FL, GA, MI) → specific buckets")
+    print("  ✓ Unmatched states (AR, AZ, facets) → N/A bucket")
+    print("  ✓ N/A demand can access N/A bucket resources")
+    print("="*80 + "\n")
+
+    return allocator
+
 if __name__ == "__main__":
-    # pass
-    process_files('March', 2025, 'Makzoom Shah', 'NTT Forecast - v4_Capacity and HC_March_2025.xlsx')
+    # Uncomment to run full processing:
+    # process_files('March', 2025, 'Makzoom Shah', 'NTT Forecast - v4_Capacity and HC_March_2025.xlsx')
+
+    # Run debug test
+    print("\n*** RUNNING DEBUG TEST MODE ***\n")
+    test_allocation_debug()

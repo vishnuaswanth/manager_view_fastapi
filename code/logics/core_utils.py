@@ -598,10 +598,10 @@ class PreProcessing:
             file_stream, mmp_sheet, header_depth=2, skiprows=1, skipfooter=1
         )
         # mmp_df = mmp_df.sort_index(axis=1)
-        state_col = mmp_df.get(("State", "State"))
-        if state_col is None:
+        if ("State", "State") not in mmp_df.columns:
             raise KeyError("Expected ('State','State') column not found in MMP sheet.")
 
+        state_col = mmp_df[("State", "State")]
         state_series = state_col if isinstance(state_col, pd.Series) else state_col.iloc[:, 0]
 
         domestic_mask = state_series.isin(domestic_states)
