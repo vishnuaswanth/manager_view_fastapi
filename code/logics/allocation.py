@@ -241,86 +241,22 @@ def get_temp_casetype(casetype):
 #     except KeyError:
 #         return 0
 
-def get_skills_split_count(row, month, df):
-    # pdb.set_trace()
-    global state_with_worktype_volume_dict
-
-    try:
-        platform = row[('Centene Capacity plan', 'Main LOB')]
-        platform= str(platform).split(" ")[0]
-        worktype = row[('Centene Capacity plan', 'Case type')]
-        state = row[('Centene Capacity plan', 'State')]
-        fte_required = row[('FTE Required', month)]
-    except KeyError as e:
-        logging.warning(f"Missing month column '{month}' in get_skills_split_count, returning 0")
-        return 0
-
-    key = f"{platform}_{state}_{month}"
-
-    logging.debug(f"~~ ENTER get_skills_split_count: state={state!r}, month={month!r}, worktype={worktype!r}, fte_required={fte_required}")
-    # pdb.set_trace()
-    # initialize bucket if missing
-    if key not in state_with_worktype_volume_dict:
-        try:
-            # fill missing
-            df_copy = df.copy()
-            df_copy['State'] = df_copy['State'].fillna('')
-            if state == 'N/A':
-                filtered_df = df_copy
-            else:
-                filtered_df = df_copy[df_copy['State'].str.contains(state, na=False)]
-            logging.debug(f"    filtered_df.shape = {filtered_df.shape}")
-
-            volume = {}
-            # count occurrences by your combination logic
-            work_types = sorted(filtered_df['NewWorkType'].tolist(), key=len, reverse=True)
-            logging.debug(f"    vendor NewWorkType list (sample 10): {work_types[:10]}")
-            logging.debug(f"    vendor NewWorkType list (sample 10): {work_types[:-11:-1]}")
-
-            for wt in work_types:
-                for comb in combination_list:
-                    if len(comb) > 1:
-                        if sorted(" ".join(comb)) == sorted(wt.strip()):
-                            volume[comb] = volume.get(comb, 0) + 1
-                    elif comb == (wt,):
-                        volume[comb] = volume.get(comb, 0) + 1
-            logging.debug(f"    built volume buckets: {volume}")
-            state_with_worktype_volume_dict[key] = volume
-        except Exception as e:
-            logging.warning(f"    ERROR initializing bucket for {key}: {e}")
-            state_with_worktype_volume_dict[key] = {}
-
-    bucket = state_with_worktype_volume_dict.get(key, {})
-    logging.debug(f"    existing bucket for {key}: {bucket}")
-
-    # now allocate from bucket
-    available = 0.0
-    remaining = fte_required
-
-    # first try the exact single-type slot
-    single = (worktype,)
-    if single in bucket:
-        have = bucket[single]
-        take = min(have, remaining)
-        bucket[single] -= take
-        available += take
-        remaining  -= take
-        logging.debug(f"    took {take} from single bucket {single}, now bucket={bucket[single]}, remaining={remaining}")
-
-    # then try multi-type slots that include our worktype
-    if remaining > 0:
-        for comb, cnt in list(bucket.items()):
-            if remaining <= 0:
-                break
-            if len(comb) > 1 and worktype in comb and cnt > 0:
-                take = min(cnt, remaining)
-                bucket[comb] -= take
-                available   += take
-                remaining   -= take
-                logging.debug(f"    took {take} from combo bucket {comb}, now bucket={bucket[comb]}, remaining={remaining}")
-
-    logging.debug(f"~~ EXIT get_skills_split_count returning {available} (needed {fte_required}) for key={key}")
-    return available
+# Legacy allocation function - replaced by ResourceAllocator class
+# def get_skills_split_count(row, month, df):
+#     global state_with_worktype_volume_dict
+#     try:
+#         platform = row[('Centene Capacity plan', 'Main LOB')]
+#         platform= str(platform).split(" ")[0]
+#         worktype = row[('Centene Capacity plan', 'Case type')]
+#         state = row[('Centene Capacity plan', 'State')]
+#         fte_required = row[('FTE Required', month)]
+#     except KeyError as e:
+#         logging.warning(f"Missing month column '{month}' in get_skills_split_count, returning 0")
+#         return 0
+#
+#     # ... rest of legacy implementation
+#     # Now handled by ResourceAllocator.allocate()
+#     return 0
 
 
 class ResourceAllocator:
@@ -685,61 +621,24 @@ def get_capacity(row, month):
         logging.error(f"Error in get_capacity for {month}: {e}")
         return 0
 
+# Legacy per-file vendor filtering - no longer needed with ResourceAllocator
+# (ResourceAllocator handles platform/state matching internally)
 # def filter_vendor_df(file_name, vendor_df):
 #     platform = file_name.split(" ")[0]
-#     market = file_name.split(" ")[1].split("-")[0] if "-summary" in file_name.lower() else file_name.split(" ")[0]
 #     location = 'Domestic' if 'domestic' in file_name.lower() else 'Global'
 #     filtered_df = vendor_df[
 #         (vendor_df['PartofProduction'].isin(['Production', 'Ramp'])) &
-#         (vendor_df['Location'] == location) &
+#         (vendor_df['Location'].str.lower() == location.lower()) &
 #         (vendor_df['BeelineTitle'] == 'Claims Analyst') &
-#         (vendor_df['PrimaryPlatform'] == platform) &
-#         (vendor_df['PrimaryMarket'].str.lower() == market.lower())
+#         (vendor_df['PrimaryPlatform'].str.lower() == platform.lower())
 #     ]
-#     filtered_df.columns = filtered_df.columns.str.replace("\n", "").str.strip()
 #     return filtered_df
-
-def filter_vendor_df(file_name, vendor_df):
-    platform = file_name.split(" ")[0]
-    market =  file_name.split(" ")[0]
-    location = 'Domestic' if 'domestic' in file_name.lower() else 'Global'
-
-    logging.debug(f"--- filter_vendor_df ---\n"
-                  f" file_name = {file_name!r}\n"
-                  f" platform = {platform!r}\n"
-                  f" market   = {market!r}\n"
-                  f" location = {location!r}\n"
-                  f" vendor_df BEFORE filter: {vendor_df.shape}")
-
-    # filtered_df = vendor_df[
-    #     (vendor_df['PartofProduction'].isin(['Production', 'Ramp'])) &
-    #     (vendor_df['Location'] == location) &
-    #     (vendor_df['BeelineTitle'] == 'Claims Analyst') &
-    #     (vendor_df['PrimaryPlatform'] == platform) &
-    #     (vendor_df['PrimaryMarket'].str.lower() == market.lower())
-    # ]
-    #removed Primary market value as it goes empty df after this filter 07242025
-    filtered_df = vendor_df[
-        (vendor_df['PartofProduction'].isin(['Production', 'Ramp'])) &
-        (vendor_df['Location'].str.lower() == location.lower()) &
-        (vendor_df['BeelineTitle'] == 'Claims Analyst') &
-        (vendor_df['PrimaryPlatform'].str.lower() == platform.lower())
-    ]
-
-    logging.debug(f" filtered_df AFTER filter: {filtered_df.shape}")
-    if filtered_df.empty:
-        logging.warning(f"No vendors found for {file_name} with "
-                        f"Platform={platform}, Market={market}, Location={location}")
-
-    filtered_df.columns = filtered_df.columns.str.replace("\n", "").str.strip()
-    return filtered_df
 
 def initialize_output_excel(month_headers:List[str]):
     wb = Workbook()
     ws = wb.active
     logger.debug(f"input month headers: {month_headers}")
     ws.title = "Capacity plan"
-    main_headers = ["Centene Capacity plan", "Client Forecast", "FTE Required", "FTE Avail", "Capacity"]
     capacity_plan_headers = ["Main LOB", "State", "Case type", "Call Type ID", "Target CPH"]
     columns = capacity_plan_headers + month_headers * 4
     ws.merge_cells("A1:E1")
@@ -843,8 +742,32 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
     start_time = datetime.now()
     logging.info("Starting file processing")
 
-    # Load data
-    vendor_df = get_latest_or_requested_dataframe('prod_team_roster', data_month, data_year)
+    # Load and filter vendor data upfront
+    vendor_df_raw = get_latest_or_requested_dataframe('prod_team_roster', data_month, data_year)
+
+    # Filter to eligible vendors only (Production/Ramp, Claims Analyst)
+    logging.info(f"Raw vendor data: {vendor_df_raw.shape}")
+    vendor_df = vendor_df_raw[
+        (vendor_df_raw['PartofProduction'].isin(['Production', 'Ramp'])) &
+        (vendor_df_raw['BeelineTitle'] == 'Claims Analyst')
+    ].copy()
+    logging.info(f"Filtered vendor data: {vendor_df.shape} (eligible vendors only)")
+
+    # Clean column names
+    vendor_df.columns = vendor_df.columns.str.replace("\n", "").str.strip()
+
+    # Verify required columns exist
+    required_cols = ['PrimaryPlatform', 'State', 'NewWorkType']
+    missing_cols = [col for col in required_cols if col not in vendor_df.columns]
+    if missing_cols:
+        logging.error(f"Missing required columns in vendor_df: {missing_cols}")
+        logging.error(f"Available columns: {list(vendor_df.columns)}")
+        raise ValueError(f"Vendor DataFrame missing required columns: {missing_cols}")
+
+    logging.info(f"Vendor data sample - Platform: {vendor_df['PrimaryPlatform'].unique()[:5]}")
+    logging.info(f"Vendor data sample - States: {vendor_df['State'].unique()[:10]}")
+    logging.info(f"Vendor data sample - NewWorkType (first 5): {vendor_df['NewWorkType'].head().tolist()}")
+
     month_headers = get_forecast_months_list(data_month, data_year, forecast_filename)
     calculations = Calculations()
     initialize_output_excel(month_headers)
@@ -853,9 +776,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 
     for file_type, directory in file_types.items():
         for file_name, df in directory.items():
-            # if not file_name.endswith('.xlsx'):
             logger.info(f"Processing {file_type} file: {file_name}")
-            vendor_filtered_df = filter_vendor_df(file_name, vendor_df)
             client_names, states, work_types = [], [], []
             # logger.debug(f"Column values: ")
             # for col in df.columns:
@@ -1140,7 +1061,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 
             for month in month_headers:
                 fte_required = row[('FTE Required', month)]
-                allocated, shortage = allocator.allocate(platform, state, month, worktype, fte_required)
+                allocated, _ = allocator.allocate(platform, state, month, worktype, fte_required)
                 consolidated_df.at[idx, ('FTE Avail', month)] = allocated
 
         allocation_end = datetime.now()
