@@ -6,6 +6,7 @@ from sqlalchemy import (
     Column,
     Integer,
     String,
+    Text,
     and_,
     inspect,
     extract,
@@ -14,7 +15,8 @@ from sqlalchemy import (
     or_,
     Index,
     true,
-    literal_column
+    literal_column,
+    UniqueConstraint
 )
 
 from sqlalchemy.orm import sessionmaker, declarative_base, aliased
@@ -315,6 +317,31 @@ class ForecastMonthsModel(SQLModel, table=True):
     CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
     CreatedDateTime: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+class AllocationReportsModel(SQLModel, table=True):
+    """
+    Model for storing allocation reports (bucket summary, bucket after allocation, roster allotment).
+    For each (Month, Year, ReportType) combination, only the latest report is stored.
+    """
+    id: int | None = Field(default=None, primary_key=True)
+    Month: str = Field(sa_column=Column(String(15), nullable=False))
+    Year: int = Field(nullable=False)
+    ReportType: str = Field(sa_column=Column(String(50), nullable=False))  # 'bucket_summary', 'bucket_after_allocation', 'roster_allotment'
+    ReportData: str = Field(sa_column=Column(Text, nullable=False))  # JSON string of DataFrame
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    UpdatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    )
+    UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+
+    # UniqueConstraint ensures only one report per (Month, Year, ReportType)
+    __table_args__ = (
+        UniqueConstraint('Month', 'Year', 'ReportType', name='uix_allocation_report'),
+        Index('idx_allocation_month_year', 'Month', 'Year'),
     )
 
 class RawData(SQLModel, table=True):
@@ -1144,6 +1171,152 @@ class DBManager:
             except Exception as e:
                 logger.error(f"[DBManager] Failed to get latest month/year: {str(e)}")
                 return None
+
+    def save_allocation_report(
+        self,
+        df: pd.DataFrame,
+        month: str,
+        year: int,
+        report_type: str,
+        created_by: str,
+        updated_by: str = None
+    ):
+        """
+        Save allocation report to database using UPSERT logic.
+        If a report with the same (Month, Year, ReportType) exists, it will be replaced.
+
+        Args:
+            df: DataFrame containing the report data
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+            created_by: User who created/updated the report
+            updated_by: User who updated the report (defaults to created_by)
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+            if updated_by is None:
+                updated_by = created_by
+
+            # Convert DataFrame to JSON string
+            report_json = df.to_json(orient='records', date_format='iso')
+
+            # Check if report already exists
+            existing_report = session.query(Model).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year,
+                    Model.ReportType == report_type
+                )
+            ).first()
+
+            if existing_report:
+                # Update existing report
+                existing_report.ReportData = report_json
+                existing_report.UpdatedBy = updated_by
+                existing_report.UpdatedDateTime = datetime.now()
+                logger.info(f"[DBManager] Updated allocation report: {report_type} for {normalized_month} {year}")
+            else:
+                # Insert new report
+                new_report = Model(
+                    Month=normalized_month,
+                    Year=year,
+                    ReportType=report_type,
+                    ReportData=report_json,
+                    CreatedBy=created_by,
+                    UpdatedBy=updated_by
+                )
+                session.add(new_report)
+                logger.info(f"[DBManager] Inserted new allocation report: {report_type} for {normalized_month} {year}")
+
+            session.commit()
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[DBManager] Error saving allocation report: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_allocation_report(
+        self,
+        month: str,
+        year: int,
+        report_type: str
+    ) -> Optional[str]:
+        """
+        Retrieve allocation report as JSON string.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            JSON string of the report data, or None if not found
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+
+            report = session.query(Model).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year,
+                    Model.ReportType == report_type
+                )
+            ).first()
+
+            if report:
+                logger.info(f"[DBManager] Retrieved allocation report: {report_type} for {normalized_month} {year}")
+                return report.ReportData
+            else:
+                logger.info(f"[DBManager] No allocation report found: {report_type} for {normalized_month} {year}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error retrieving allocation report: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_allocation_report_as_dataframes(
+        self,
+        month: str,
+        year: int,
+        report_type: str
+    ) -> Optional[pd.DataFrame]:
+        """
+        Retrieve allocation report and convert to DataFrame.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            DataFrame containing the report data, or None if not found
+        """
+        try:
+            report_json = self.get_allocation_report(month, year, report_type)
+
+            if report_json:
+                # Convert JSON string back to DataFrame
+                import json
+                df = pd.DataFrame(json.loads(report_json))
+                logger.info(f"[DBManager] Converted allocation report to DataFrame: {report_type} ({len(df)} rows)")
+                return df
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error converting allocation report to DataFrame: {e}")
+            raise
 
     def get_forecast_months_list(self, month:str, year:int, filename:str=None) -> List[str]:
         if not (month and year):

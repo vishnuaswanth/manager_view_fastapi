@@ -626,6 +626,59 @@ class ResourceAllocator:
         import copy
         return copy.deepcopy(self.buckets)
 
+    def generate_buckets_summary(self) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Generate bucket summary data (without Excel export).
+
+        Returns:
+            tuple: (summary_df, details_df)
+                - summary_df: Overview of all buckets with counts
+                - details_df: Full vendor details for each bucket
+        """
+        summary_data = []
+        details_data = []
+
+        for (platform, location, month, skillset), vendors in sorted(self.buckets.items()):
+            # Convert skillset to readable string
+            skills_str = ' + '.join(sorted(skillset))
+
+            # Get all unique states from vendors in this bucket
+            all_states = set()
+            for v in vendors:
+                all_states.update(v['states'])
+            states_str = ', '.join(sorted(all_states))
+
+            # Summary row
+            summary_data.append({
+                'Platform': platform,
+                'Location': location,
+                'Month': month,
+                'Skills': skills_str,
+                'Skill_Count': len(skillset),  # Single-skill vs multi-skill
+                'Vendor_Count': len(vendors),
+                'States_Available': states_str
+            })
+
+            # Detail rows (one per vendor)
+            for vendor in vendors:
+                details_data.append({
+                    'Platform': platform,
+                    'Location': location,
+                    'Month': month,
+                    'Skills': skills_str,
+                    'Vendor_ID': vendor['vendor_id'],
+                    'Vendor_States': ', '.join(vendor['states']),
+                    'Allocated': vendor['allocated']
+                })
+
+        # Create DataFrames
+        summary_df = pd.DataFrame(summary_data)
+        details_df = pd.DataFrame(details_data)
+
+        logger.info(f"Generated bucket summary data: {len(summary_df)} buckets, {len(details_df)} vendor instances")
+
+        return summary_df, details_df
+
     def _export_buckets_to_excel(self):
         """
         Export bucket structure to Excel for debugging.
@@ -638,46 +691,8 @@ class ResourceAllocator:
         from code.settings import BASE_DIR
 
         try:
-            # Prepare summary data
-            summary_data = []
-            details_data = []
-
-            for (platform, location, month, skillset), vendors in sorted(self.buckets.items()):
-                # Convert skillset to readable string
-                skills_str = ' + '.join(sorted(skillset))
-
-                # Get all unique states from vendors in this bucket
-                all_states = set()
-                for v in vendors:
-                    all_states.update(v['states'])
-                states_str = ', '.join(sorted(all_states))
-
-                # Summary row
-                summary_data.append({
-                    'Platform': platform,
-                    'Location': location,
-                    'Month': month,
-                    'Skills': skills_str,
-                    'Skill_Count': len(skillset),  # Single-skill vs multi-skill
-                    'Vendor_Count': len(vendors),
-                    'States_Available': states_str
-                })
-
-                # Detail rows (one per vendor)
-                for vendor in vendors:
-                    details_data.append({
-                        'Platform': platform,
-                        'Location': location,
-                        'Month': month,
-                        'Skills': skills_str,
-                        'Vendor_ID': vendor['vendor_id'],
-                        'Vendor_States': ', '.join(vendor['states']),
-                        'Allocated': vendor['allocated']
-                    })
-
-            # Create DataFrames
-            summary_df = pd.DataFrame(summary_data)
-            details_df = pd.DataFrame(details_data)
+            # Generate data using new method
+            summary_df, details_df = self.generate_buckets_summary()
 
             # Export to Excel
             curpth = os.path.join(BASE_DIR, 'logics')
@@ -694,6 +709,54 @@ class ResourceAllocator:
         except Exception as e:
             logger.warning(f"Failed to export buckets to Excel: {e}")
 
+    def generate_buckets_after_allocation(self) -> pd.DataFrame:
+        """
+        Generate bucket allocation data (without Excel export).
+
+        Returns:
+            DataFrame showing allocated vs unallocated vendors per bucket
+        """
+        allocation_data = []
+
+        for (platform, location, month, skillset), vendors in sorted(self.buckets.items()):
+            skills_str = ' + '.join(sorted(skillset))
+
+            # Count allocated vs unallocated
+            allocated_count = sum(1 for v in vendors if v['allocated'])
+            unallocated_count = sum(1 for v in vendors if not v['allocated'])
+
+            # Get states for allocated and unallocated vendors
+            allocated_states = set()
+            unallocated_states = set()
+            for v in vendors:
+                if v['allocated']:
+                    allocated_states.update(v['states'])
+                else:
+                    unallocated_states.update(v['states'])
+
+            allocation_data.append({
+                'Platform': platform,
+                'Location': location,
+                'Month': month,
+                'Skills': skills_str,
+                'Skill_Count': len(skillset),
+                'Total_Vendors': len(vendors),
+                'Allocated': allocated_count,
+                'Unallocated': unallocated_count,
+                'Allocation_Rate': f"{allocated_count}/{len(vendors)}" if len(vendors) > 0 else "0/0",
+                'Allocated_States': ', '.join(sorted(allocated_states)) if allocated_states else '-',
+                'Unallocated_States': ', '.join(sorted(unallocated_states)) if unallocated_states else '-'
+            })
+
+        allocation_df = pd.DataFrame(allocation_data)
+
+        logger.info(f"Generated buckets after allocation data: {len(allocation_df)} buckets")
+        if len(allocation_df) > 0:
+            logger.info(f"  - Total allocated: {allocation_df['Allocated'].sum()}")
+            logger.info(f"  - Total unallocated: {allocation_df['Unallocated'].sum()}")
+
+        return allocation_df
+
     def export_buckets_after_allocation(self):
         """
         Export bucket structure AFTER allocation to show what was allocated.
@@ -703,39 +766,8 @@ class ResourceAllocator:
         from code.settings import BASE_DIR
 
         try:
-            allocation_data = []
-
-            for (platform, location, month, skillset), vendors in sorted(self.buckets.items()):
-                skills_str = ' + '.join(sorted(skillset))
-
-                # Count allocated vs unallocated
-                allocated_count = sum(1 for v in vendors if v['allocated'])
-                unallocated_count = sum(1 for v in vendors if not v['allocated'])
-
-                # Get states for allocated and unallocated vendors
-                allocated_states = set()
-                unallocated_states = set()
-                for v in vendors:
-                    if v['allocated']:
-                        allocated_states.update(v['states'])
-                    else:
-                        unallocated_states.update(v['states'])
-
-                allocation_data.append({
-                    'Platform': platform,
-                    'Location': location,
-                    'Month': month,
-                    'Skills': skills_str,
-                    'Skill_Count': len(skillset),
-                    'Total_Vendors': len(vendors),
-                    'Allocated': allocated_count,
-                    'Unallocated': unallocated_count,
-                    'Allocation_Rate': f"{allocated_count}/{len(vendors)}" if len(vendors) > 0 else "0/0",
-                    'Allocated_States': ', '.join(sorted(allocated_states)) if allocated_states else '-',
-                    'Unallocated_States': ', '.join(sorted(unallocated_states)) if unallocated_states else '-'
-                })
-
-            allocation_df = pd.DataFrame(allocation_data)
+            # Generate data using new method
+            allocation_df = self.generate_buckets_after_allocation()
 
             # Export to Excel
             curpth = os.path.join(BASE_DIR, 'logics')
@@ -745,8 +777,6 @@ class ResourceAllocator:
 
             logger.info(f"✓ Exported post-allocation buckets to: {output_path}")
             logger.info(f"  - Total buckets: {len(allocation_df)}")
-            logger.info(f"  - Total allocated: {allocation_df['Allocated'].sum()}")
-            logger.info(f"  - Total unallocated: {allocation_df['Unallocated'].sum()}")
 
         except Exception as e:
             logger.warning(f"Failed to export post-allocation buckets: {e}")
@@ -1087,6 +1117,80 @@ class ResourceAllocator:
 
         return pd.DataFrame(unutilized).sort_values(['Platform', 'Location', 'Month', 'Skills'])
 
+    def generate_roster_allotment(self) -> pd.DataFrame:
+        """
+        Generate vendor-level allocation data (without Excel export).
+
+        Returns:
+            DataFrame with one row per vendor, showing:
+            - Vendor identification (FirstName, LastName, CN)
+            - Work details (PrimaryPlatform, NewWorkType, Location, State)
+            - Allocation status (Allocated/Not Allocated)
+            - Per-month allocation details (LOB, State, Worktype)
+
+        Uses O(n×m) optimized lookup via self.vendor_allocations reverse index.
+        """
+        logger.info("Generating roster allotment data...")
+
+        report_data = []
+
+        # Iterate through all vendors in original filtered vendor_df
+        for idx, vendor_row in self.vendor_df_original.iterrows():
+            # Extract vendor identification
+            first_name = vendor_row.get('FirstName', '')
+            last_name = vendor_row.get('LastName', '')
+            cn = vendor_row.get('CN', '')
+
+            # Extract work details
+            primary_platform = vendor_row.get('PrimaryPlatform', '')
+            new_worktype = vendor_row.get('NewWorkType', '')
+            location = vendor_row.get('Location', '')
+            state = vendor_row.get('State', '')  # Original state without normalization
+
+            # Check if this vendor was allocated (in any month)
+            vendor_allocations = self.vendor_allocations.get(idx, {})
+            is_allocated = len(vendor_allocations) > 0
+            status = "Allocated" if is_allocated else "Not Allocated"
+
+            # Build row data
+            row_data = {
+                'FirstName': first_name,
+                'LastName': last_name,
+                'CN': cn,
+                'PrimaryPlatform': primary_platform,
+                'NewWorkType': new_worktype,
+                'Location': location,
+                'State': state,  # Original vendor state
+                'Status': status
+            }
+
+            # Add per-month allocation details
+            for month in self.month_headers:
+                allocation = vendor_allocations.get(month)
+
+                if allocation:
+                    # Vendor was allocated in this month
+                    row_data[f'{month}_LOB'] = allocation['platform']
+                    row_data[f'{month}_State'] = allocation['state']
+                    row_data[f'{month}_Worktype'] = allocation['worktype']
+                else:
+                    # Vendor not allocated in this month
+                    row_data[f'{month}_LOB'] = 'Not Allocated'
+                    row_data[f'{month}_State'] = '-'
+                    row_data[f'{month}_Worktype'] = '-'
+
+            report_data.append(row_data)
+
+        # Create DataFrame
+        report_df = pd.DataFrame(report_data)
+
+        logger.info(f"Generated roster allotment data: {len(report_df)} vendors")
+        if len(report_df) > 0:
+            logger.info(f"  - Allocated vendors: {(report_df['Status'] == 'Allocated').sum()}")
+            logger.info(f"  - Unallocated vendors: {(report_df['Status'] == 'Not Allocated').sum()}")
+
+        return report_df
+
     def export_roster_allotment_report(self):
         """
         Export vendor-level allocation report showing allocation status for each vendor.
@@ -1103,59 +1207,8 @@ class ResourceAllocator:
         from code.settings import BASE_DIR
 
         try:
-            logger.info("Generating roster allotment report...")
-
-            report_data = []
-
-            # Iterate through all vendors in original filtered vendor_df
-            for idx, vendor_row in self.vendor_df_original.iterrows():
-                # Extract vendor identification
-                first_name = vendor_row.get('FirstName', '')
-                last_name = vendor_row.get('LastName', '')
-                cn = vendor_row.get('CN', '')
-
-                # Extract work details
-                primary_platform = vendor_row.get('PrimaryPlatform', '')
-                new_worktype = vendor_row.get('NewWorkType', '')
-                location = vendor_row.get('Location', '')
-                state = vendor_row.get('State', '')  # Original state without normalization
-
-                # Check if this vendor was allocated (in any month)
-                vendor_allocations = self.vendor_allocations.get(idx, {})
-                is_allocated = len(vendor_allocations) > 0
-                status = "Allocated" if is_allocated else "Not Allocated"
-
-                # Build row data
-                row_data = {
-                    'FirstName': first_name,
-                    'LastName': last_name,
-                    'CN': cn,
-                    'PrimaryPlatform': primary_platform,
-                    'NewWorkType': new_worktype,
-                    'Location': location,
-                    'State': state,  # Original vendor state
-                    'Status': status
-                }
-
-                # Add per-month allocation details
-                for month in self.month_headers:
-                    allocation = vendor_allocations.get(month)
-
-                    if allocation:
-                        # Vendor was allocated in this month
-                        row_data[f'{month}_LOB'] = allocation['platform']
-                        row_data[f'{month}_State'] = allocation['state']
-                        row_data[f'{month}_Worktype'] = allocation['worktype']
-                    else:
-                        # Vendor not allocated in this month
-                        row_data[f'{month}_LOB'] = 'Not Allocated'
-                        row_data[f'{month}_State'] = '-'
-                        row_data[f'{month}_Worktype'] = '-'
-
-                report_data.append(row_data)
-
-            # Create DataFrame
-            report_df = pd.DataFrame(report_data)
+            # Generate data using new method
+            report_df = self.generate_roster_allotment()
 
             # Export to Excel
             curpth = os.path.join(BASE_DIR, 'logics')
@@ -1165,8 +1218,6 @@ class ResourceAllocator:
 
             logger.info(f"✓ Exported roster allotment report to: {output_path}")
             logger.info(f"  - Total vendors: {len(report_df)}")
-            logger.info(f"  - Allocated vendors: {(report_df['Status'] == 'Allocated').sum()}")
-            logger.info(f"  - Unallocated vendors: {(report_df['Status'] == 'Not Allocated').sum()}")
 
         except Exception as e:
             logger.warning(f"Failed to export roster allotment report: {e}")
@@ -1635,13 +1686,74 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         allocation_end = datetime.now()
         logging.info(f"Allocation completed in {allocation_end - allocation_start}")
 
-        # Export buckets after allocation for debugging
+        # Export buckets after allocation for debugging (Excel files)
         logging.info("Exporting post-allocation bucket state...")
         allocator.export_buckets_after_allocation()
 
-        # Export roster allotment report
+        # Export roster allotment report (Excel file)
         logging.info("Exporting roster allotment report...")
         allocator.export_roster_allotment_report()
+
+        # Save allocation reports to database
+        logging.info("Saving allocation reports to database...")
+        try:
+            from code.logics.db import DBManager, AllocationReportsModel
+            from code.settings import DATABASE_URL
+
+            # Initialize DBManager for allocation reports
+            db_manager = DBManager(
+                database_url=DATABASE_URL,
+                Model=AllocationReportsModel,
+                limit=1000,
+                skip=0,
+                select_columns=None
+            )
+
+            # Generate and save bucket summary report (with details)
+            summary_df, details_df = allocator.generate_buckets_summary()
+            # Combine summary and details into single report for storage
+            # Add a 'Type' column to distinguish summary from details
+            summary_df['ReportSection'] = 'Summary'
+            details_df['ReportSection'] = 'Details'
+            bucket_summary_combined = pd.concat([summary_df, details_df], ignore_index=True)
+
+            db_manager.save_allocation_report(
+                df=bucket_summary_combined,
+                month=data_month,
+                year=data_year,
+                report_type='bucket_summary',
+                created_by=forecast_file_uploaded_by,
+                updated_by=forecast_file_uploaded_by
+            )
+            logging.info("✓ Saved bucket_summary report to database")
+
+            # Generate and save buckets after allocation report
+            buckets_after_df = allocator.generate_buckets_after_allocation()
+            db_manager.save_allocation_report(
+                df=buckets_after_df,
+                month=data_month,
+                year=data_year,
+                report_type='bucket_after_allocation',
+                created_by=forecast_file_uploaded_by,
+                updated_by=forecast_file_uploaded_by
+            )
+            logging.info("✓ Saved bucket_after_allocation report to database")
+
+            # Generate and save roster allotment report
+            roster_allotment_df = allocator.generate_roster_allotment()
+            db_manager.save_allocation_report(
+                df=roster_allotment_df,
+                month=data_month,
+                year=data_year,
+                report_type='roster_allotment',
+                created_by=forecast_file_uploaded_by,
+                updated_by=forecast_file_uploaded_by
+            )
+            logging.info("✓ Saved roster_allotment report to database")
+
+        except Exception as e:
+            logging.error(f"Failed to save allocation reports to database: {e}")
+            logging.warning("Continuing with forecast processing despite database save failure...")
 
         # Calculate capacity
         for month in month_headers:

@@ -1234,3 +1234,186 @@ def get_forecast_worktypes(
     except Exception as e:
         logger.error(f"[Cascade] Error in worktypes endpoint: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to retrieve worktypes")
+
+
+# =======================
+# Allocation Reports Download Endpoints
+# =======================
+
+@app.get("/download_allocation_report/bucket_summary")
+def download_allocation_bucket_summary(
+    month: str,
+    year: int
+):
+    """
+    Download bucket summary allocation report as Excel file.
+
+    Args:
+        month: Month name (e.g., 'January')
+        year: Year (e.g., 2025)
+
+    Returns:
+        Excel file with bucket summary data (Summary and Details sheets)
+    """
+    try:
+        from code.logics.db import DBManager, AllocationReportsModel
+        from code.settings import DATABASE_URL
+
+        # Initialize DBManager
+        db_manager = DBManager(
+            database_url=DATABASE_URL,
+            Model=AllocationReportsModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
+        )
+
+        # Retrieve report data
+        df = db_manager.get_allocation_report_as_dataframes(month, year, 'bucket_summary')
+
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No bucket_summary report found for {month} {year}"
+            )
+
+        # Split combined report back into Summary and Details
+        summary_df = df[df['ReportSection'] == 'Summary'].drop(columns=['ReportSection'])
+        details_df = df[df['ReportSection'] == 'Details'].drop(columns=['ReportSection'])
+
+        # Create Excel file with two sheets
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            summary_df.to_excel(writer, sheet_name='Bucket_Summary', index=False)
+            details_df.to_excel(writer, sheet_name='Vendor_Details', index=False)
+        output.seek(0)
+
+        filename = f"bucket_summary_{month}_{year}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading bucket_summary report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to download report: {str(e)}")
+
+
+@app.get("/download_allocation_report/bucket_after_allocation")
+def download_allocation_bucket_after_allocation(
+    month: str,
+    year: int
+):
+    """
+    Download buckets after allocation report as Excel file.
+
+    Args:
+        month: Month name (e.g., 'January')
+        year: Year (e.g., 2025)
+
+    Returns:
+        Excel file with allocation status per bucket
+    """
+    try:
+        from code.logics.db import DBManager, AllocationReportsModel
+        from code.settings import DATABASE_URL
+
+        # Initialize DBManager
+        db_manager = DBManager(
+            database_url=DATABASE_URL,
+            Model=AllocationReportsModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
+        )
+
+        # Retrieve report data
+        df = db_manager.get_allocation_report_as_dataframes(month, year, 'bucket_after_allocation')
+
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No bucket_after_allocation report found for {month} {year}"
+            )
+
+        # Create Excel file
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+
+        filename = f"buckets_after_allocation_{month}_{year}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading bucket_after_allocation report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to download report: {str(e)}")
+
+
+@app.get("/download_allocation_report/roster_allotment")
+def download_allocation_roster_allotment(
+    month: str,
+    year: int
+):
+    """
+    Download roster allotment allocation report as Excel file.
+
+    Args:
+        month: Month name (e.g., 'January')
+        year: Year (e.g., 2025)
+
+    Returns:
+        Excel file with vendor-level allocation details
+    """
+    try:
+        from code.logics.db import DBManager, AllocationReportsModel
+        from code.settings import DATABASE_URL
+
+        # Initialize DBManager
+        db_manager = DBManager(
+            database_url=DATABASE_URL,
+            Model=AllocationReportsModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
+        )
+
+        # Retrieve report data
+        df = db_manager.get_allocation_report_as_dataframes(month, year, 'roster_allotment')
+
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No roster_allotment report found for {month} {year}"
+            )
+
+        # Create Excel file
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+
+        filename = f"roster_allotment_{month}_{year}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading roster_allotment report: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to download report: {str(e)}")

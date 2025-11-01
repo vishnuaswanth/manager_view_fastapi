@@ -17,7 +17,8 @@ from code.logics.db import (
     InValidSearchException,
     RosterTemplate,
     ForecastModel,
-    ForecastMonthsModel
+    ForecastMonthsModel,
+    AllocationReportsModel
 )
 import warnings
 # warnings.filterwarnings("ignore")
@@ -81,6 +82,7 @@ def get_model_or_all_models(file_id:str=None)-> Union[Dict[str, Type], Type]:
             'Skilling': SkillingModel
         },
         'prod_team_roster': ProdTeamRosterModel,
+        'allocation_reports': AllocationReportsModel,
     }
     ALL_MODELS_KEY = 'All'
 
