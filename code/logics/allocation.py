@@ -957,22 +957,22 @@ class ResourceAllocator:
 
         # Calculate by category (based on skillset length)
         single_skill_initial = sum(
-            len(vendors) for (plat, mon, skillset), vendors in self.initial_state.items()
+            len(vendors) for (plat, loc, mon, skillset), vendors in self.initial_state.items()
             if len(skillset) == 1
         )
         single_skill_allocated = sum(
             sum(1 for v in vendors if v['allocated'])
-            for (plat, mon, skillset), vendors in self.buckets.items()
+            for (plat, loc, mon, skillset), vendors in self.buckets.items()
             if len(skillset) == 1
         )
 
         multi_skill_initial = sum(
-            len(vendors) for (plat, mon, skillset), vendors in self.initial_state.items()
+            len(vendors) for (plat, loc, mon, skillset), vendors in self.initial_state.items()
             if len(skillset) > 1
         )
         multi_skill_allocated = sum(
             sum(1 for v in vendors if v['allocated'])
-            for (plat, mon, skillset), vendors in self.buckets.items()
+            for (plat, loc, mon, skillset), vendors in self.buckets.items()
             if len(skillset) > 1
         )
 
