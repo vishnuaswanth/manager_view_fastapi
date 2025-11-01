@@ -291,6 +291,13 @@ class ResourceAllocator:
         self.month_headers = month_headers
         self.allocation_history = []
 
+        # Store reference to original vendor_df for report generation
+        self.vendor_df_original = vendor_df.copy()
+
+        # Reverse lookup index: vendor_df_idx -> {month: allocation_details}
+        # Enables O(1) lookup during report generation
+        self.vendor_allocations = {}
+
         # Extract valid states from demand
         self.valid_states = self._extract_valid_states(output_df)
         logger.info(f"Valid states from demand: {sorted(self.valid_states)}")
@@ -560,9 +567,10 @@ class ResourceAllocator:
                 if key not in buckets:
                     buckets[key] = []
 
-                # Store vendor with their state list
+                # Store vendor with their state list and original DataFrame index
                 buckets[key].append({
                     'vendor_id': vendor_id,
+                    'vendor_df_idx': idx,  # Original DataFrame index for report lookup
                     'states': state_list,
                     'allocated': False  # Track if this vendor has been allocated
                 })
@@ -743,7 +751,8 @@ class ResourceAllocator:
         single_skillset = frozenset({worktype_normalized})
         allocated_from_single = self._allocate_from_skillset(
             platform_normalized, month_normalized, single_skillset,
-            state_normalized, remaining, "single-skill"
+            state_normalized, remaining, "single-skill",
+            platform, state, worktype
         )
         allocated += allocated_from_single
         remaining -= allocated_from_single
@@ -762,7 +771,8 @@ class ResourceAllocator:
                 if plat == platform_normalized and mon == month_normalized:
                     if len(skillset) > 1 and worktype_normalized in skillset:
                         allocated_from_multi = self._allocate_from_vendor_list(
-                            vendors, state_normalized, remaining, bucket_key
+                            vendors, state_normalized, remaining, bucket_key,
+                            platform, state, month, worktype
                         )
                         allocated += allocated_from_multi
                         remaining -= allocated_from_multi
@@ -785,7 +795,8 @@ class ResourceAllocator:
         return allocated, remaining
 
     def _allocate_from_skillset(self, platform: str, month: str, skillset: frozenset,
-                                 demand_state: str, fte_required: float, label: str) -> float:
+                                 demand_state: str, fte_required: float, label: str,
+                                 original_platform: str, original_state: str, worktype: str) -> float:
         """
         Allocate resources from a specific skillset bucket.
 
@@ -796,6 +807,9 @@ class ResourceAllocator:
             demand_state: State required by demand
             fte_required: FTEs needed
             label: Debug label
+            original_platform: Original platform from demand (for tracking)
+            original_state: Original state from demand (for tracking)
+            worktype: Worktype from demand (for tracking)
 
         Returns:
             float: Amount allocated
@@ -809,12 +823,16 @@ class ResourceAllocator:
             logger.info(f"  Priority 1: Looking for {label} match {skillset}")
 
         vendors = self.buckets[bucket_key]
-        allocated = self._allocate_from_vendor_list(vendors, demand_state, fte_required, bucket_key)
+        allocated = self._allocate_from_vendor_list(
+            vendors, demand_state, fte_required, bucket_key,
+            original_platform, original_state, month, worktype
+        )
 
         return allocated
 
     def _allocate_from_vendor_list(self, vendors: list, demand_state: str,
-                                     fte_required: float, bucket_key: tuple) -> float:
+                                     fte_required: float, bucket_key: tuple,
+                                     platform: str, state: str, month: str, worktype: str) -> float:
         """
         Allocate from a list of vendors, checking state compatibility.
 
@@ -823,6 +841,10 @@ class ResourceAllocator:
             demand_state: State required by demand (can be N/A)
             fte_required: FTEs needed
             bucket_key: For debug logging
+            platform: Platform from demand (for tracking)
+            state: State from demand (for tracking)
+            month: Month from demand (for tracking)
+            worktype: Worktype from demand (for tracking)
 
         Returns:
             float: Amount allocated
@@ -842,6 +864,22 @@ class ResourceAllocator:
             if demand_state in vendor['states']:
                 # Allocate this vendor (1 FTE)
                 vendor['allocated'] = True
+
+                # Store allocation details in vendor record
+                allocation_details = {
+                    'platform': platform,
+                    'state': state,
+                    'month': month,
+                    'worktype': worktype
+                }
+                vendor['allocation_details'] = allocation_details
+
+                # Add to reverse lookup index for O(1) report generation
+                vendor_df_idx = vendor['vendor_df_idx']
+                if vendor_df_idx not in self.vendor_allocations:
+                    self.vendor_allocations[vendor_df_idx] = {}
+                self.vendor_allocations[vendor_df_idx][month] = allocation_details
+
                 allocated += 1
 
                 if len(self.allocation_history) < 5:
@@ -980,6 +1018,88 @@ class ResourceAllocator:
             return pd.DataFrame(columns=['Platform', 'Month', 'Skills', 'States', 'Count'])
 
         return pd.DataFrame(unutilized).sort_values(['Platform', 'Month', 'Skills'])
+
+    def export_roster_allotment_report(self):
+        """
+        Export vendor-level allocation report showing allocation status for each vendor.
+
+        Creates roster_allotment.xlsx with one row per vendor, showing:
+        - Vendor identification (FirstName, LastName, CN)
+        - Work details (PrimaryPlatform, NewWorkType, Location)
+        - Allocation status (Allocated/Not Allocated)
+        - Per-month allocation details (LOB, State, Worktype)
+
+        Uses O(n×m) optimized lookup via self.vendor_allocations reverse index.
+        """
+        import os
+        from code.settings import BASE_DIR
+
+        try:
+            logger.info("Generating roster allotment report...")
+
+            report_data = []
+
+            # Iterate through all vendors in original filtered vendor_df
+            for idx, vendor_row in self.vendor_df_original.iterrows():
+                # Extract vendor identification
+                first_name = vendor_row.get('FirstName', '')
+                last_name = vendor_row.get('LastName', '')
+                cn = vendor_row.get('CN', '')
+
+                # Extract work details
+                primary_platform = vendor_row.get('PrimaryPlatform', '')
+                new_worktype = vendor_row.get('NewWorkType', '')
+                location = vendor_row.get('Location', '')
+
+                # Check if this vendor was allocated (in any month)
+                vendor_allocations = self.vendor_allocations.get(idx, {})
+                is_allocated = len(vendor_allocations) > 0
+                status = "Allocated" if is_allocated else "Not Allocated"
+
+                # Build row data
+                row_data = {
+                    'FirstName': first_name,
+                    'LastName': last_name,
+                    'CN': cn,
+                    'PrimaryPlatform': primary_platform,
+                    'NewWorkType': new_worktype,
+                    'Location': location,
+                    'Status': status
+                }
+
+                # Add per-month allocation details
+                for month in self.month_headers:
+                    allocation = vendor_allocations.get(month)
+
+                    if allocation:
+                        # Vendor was allocated in this month
+                        row_data[f'{month}_LOB'] = allocation['platform']
+                        row_data[f'{month}_State'] = allocation['state']
+                        row_data[f'{month}_Worktype'] = allocation['worktype']
+                    else:
+                        # Vendor not allocated in this month
+                        row_data[f'{month}_LOB'] = 'Not Allocated'
+                        row_data[f'{month}_State'] = '-'
+                        row_data[f'{month}_Worktype'] = '-'
+
+                report_data.append(row_data)
+
+            # Create DataFrame
+            report_df = pd.DataFrame(report_data)
+
+            # Export to Excel
+            curpth = os.path.join(BASE_DIR, 'logics')
+            output_path = os.path.join(curpth, 'roster_allotment.xlsx')
+
+            report_df.to_excel(output_path, index=False, engine='openpyxl')
+
+            logger.info(f"✓ Exported roster allotment report to: {output_path}")
+            logger.info(f"  - Total vendors: {len(report_df)}")
+            logger.info(f"  - Allocated vendors: {(report_df['Status'] == 'Allocated').sum()}")
+            logger.info(f"  - Unallocated vendors: {(report_df['Status'] == 'Not Allocated').sum()}")
+
+        except Exception as e:
+            logger.warning(f"Failed to export roster allotment report: {e}")
 
 
 def get_capacity(row, month, calculations: Calculations):
@@ -1448,6 +1568,10 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         # Export buckets after allocation for debugging
         logging.info("Exporting post-allocation bucket state...")
         allocator.export_buckets_after_allocation()
+
+        # Export roster allotment report
+        logging.info("Exporting roster allotment report...")
+        allocator.export_roster_allotment_report()
 
         # Calculate capacity
         for month in month_headers:
