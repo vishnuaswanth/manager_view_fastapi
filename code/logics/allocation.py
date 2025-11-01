@@ -20,6 +20,7 @@ from code.logics.export_utils import (
 )
 
 from code.logics.summary_utils import update_summary_data
+from code.logics.manager_view import parse_main_lob
 import pandas as pd
 from code.settings import BASE_DIR
 
@@ -265,6 +266,40 @@ def get_temp_casetype(casetype):
 #     # ... rest of legacy implementation
 #     # Now handled by ResourceAllocator.allocate()
 #     return 0
+
+
+def normalize_locality(locality_str: str) -> str:
+    """
+    Normalize locality to Domestic or Global (case-insensitive).
+
+    Handles variations like 'Domestic', 'domestic', '(Domestic)', '(domestic)', etc.
+
+    Args:
+        locality_str: Locality string from vendor Location or parsed LOB
+
+    Returns:
+        'Domestic' if contains 'domestic' (case-insensitive), else 'Global'
+
+    Examples:
+        >>> normalize_locality('Domestic')
+        'Domestic'
+        >>> normalize_locality('(domestic)')
+        'Domestic'
+        >>> normalize_locality('Global')
+        'Global'
+        >>> normalize_locality('')
+        'Global'
+    """
+    if not locality_str:
+        return 'Global'
+
+    locality_lower = str(locality_str).lower().strip()
+    # Remove parentheses for matching
+    locality_clean = locality_lower.replace('(', '').replace(')', '')
+
+    if 'domestic' in locality_clean:
+        return 'Domestic'
+    return 'Global'
 
 
 class ResourceAllocator:
@@ -548,7 +583,11 @@ class ResourceAllocator:
         # Debug: Show platforms
         logger.info(f"Unique platforms (normalized) in vendor data: {sorted(vendor_df['PlatformNormalized'].unique())}")
 
-        # Create buckets: (platform, month, skillset) → list of vendor IDs with StateList
+        # Normalize vendor Location field
+        vendor_df['LocationNormalized'] = vendor_df['Location'].apply(normalize_locality)
+        logger.info(f"Unique locations (normalized) in vendor data: {sorted(vendor_df['LocationNormalized'].unique())}")
+
+        # Create buckets: (platform, location, month, skillset) → list of vendor IDs with StateList
         # We'll track vendors by their index to prevent double-counting
         buckets = {}
         vendor_df['VendorID'] = range(len(vendor_df))  # Unique ID for each vendor
@@ -558,11 +597,12 @@ class ResourceAllocator:
 
             for idx, row in vendor_df.iterrows():
                 platform = row['PlatformNormalized']
+                location = row['LocationNormalized']
                 skillset = row['ParsedSkills']
                 vendor_id = row['VendorID']
                 state_list = row['StateList']
 
-                key = (platform, month_normalized, skillset)
+                key = (platform, location, month_normalized, skillset)
 
                 if key not in buckets:
                     buckets[key] = []
@@ -575,7 +615,7 @@ class ResourceAllocator:
                     'allocated': False  # Track if this vendor has been allocated
                 })
 
-        logger.info(f"Created buckets for {len(buckets)} (platform, month, skillset) combinations")
+        logger.info(f"Created buckets for {len(buckets)} (platform, location, month, skillset) combinations")
         total_vendors = sum(len(v) for v in buckets.values())
         logger.info(f"Total vendor-month instances: {total_vendors}")
 
@@ -602,7 +642,7 @@ class ResourceAllocator:
             summary_data = []
             details_data = []
 
-            for (platform, month, skillset), vendors in sorted(self.buckets.items()):
+            for (platform, location, month, skillset), vendors in sorted(self.buckets.items()):
                 # Convert skillset to readable string
                 skills_str = ' + '.join(sorted(skillset))
 
@@ -615,6 +655,7 @@ class ResourceAllocator:
                 # Summary row
                 summary_data.append({
                     'Platform': platform,
+                    'Location': location,
                     'Month': month,
                     'Skills': skills_str,
                     'Skill_Count': len(skillset),  # Single-skill vs multi-skill
@@ -626,6 +667,7 @@ class ResourceAllocator:
                 for vendor in vendors:
                     details_data.append({
                         'Platform': platform,
+                        'Location': location,
                         'Month': month,
                         'Skills': skills_str,
                         'Vendor_ID': vendor['vendor_id'],
@@ -663,7 +705,7 @@ class ResourceAllocator:
         try:
             allocation_data = []
 
-            for (platform, month, skillset), vendors in sorted(self.buckets.items()):
+            for (platform, location, month, skillset), vendors in sorted(self.buckets.items()):
                 skills_str = ' + '.join(sorted(skillset))
 
                 # Count allocated vs unallocated
@@ -681,6 +723,7 @@ class ResourceAllocator:
 
                 allocation_data.append({
                     'Platform': platform,
+                    'Location': location,
                     'Month': month,
                     'Skills': skills_str,
                     'Skill_Count': len(skillset),
@@ -734,8 +777,14 @@ class ResourceAllocator:
         if fte_required <= 0:
             return 0, 0
 
+        # Parse LOB to extract platform and locality
+        parsed_lob = parse_main_lob(platform)
+        lob_platform = parsed_lob.get('platform', platform)
+        lob_locality = parsed_lob.get('locality', '')
+
         # Normalize inputs
-        platform_normalized = str(platform).strip().split()[0].upper() if platform and str(platform).lower() != 'nan' else platform
+        platform_normalized = str(lob_platform).strip().split()[0].upper() if lob_platform and str(lob_platform).lower() != 'nan' else lob_platform
+        location_normalized = normalize_locality(lob_locality)
         state_normalized = str(state).strip().upper()
         month_normalized = str(month).strip().title()
         worktype_normalized = self._normalize_text(worktype).lower()
@@ -745,12 +794,12 @@ class ResourceAllocator:
 
         # Debug logging for first few allocations
         if len(self.allocation_history) < 5:
-            logger.info(f"ALLOCATE REQUEST: platform={platform!r} → {platform_normalized!r}, state={state!r} → {state_normalized!r}, month={month!r} → {month_normalized!r}, worktype={worktype!r} → {worktype_normalized!r}, fte_required={fte_required}")
+            logger.info(f"ALLOCATE REQUEST: platform={platform!r} → parsed={parsed_lob}, platform_normalized={platform_normalized!r}, location_normalized={location_normalized!r}, state={state!r} → {state_normalized!r}, month={month!r} → {month_normalized!r}, worktype={worktype!r} → {worktype_normalized!r}, fte_required={fte_required}")
 
         # Priority 1: Single-skill exact match
         single_skillset = frozenset({worktype_normalized})
         allocated_from_single = self._allocate_from_skillset(
-            platform_normalized, month_normalized, single_skillset,
+            platform_normalized, location_normalized, month_normalized, single_skillset,
             state_normalized, remaining, "single-skill",
             platform, state, worktype
         )
@@ -767,8 +816,8 @@ class ResourceAllocator:
                 if remaining <= 0:
                     break
 
-                plat, mon, skillset = bucket_key
-                if plat == platform_normalized and mon == month_normalized:
+                plat, loc, mon, skillset = bucket_key
+                if plat == platform_normalized and loc == location_normalized and mon == month_normalized:
                     if len(skillset) > 1 and worktype_normalized in skillset:
                         allocated_from_multi = self._allocate_from_vendor_list(
                             vendors, state_normalized, remaining, bucket_key,
@@ -794,7 +843,7 @@ class ResourceAllocator:
 
         return allocated, remaining
 
-    def _allocate_from_skillset(self, platform: str, month: str, skillset: frozenset,
+    def _allocate_from_skillset(self, platform: str, location: str, month: str, skillset: frozenset,
                                  demand_state: str, fte_required: float, label: str,
                                  original_platform: str, original_state: str, worktype: str) -> float:
         """
@@ -802,6 +851,7 @@ class ResourceAllocator:
 
         Args:
             platform: Normalized platform
+            location: Normalized location (Domestic/Global)
             month: Normalized month
             skillset: Skillset to search for
             demand_state: State required by demand
@@ -814,13 +864,13 @@ class ResourceAllocator:
         Returns:
             float: Amount allocated
         """
-        bucket_key = (platform, month, skillset)
+        bucket_key = (platform, location, month, skillset)
 
         if bucket_key not in self.buckets:
             return 0.0
 
         if len(self.allocation_history) < 5:
-            logger.info(f"  Priority 1: Looking for {label} match {skillset}")
+            logger.info(f"  Priority 1: Looking for {label} match {skillset} (location={location})")
 
         vendors = self.buckets[bucket_key]
         allocated = self._allocate_from_vendor_list(
@@ -992,7 +1042,7 @@ class ResourceAllocator:
         }
 
         unutilized = []
-        for (platform, month, skillset), vendors in self.buckets.items():
+        for (platform, location, month, skillset), vendors in self.buckets.items():
             # Count unallocated vendors
             unallocated_vendors = [v for v in vendors if not v['allocated']]
 
@@ -1008,6 +1058,7 @@ class ResourceAllocator:
 
                     unutilized.append({
                         'Platform': platform,
+                        'Location': location,
                         'Month': month,
                         'Skills': skills_str,
                         'States': ', '.join(sorted(all_states)),
@@ -1015,9 +1066,9 @@ class ResourceAllocator:
                     })
 
         if not unutilized:
-            return pd.DataFrame(columns=['Platform', 'Month', 'Skills', 'States', 'Count'])
+            return pd.DataFrame(columns=['Platform', 'Location', 'Month', 'Skills', 'States', 'Count'])
 
-        return pd.DataFrame(unutilized).sort_values(['Platform', 'Month', 'Skills'])
+        return pd.DataFrame(unutilized).sort_values(['Platform', 'Location', 'Month', 'Skills'])
 
     def export_roster_allotment_report(self):
         """
@@ -1025,7 +1076,7 @@ class ResourceAllocator:
 
         Creates roster_allotment.xlsx with one row per vendor, showing:
         - Vendor identification (FirstName, LastName, CN)
-        - Work details (PrimaryPlatform, NewWorkType, Location)
+        - Work details (PrimaryPlatform, NewWorkType, Location, State)
         - Allocation status (Allocated/Not Allocated)
         - Per-month allocation details (LOB, State, Worktype)
 
@@ -1050,6 +1101,7 @@ class ResourceAllocator:
                 primary_platform = vendor_row.get('PrimaryPlatform', '')
                 new_worktype = vendor_row.get('NewWorkType', '')
                 location = vendor_row.get('Location', '')
+                state = vendor_row.get('State', '')  # Original state without normalization
 
                 # Check if this vendor was allocated (in any month)
                 vendor_allocations = self.vendor_allocations.get(idx, {})
@@ -1064,6 +1116,7 @@ class ResourceAllocator:
                     'PrimaryPlatform': primary_platform,
                     'NewWorkType': new_worktype,
                     'Location': location,
+                    'State': state,  # Original vendor state
                     'Status': status
                 }
 
