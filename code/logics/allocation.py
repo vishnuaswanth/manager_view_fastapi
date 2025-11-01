@@ -764,10 +764,12 @@ class ResourceAllocator:
         2. Multi-skill containing the worktype (e.g., "FTC-Basic/Non MMP" + "ADJ")
 
         Args:
-            platform: Platform name (e.g., "Amisys")
+            platform: Platform name (e.g., "Amisys Medicaid Domestic")
+                     Special case: "OIC Volumes" - locality extracted from worktype
             state: State code (e.g., "MI") or "N/A" for any state
             month: Month name (e.g., "March")
             worktype: Exact worktype from demand (e.g., "FTC-Basic/Non MMP")
+                     Special case for OIC Volumes: Contains "domestic" → Domestic, else → Global
             fte_required: Number of FTEs needed
 
         Returns:
@@ -781,6 +783,21 @@ class ResourceAllocator:
         parsed_lob = parse_main_lob(platform)
         lob_platform = parsed_lob.get('platform', platform)
         lob_locality = parsed_lob.get('locality', '')
+
+        # SPECIAL CASE: OIC Volumes - locality is in worktype column
+        # Check if market contains "OIC Volumes"
+        is_oic_volumes = 'oic' in str(platform).lower() and 'volumes' in str(platform).lower()
+
+        if is_oic_volumes:
+            # Check if worktype contains "domestic" (case-insensitive)
+            worktype_lower = str(worktype).lower()
+            if 'domestic' in worktype_lower:
+                lob_locality = 'Domestic'
+                logger.debug(f"[SPECIAL CASE] OIC Volumes: Found 'domestic' in worktype '{worktype}' → locality = Domestic")
+            else:
+                # Default to Global if domestic not found
+                lob_locality = 'Global'
+                logger.debug(f"[SPECIAL CASE] OIC Volumes: 'domestic' not found in worktype '{worktype}' → locality = Global")
 
         # Normalize inputs
         platform_normalized = str(lob_platform).strip().split()[0].upper() if lob_platform and str(lob_platform).lower() != 'nan' else lob_platform
