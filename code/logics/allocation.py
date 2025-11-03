@@ -1,16 +1,31 @@
+# Standard library imports
 import sys
 import os
 import re
 import copy
+import traceback
+import logging
+from datetime import datetime
+from typing import List, Dict, Tuple
+
+# Third-party imports
 import pandas as pd
+import numpy as np
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
-from datetime import datetime
-import numpy as np
-from typing import List
-import logging
 
-from code .logics.core_utils import PreProcessing
+# Local application imports - settings
+from code.settings import BASE_DIR, MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
+
+# Local application imports - core utilities
+from code.logics.core_utils import PreProcessing, CoreUtils
+
+# Local application imports - database models
+from code.logics.db import ProdTeamRosterModel, AllocationReportsModel
+
+# Local application imports - utility modules
+from code.logics.month_config_utils import get_specific_config
+from code.logics.allocation_tracker import start_execution, update_status, complete_execution
 from code.logics.export_utils import (
     get_latest_or_requested_dataframe,
     update_forecast_data,
@@ -18,11 +33,8 @@ from code.logics.export_utils import (
     get_all_model_dataframes_dict,
     get_calculations_data
 )
-
 from code.logics.summary_utils import update_summary_data
 from code.logics.manager_view import parse_main_lob
-import pandas as pd
-from code.settings import BASE_DIR
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +47,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 pd.set_option('future.no_silent_downcasting', True)
+
+# Determine database URL based on mode
+if MODE.upper() == "DEBUG":
+    DATABASE_URL = SQLITE_DATABASE_URL
+elif MODE.upper() == "PRODUCTION":
+    DATABASE_URL = MSSQL_DATABASE_URL
+else:
+    raise ValueError("Invalid MODE specified in config.")
+
+# Initialize CoreUtils instance (singleton for this module)
+core_utils = CoreUtils(DATABASE_URL)
 
 # Set current path
 curpth = os.path.join(BASE_DIR, 'logics')
@@ -49,12 +72,7 @@ input_files = {
 }
 output_file = os.path.join(curpth, "result.xlsx")
 
-# Legacy code - combinations no longer needed with ResourceAllocator
-# try:
-#     combinations_df = pd.read_excel(input_files['combinations'])
-# except Exception as e:
-#     logger.error(f"Failed to load input files: {e}")
-#     sys.exit(1)
+
 
 # Load variables and months
 req_vars_df = pd.read_excel(input_files['target'], sheet_name="Sheet1")
@@ -115,32 +133,69 @@ def get_value(row, month, filetype, df:pd.DataFrame=None):
         return 0
 
 class Calculations():
-    def __init__(self) -> None:
+    def __init__(self, data_month: str = None, data_year: int = None) -> None:
         self.target_cph: pd.DataFrame = pd.DataFrame()
         self.month_data: pd.DataFrame = pd.DataFrame()
-        self.occupancy: float
-        self.shrinkage: float
-        self.workhours: int
-        self.month_with_days:dict[str, int]
+
+        # Store month and year for database lookups
+        self.data_month = data_month
+        self.data_year = data_year
+
+        # Cache for month configurations to avoid repeated DB queries
+        self._config_cache: Dict[Tuple[str, int, str], Dict] = {}
 
         calculations = get_calculations_data()
         self.month_data = calculations.get("month_data", pd.DataFrame)
         self.target_cph = calculations.get("target_cph", pd.DataFrame)
 
-        self.occupancy = self.month_data['Occupancy'].iloc[0] if not self.month_data.empty else 0.0
-        self.shrinkage = self.month_data['Shrinkage'].iloc[0] if not self.month_data.empty else 0.0
-        self.workhours = self.month_data['Work hours'].iloc[0] if not self.month_data.empty else 0
+    def get_config_for_worktype(self, month: str, year: int, work_type: str) -> Dict:
+        """
+        Get configuration parameters for a specific month, year, and work type.
 
+        Uses database-backed MonthConfigurationModel for work-type-specific parameters.
+        CRITICAL: Raises ValueError if configuration not found - allocation cannot proceed
+        without accurate month-specific parameters.
 
-        # occupancy = req_vars_df['Occupancy'].iloc[0]
-        # shrinkage = req_vars_df['Shrinkage'].iloc[0]
-        # workhours = req_vars_df['Work hours'].iloc[0]
-        # # month_headers = req_months_df['Months'].tolist()
-        # month_with_days = dict(zip(req_vars_df['months'], req_vars_df['No.of days occupancy']))
-        if not self.month_data.empty and 'months' in self.month_data.columns and 'No.of days occupancy' in self.month_data.columns:
-            self.month_with_days = dict(zip(self.month_data['months'], self.month_data['No.of days occupancy']))
+        Args:
+            month: Month name (e.g., "January")
+            year: Year (e.g., 2025)
+            work_type: "Domestic" or "Global"
+
+        Returns:
+            Dictionary with keys: working_days, occupancy, shrinkage, work_hours
+
+        Raises:
+            ValueError: If month configuration not found in database
+        """
+        # Check cache first
+        cache_key = (month, year, work_type)
+        if cache_key in self._config_cache:
+            return self._config_cache[cache_key]
+
+        # Try to get from database
+        config = get_specific_config(month, year, work_type)
+
+        if config:
+            result = {
+                'working_days': config['working_days'],
+                'occupancy': config['occupancy'],
+                'shrinkage': config['shrinkage'],
+                'work_hours': config['work_hours']
+            }
+            # Cache the result
+            self._config_cache[cache_key] = result
+            logger.debug(f"Loaded config from DB for {month} {year} ({work_type}): {result}")
+            return result
         else:
-            self.month_with_days = {}
+            # CRITICAL: Month configuration missing - cannot proceed
+            error_msg = (
+                f"CRITICAL: No month configuration found for {month} {year} ({work_type}). "
+                f"Allocation cannot proceed with accurate parameters. "
+                f"Please add the missing configuration via POST /api/month-config endpoint. "
+                f"Both Domestic and Global configurations are required for each month-year."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
 
     def get_target_cph(self, row):
@@ -158,25 +213,54 @@ class Calculations():
 
 
 
-# def get_target_cph(row):
-#     lob = row[('Centene Capacity plan', 'Main LOB')]
-#     worktype = row[('Centene Capacity plan', 'Case type')]
-#     logger.debug(f"~~ ENTER get_target_cph: lob={lob!r}, worktype={worktype!r}")
-#     filtered_target_df = target_df[(target_df['Case type'].str.lower() == worktype.lower()) & (target_df['Main LOB'].str.strip() == lob.strip())]
-#     return filtered_target_df['Target CPH'].iloc[0] if not filtered_target_df.empty else 0
-
 def get_fte_required(row, month, calculations: Calculations):
+    """
+    Calculate FTE Required using work-type-specific configuration parameters.
+
+    Determines work type (Domestic/Global) from LOB parsing, with special handling
+    for OIC Volumes where work type is extracted from the Case Type column.
+
+    Formula: Volume / (Target_CPH * WorkHours * Occupancy * (1 - Shrinkage) * WorkingDays)
+    """
     try:
         target_cph = row[('Centene Capacity plan', 'Target CPH')]
         month_value = row[('Client Forecast', month)]
-        no_of_days = calculations.month_with_days.get(month, 0)
+        main_lob = row[('Centene Capacity plan', 'Main LOB')]
+        case_type = row[('Centene Capacity plan', 'Case type')]
+
+        # Determine work type based on LOB parsing
+        parsed_lob = parse_main_lob(main_lob)
+        lob_locality = parsed_lob.get('locality', '')
+
+        # SPECIAL CASE: OIC Volumes - locality determined from worktype column
+        is_oic_volumes = 'oic' in str(main_lob).lower() and 'volumes' in str(main_lob).lower()
+        if is_oic_volumes:
+            case_type_lower = str(case_type).lower()
+            work_type = 'Domestic' if 'domestic' in case_type_lower else 'Global'
+        else:
+            # Normalize locality to Domestic/Global
+            work_type = 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
+
+        # Get work-type-specific configuration
+        year = calculations.data_year if calculations.data_year else datetime.now().year  # Fallback to current year
+        config = calculations.get_config_for_worktype(month, year, work_type)
+
+        no_of_days = config['working_days']
+        occupancy = config['occupancy']
+        shrinkage = config['shrinkage']
+        workhours = config['work_hours']
 
         if target_cph == 0 or no_of_days == 0:
             return 0
 
-        return month_value / (target_cph * calculations.workhours * calculations.occupancy * (1 - calculations.shrinkage) * no_of_days)
-    except (KeyError, TypeError, ValueError):
-        logging.warning(f"Missing month data for {month} in get_fte_required, returning 0")
+        fte_required = month_value / (target_cph * workhours * occupancy * (1 - shrinkage) * no_of_days)
+        return fte_required
+
+    except (KeyError, TypeError, ValueError) as e:
+        logging.warning(f"Missing month data for {month} in get_fte_required: {e}, returning 0")
+        return 0
+    except Exception as e:
+        logging.error(f"Error in get_fte_required for {month}: {e}", exc_info=True)
         return 0
 
 def get_temp_casetype(casetype):
@@ -185,87 +269,6 @@ def get_temp_casetype(casetype):
         return ''
     ct = casetype.split("-")[0].lower()
     return {'app': 'appeal', 'omn': 'omni'}.get(ct, ct)
-
-# def get_skills_split_count(row, month, df):
-#     global state_with_worktype_volume_dict
-#     worktype = row[('Centene Capacity plan', 'Case type')]
-#     state = row[('Centene Capacity plan', 'State')]
-#     fte_required = row[('FTE Required', month)]
-#     volume = {}
-#     if f"{state}_{month}" not in state_with_worktype_volume_dict:
-#         try:
-#             df['State'] = df['State'].fillna('')
-#             filtered_df = df if state == 'N/A' else df[df['State'].str.contains(state)]
-#             work_types = sorted(filtered_df['NewWorkType'].tolist(), key=len, reverse=True)
-#             for wt in work_types:
-#                 for comb in combination_list:
-#                     if len(list(comb)) > 1:
-#                         if sorted(" ".join(list(comb))) == sorted(wt.strip()):
-#                             volume[comb] = volume.get(comb, 0) + 1
-#                     elif comb == (wt,):
-#                         volume[comb] = volume.get(comb, 0) + 1
-#             if volume:
-#                 state_with_worktype_volume_dict[f"{state}_{month}"] = volume
-#         except Exception as e:
-#             logging.warning(f"Error in get_skills_split_count for {state}_{month}: {e}")
-#     try:
-#         current_bucket = state_with_worktype_volume_dict[f"{state}_{month}"]
-#         available_fte = 0
-#         if (worktype,) in current_bucket:
-#             if current_bucket[(worktype,)] >= fte_required:
-#                 state_with_worktype_volume_dict[f"{state}_{month}"][(worktype,)] -= fte_required
-#                 return fte_required
-#             else:
-#                 available_fte = current_bucket[(worktype,)]
-#                 state_with_worktype_volume_dict[f"{state}_{month}"][(worktype,)] = 0
-#                 remaining_fte = fte_required - available_fte
-#                 for k, v in current_bucket.items():
-#                     if remaining_fte == 0:
-#                         return fte_required
-#                     if len(k) > 1 and worktype in k:
-#                         if v > remaining_fte:
-#                             available_fte += remaining_fte
-#                             state_with_worktype_volume_dict[f"{state}_{month}"][k] -= remaining_fte
-#                             remaining_fte = 0
-#                         else:
-#                             available_fte += v
-#                             state_with_worktype_volume_dict[f"{state}_{month}"][k] = 0
-#                             remaining_fte -= v
-#                 return available_fte
-#         else:
-#             remaining_fte = fte_required
-#             for k, v in current_bucket.items():
-#                 if remaining_fte == 0:
-#                     return fte_required
-#                 if len(k) > 1 and worktype in k:
-#                     if v > remaining_fte:
-#                         available_fte += remaining_fte
-#                         state_with_worktype_volume_dict[f"{state}_{month}"][k] -= remaining_fte
-#                         remaining_fte = 0
-#                     else:
-#                         available_fte += v
-#                         state_with_worktype_volume_dict[f"{state}_{month}"][k] = 0
-#                         remaining_fte -= v
-#             return available_fte
-#     except KeyError:
-#         return 0
-
-# Legacy allocation function - replaced by ResourceAllocator class
-# def get_skills_split_count(row, month, df):
-#     global state_with_worktype_volume_dict
-#     try:
-#         platform = row[('Centene Capacity plan', 'Main LOB')]
-#         platform= str(platform).split(" ")[0]
-#         worktype = row[('Centene Capacity plan', 'Case type')]
-#         state = row[('Centene Capacity plan', 'State')]
-#         fte_required = row[('FTE Required', month)]
-#     except KeyError as e:
-#         logging.warning(f"Missing month column '{month}' in get_skills_split_count, returning 0")
-#         return 0
-#
-#     # ... rest of legacy implementation
-#     # Now handled by ResourceAllocator.allocate()
-#     return 0
 
 
 def normalize_locality(locality_str: str) -> str:
@@ -507,10 +510,16 @@ class ResourceAllocator:
         3. Add to matched_skills, remove from text, re-normalize
         4. Repeat until no matches found
 
-        Example:
+        Duplicates are automatically handled via set - if the same skill appears multiple times,
+        it will only be included once in the result.
+
+        Examples:
             Input: "FTC-Basic/Non MMP  ADJ-COB NON MMP" (note double space)
             Vocab: ["ftc-basic/non mmp", "adj-cob non mmp", "ftc", "adj", ...]
             Output: frozenset({'ftc-basic/non mmp', 'adj-cob non mmp'})
+
+            Input: "FTC ADJ FTC" (duplicate FTC)
+            Output: frozenset({'ftc', 'adj'})  # Deduplicates automatically
         """
         if not newworktype_str:
             return frozenset()
@@ -519,7 +528,7 @@ class ResourceAllocator:
         text = self._normalize_text(newworktype_str).lower()
 
         # Step 2: Greedy matching
-        matched_skills = []
+        matched_skills = set()  # Use set for automatic deduplication
 
         while text:
             matched_any = False
@@ -527,7 +536,7 @@ class ResourceAllocator:
             # Check each vocab term (already sorted longest-first)
             for vocab_term in self.worktype_vocab:
                 if vocab_term in text:
-                    matched_skills.append(vocab_term)
+                    matched_skills.add(vocab_term)  # Add to set (deduplicates automatically)
                     # Remove matched term and re-normalize
                     text = text.replace(vocab_term, ' ', 1)
                     text = self._normalize_text(text)
@@ -687,9 +696,6 @@ class ResourceAllocator:
         1. Summary: Overview of all buckets with counts
         2. Details: Full vendor details for each bucket
         """
-        import os
-        from code.settings import BASE_DIR
-
         try:
             # Generate data using new method
             summary_df, details_df = self.generate_buckets_summary()
@@ -762,9 +768,6 @@ class ResourceAllocator:
         Export bucket structure AFTER allocation to show what was allocated.
         Creates a file showing allocated vs unallocated vendors.
         """
-        import os
-        from code.settings import BASE_DIR
-
         try:
             # Generate data using new method
             allocation_df = self.generate_buckets_after_allocation()
@@ -1203,9 +1206,6 @@ class ResourceAllocator:
 
         Uses O(n×m) optimized lookup via self.vendor_allocations reverse index.
         """
-        import os
-        from code.settings import BASE_DIR
-
         try:
             # Generate data using new method
             report_df = self.generate_roster_allotment()
@@ -1224,14 +1224,47 @@ class ResourceAllocator:
 
 
 def get_capacity(row, month, calculations: Calculations):
-    target_cph = row[('Centene Capacity plan', 'Target CPH')]
-    fte_available = row[('FTE Avail', month)]  # Corrected key
-    no_of_days = calculations.month_with_days.get(month, 0)
+    """
+    Calculate Capacity using work-type-specific configuration parameters.
+
+    Determines work type (Domestic/Global) from LOB parsing, with special handling
+    for OIC Volumes where work type is extracted from the Case Type column.
+
+    Formula: Target_CPH * FTE_Available * (1 - Shrinkage) * WorkingDays * WorkHours
+    """
     try:
-        logging.debug(f"FTE Avail for {month}: {fte_available}")
-        return target_cph * fte_available * (1 - calculations.shrinkage) * no_of_days * calculations.workhours
+        target_cph = row[('Centene Capacity plan', 'Target CPH')]
+        fte_available = row[('FTE Avail', month)]
+        main_lob = row[('Centene Capacity plan', 'Main LOB')]
+        case_type = row[('Centene Capacity plan', 'Case type')]
+
+        # Determine work type based on LOB parsing
+        parsed_lob = parse_main_lob(main_lob)
+        lob_locality = parsed_lob.get('locality', '')
+
+        # SPECIAL CASE: OIC Volumes - locality determined from worktype column
+        is_oic_volumes = 'oic' in str(main_lob).lower() and 'volumes' in str(main_lob).lower()
+        if is_oic_volumes:
+            case_type_lower = str(case_type).lower()
+            work_type = 'Domestic' if 'domestic' in case_type_lower else 'Global'
+        else:
+            # Normalize locality to Domestic/Global
+            work_type = 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
+
+        # Get work-type-specific configuration
+        year = calculations.data_year if calculations.data_year else datetime.now().year  # Fallback to current year
+        config = calculations.get_config_for_worktype(month, year, work_type)
+
+        no_of_days = config['working_days']
+        shrinkage = config['shrinkage']
+        workhours = config['work_hours']
+
+        logging.debug(f"FTE Avail for {month}: {fte_available}, work_type: {work_type}")
+        capacity = target_cph * fte_available * (1 - shrinkage) * no_of_days * workhours
+        return capacity
+
     except Exception as e:
-        logging.error(f"Error in get_capacity for {month}: {e}")
+        logging.error(f"Error in get_capacity for {month}: {e}", exc_info=True)
         return 0
 
 # Legacy per-file vendor filtering - no longer needed with ResourceAllocator
@@ -1348,461 +1381,443 @@ def get_nonmmp_columns(df:pd.DataFrame) -> List[str]:
     return sorted(set(third_level_names))
 
 
+def get_roster_file_metadata(requested_month: str, requested_year: int, core_utils) -> Dict:
+    """
+    Get metadata about which roster file was actually used for allocation.
+
+    Detects if fallback to latest roster data occurred when requested month/year
+    is not available. This is critical for audit trail to understand which data
+    was used in allocation calculations.
+
+    Args:
+        requested_month: Month requested for roster data (e.g., "January")
+        requested_year: Year requested for roster data (e.g., 2025)
+        core_utils: CoreUtils instance for database access
+
+    Returns:
+        Dictionary with keys:
+            - filename: Original uploaded filename from database
+            - month: Actual month of roster data used
+            - year: Actual year of roster data used
+            - was_fallback: True if latest data was used instead of requested
+    """
+    db_manager = core_utils.get_db_manager(ProdTeamRosterModel, limit=1, skip=0, select_columns=None)
+
+    # Try to get requested month/year
+    with db_manager.SessionLocal() as session:
+        requested_record = session.query(ProdTeamRosterModel).filter(
+            ProdTeamRosterModel.Month == requested_month,
+            ProdTeamRosterModel.Year == requested_year
+        ).first()
+
+        if requested_record:
+            # Found exact match
+            logger.info(f"Using requested roster: {requested_month} {requested_year} - {requested_record.UploadedFile}")
+            return {
+                'filename': requested_record.UploadedFile,
+                'month': requested_month,
+                'year': requested_year,
+                'was_fallback': False
+            }
+
+        # Not found - get latest (fallback)
+        logger.warning(f"Roster for {requested_month} {requested_year} not found, falling back to latest")
+        latest_record = session.query(ProdTeamRosterModel).order_by(
+            ProdTeamRosterModel.Year.desc(),
+            ProdTeamRosterModel.CreatedDateTime.desc()
+        ).first()
+
+        if latest_record:
+            logger.warning(
+                f"Using latest roster: {latest_record.Month} {latest_record.Year} - {latest_record.UploadedFile}"
+            )
+            return {
+                'filename': latest_record.UploadedFile,
+                'month': latest_record.Month,
+                'year': latest_record.Year,
+                'was_fallback': True
+            }
+
+        # No roster data at all
+        logger.error("No roster data found in database")
+        return {
+            'filename': 'No roster data found',
+            'month': 'N/A',
+            'year': 0,
+            'was_fallback': True
+        }
+
+
 def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: str, forecast_filename: str):
     """
     Simulates logic after forecast file upload and updates the processed forecast data.
+
+    Includes comprehensive execution tracking with audit trail of source files,
+    configuration snapshots, and error details.
     """
+    execution_id = None
     start_time = datetime.now()
-    logging.info("Starting file processing")
 
-    # Load and filter vendor data upfront
-    vendor_df_raw = get_latest_or_requested_dataframe('prod_team_roster', data_month, data_year)
+    try:
+        logging.info("Starting file processing")
 
-    # Filter to eligible vendors only (Production/Ramp, Claims Analyst)
-    logging.info(f"Raw vendor data: {vendor_df_raw.shape}")
-    vendor_df = vendor_df_raw[
-        (vendor_df_raw['PartofProduction'].isin(['Production', 'Ramp'])) &
-        (vendor_df_raw['BeelineTitle'] == 'Claims Analyst')
-    ].copy()
-    logging.info(f"Filtered vendor data: {vendor_df.shape} (eligible vendors only)")
+        # STEP 1: Capture roster file metadata BEFORE loading data
+        # This detects fallback scenarios for audit trail
+        roster_metadata = get_roster_file_metadata(data_month, data_year, core_utils)
+        roster_filename = roster_metadata['filename']
+        roster_month_used = roster_metadata['month']
+        roster_year_used = roster_metadata['year']
+        roster_was_fallback = roster_metadata['was_fallback']
 
-    # Clean column names
-    vendor_df.columns = vendor_df.columns.str.replace("\n", "").str.strip()
+        # STEP 2: Start execution tracking
+        execution_id = start_execution(
+            month=data_month,
+            year=data_year,
+            forecast_filename=forecast_filename,
+            roster_filename=roster_filename,
+            roster_month_used=roster_month_used,
+            roster_year_used=roster_year_used,
+            roster_was_fallback=roster_was_fallback,
+            uploaded_by=forecast_file_uploaded_by
+        )
 
-    # Verify required columns exist
-    required_cols = ['PrimaryPlatform', 'State', 'NewWorkType']
-    missing_cols = [col for col in required_cols if col not in vendor_df.columns]
-    if missing_cols:
-        logging.error(f"Missing required columns in vendor_df: {missing_cols}")
-        logging.error(f"Available columns: {list(vendor_df.columns)}")
-        raise ValueError(f"Vendor DataFrame missing required columns: {missing_cols}")
+        # STEP 3: Update status to IN_PROGRESS
+        update_status(execution_id, 'IN_PROGRESS')
+        logging.info(f"Execution tracking started: {execution_id}")
 
-    logging.info(f"Vendor data sample - Platform: {vendor_df['PrimaryPlatform'].unique()[:5]}")
-    logging.info(f"Vendor data sample - States: {vendor_df['State'].unique()[:10]}")
-    logging.info(f"Vendor data sample - NewWorkType (first 5): {vendor_df['NewWorkType'].head().tolist()}")
+        # Load and filter vendor data upfront
+        vendor_df_raw = get_latest_or_requested_dataframe('prod_team_roster', data_month, data_year)
 
-    month_headers = get_forecast_months_list(data_month, data_year, forecast_filename)
-    calculations = Calculations()
-    initialize_output_excel(month_headers)
-    output_dfs = []
-    file_types = get_all_model_dataframes_dict(data_month, data_year)
+        # Filter to eligible vendors only (Production/Ramp, Claims Analyst)
+        logging.info(f"Raw vendor data: {vendor_df_raw.shape}")
+        vendor_df = vendor_df_raw[
+            (vendor_df_raw['PartofProduction'].isin(['Production', 'Ramp'])) &
+            (vendor_df_raw['BeelineTitle'] == 'Claims Analyst')
+        ].copy()
+        logging.info(f"Filtered vendor data: {vendor_df.shape} (eligible vendors only)")
 
-    for file_type, directory in file_types.items():
-        for file_name, df in directory.items():
-            logger.info(f"Processing {file_type} file: {file_name}")
-            client_names, states, work_types = [], [], []
-            # logger.debug(f"Column values: ")
-            # for col in df.columns:
-            #     logger.debug(f"column value ---- {col}")
-            if file_type == 'medicare_medicaid_mmp':
-                try:
-                    # work_types = [str(wt).strip() for wt in df.columns.get_level_values(0)[6:15] if str(wt).strip()]
-                    work_types = get_columns_between_column_names(df,0,'Mo St', 'Year')
-                    logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}, top 5 worktypes: {work_types[:5]}")
-                    states = list(set(s for s in df[('State', 'State')].dropna() if s != 0 and isinstance(s, str)))
-                    logging.info(f"Extracted states: {states}, length: {len(states)}")
-                    if not work_types or not states:
-                        logging.warning(f"No valid work types or states for {file_name}. Skipping.")
-                        continue
-                    total_rows = len(states) * len(work_types)
-                    states_expanded = [s for s in states for _ in work_types]
-                    work_types_expanded = work_types * len(states)
-                    client_names = [file_name] * total_rows
-                    logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-                    print("!!!!!!!!!!!!")
-                    print(work_types)
-                    print(states_expanded)
-                    print(len(states))
-                    print("!!!!!!!!!!!!")
-                    print(total_rows)
-                    print(states_expanded)
-                    print(work_types_expanded)
-                except Exception as e:
-                    logging.error(f"Error reading MMP file {file_name}: {e}")
-                    continue
+        # Clean column names
+        vendor_df.columns = vendor_df.columns.str.replace("\n", "").str.strip()
 
-            elif file_type == 'medicare_medicaid_nonmmp':
-                try:
-                    df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
-                    # third_level_headers = [col[2] for col in df.columns]
-                    # work_types = []
-                    # index = 5
-                    # while index < len(third_level_headers):
-                    #     work_types.extend([str(third_level_headers[index]).strip(), str(third_level_headers[index + 1]).strip()] if index + 1 < len(third_level_headers) else [str(third_level_headers[index]).strip()])
-                    #     index += 11
+        # Verify required columns exist
+        required_cols = ['PrimaryPlatform', 'State', 'NewWorkType']
+        missing_cols = [col for col in required_cols if col not in vendor_df.columns]
+        if missing_cols:
+            logging.error(f"Missing required columns in vendor_df: {missing_cols}")
+            logging.error(f"Available columns: {list(vendor_df.columns)}")
+            raise ValueError(f"Vendor DataFrame missing required columns: {missing_cols}")
 
-                    work_types = get_nonmmp_columns(df)
-                    logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-                    states = list(set(df[('', '', 'State')].dropna()))
-                    logging.info(f"Extracted states: {states}, length: {len(states)}")
-                    total_rows = len(states) * len(work_types)
-                    states_expanded = [s for s in states for _ in work_types]
-                    work_types_expanded = work_types * len(states)
-                    client_names = [file_name] * total_rows
-                    logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-                except Exception as e:
-                    logging.error(f"Error reading non-MMP file {file_name}: {e}")
-                    continue
+        logging.info(f"Vendor data sample - Platform: {vendor_df['PrimaryPlatform'].unique()[:5]}")
+        logging.info(f"Vendor data sample - States: {vendor_df['State'].unique()[:10]}")
+        logging.info(f"Vendor data sample - NewWorkType (first 5): {vendor_df['NewWorkType'].head().tolist()}")
 
-            elif file_type == 'medicare_medicaid_summary' and 'mmp' not in file_name.lower():
-                try:
-                    if df.empty:
-                        logging.warning(f"Empty DataFrame for {file_name}. Skipping.")
-                        continue
-                    logging.info(f"DataFrame shape for {file_name}: {df.shape}")
-                    df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
-                    # df.columns = df.columns.sort_values()
-                    first_col = file_name.split("-summary")[0]
-                    logging.info(f"Summary file columns: {df.columns.tolist()}")
-                    work_type_col = None
-                    for col in df.columns:
-                        if col[2].lower() in ['work type', 'worktype', 'case type']:
-                            work_type_col = col
-                            break
-                    if work_type_col:
-                        try:
-                            work_type_values = list(df[work_type_col].dropna())
-                            logging.info(f"Work Type column values: {work_type_values}")
-                        except Exception as e:
-                            logging.warning(f"Failed to log Work Type values for {file_name}: {e}")
-                            work_type_values = []
-                        work_types = [str(wkt) for wkt in df[work_type_col].fillna('') if str(wkt).lower() != "total" and str(wkt).strip()]
-                    else:
-                        logging.warning(f"No 'Work Type' column found in {file_name}. Available columns: {df.columns.tolist()}")
-                        continue
-                    logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-                    states = ["N/A"] * len(work_types)
-                    client_names = [first_col] * len(work_types)
-                    total_rows = len(work_types)
-                    states_expanded = states
-                    work_types_expanded = work_types
-                    logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-                except Exception as e:
-                    logging.error(f"Error reading summary file {file_name}: {e}")
-                    continue
+        month_headers = get_forecast_months_list(data_month, data_year, forecast_filename)
+        calculations = Calculations(data_month=data_month, data_year=data_year)
+        initialize_output_excel(month_headers)
+        output_dfs = []
+        file_types = get_all_model_dataframes_dict(data_month, data_year)
 
-            if not work_types_expanded:
-                logging.warning(f"No valid work types found for {file_name}. Skipping.")
-                continue
-
-            # Initialize output_df with correct number of rows
-            column_template = pd.read_excel(output_file, header=[0, 1]).columns
-            output_df = pd.DataFrame(index=range(total_rows), columns=column_template)
-            try:
-                output_df[('Centene Capacity plan', 'Main LOB')] = client_names
-                output_df[('Centene Capacity plan', 'State')] = states_expanded
-                output_df[('Centene Capacity plan', 'Case type')] = work_types_expanded
-                output_df[('Centene Capacity plan', 'temp_Case type')] = output_df[('Centene Capacity plan', 'Case type')].apply(get_temp_casetype)
-                output_df[('Centene Capacity plan', 'Call Type ID')] = output_df[('Centene Capacity plan', 'Main LOB')].astype(str)+ " " + output_df[('Centene Capacity plan', 'temp_Case type')].astype(str)
-                output_df.drop(columns=[('Centene Capacity plan', 'temp_Case type')], inplace=True)
-            except ValueError as e:
-                logging.error(f"Length mismatch in {file_name}: {e}")
-                logging.info(f"client_names: {len(client_names)}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}")
-                continue
-            for month in month_headers:
+        for file_type, directory in file_types.items():
+            for file_name, df in directory.items():
+                logger.info(f"Processing {file_type} file: {file_name}")
+                client_names, states, work_types = [], [], []
+                # logger.debug(f"Column values: ")
+                # for col in df.columns:
+                #     logger.debug(f"column value ---- {col}")
                 if file_type == 'medicare_medicaid_mmp':
-                    output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_mmp', df), axis=1)
+                    try:
+                        work_types = get_columns_between_column_names(df,0,'Mo St', 'Year')
+                        logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}, top 5 worktypes: {work_types[:5]}")
+                        states = list(set(s for s in df[('State', 'State')].dropna() if s != 0 and isinstance(s, str)))
+                        logging.info(f"Extracted states: {states}, length: {len(states)}")
+                        if not work_types or not states:
+                            logging.warning(f"No valid work types or states for {file_name}. Skipping.")
+                            continue
+                        total_rows = len(states) * len(work_types)
+                        states_expanded = [s for s in states for _ in work_types]
+                        work_types_expanded = work_types * len(states)
+                        client_names = [file_name] * total_rows
+                        logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
+                    except Exception as e:
+                        logging.error(f"Error reading MMP file {file_name}: {e}")
+                        continue
+
                 elif file_type == 'medicare_medicaid_nonmmp':
-                    output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_nonmmp', df), axis=1)
-                elif file_type == 'medicare_medicaid_summary':
-                    output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_summary', df), axis=1)
+                    try:
+                        df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
 
-            output_df[('Centene Capacity plan', 'Target CPH')] = output_df.apply(calculations.get_target_cph, axis=1)
+                        work_types = get_nonmmp_columns(df)
+                        logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
+                        states = list(set(df[('', '', 'State')].dropna()))
+                        logging.info(f"Extracted states: {states}, length: {len(states)}")
+                        total_rows = len(states) * len(work_types)
+                        states_expanded = [s for s in states for _ in work_types]
+                        work_types_expanded = work_types * len(states)
+                        client_names = [file_name] * total_rows
+                        logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
+                    except Exception as e:
+                        logging.error(f"Error reading non-MMP file {file_name}: {e}")
+                        continue
+
+                elif file_type == 'medicare_medicaid_summary' and 'mmp' not in file_name.lower():
+                    try:
+                        if df.empty:
+                            logging.warning(f"Empty DataFrame for {file_name}. Skipping.")
+                            continue
+                        logging.info(f"DataFrame shape for {file_name}: {df.shape}")
+                        df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
+                        # df.columns = df.columns.sort_values()
+                        first_col = file_name.split("-summary")[0]
+                        logging.info(f"Summary file columns: {df.columns.tolist()}")
+                        work_type_col = None
+                        for col in df.columns:
+                            if col[2].lower() in ['work type', 'worktype', 'case type']:
+                                work_type_col = col
+                                break
+                        if work_type_col:
+                            try:
+                                work_type_values = list(df[work_type_col].dropna())
+                                logging.info(f"Work Type column values: {work_type_values}")
+                            except Exception as e:
+                                logging.warning(f"Failed to log Work Type values for {file_name}: {e}")
+                                work_type_values = []
+                            work_types = [str(wkt) for wkt in df[work_type_col].fillna('') if str(wkt).lower() != "total" and str(wkt).strip()]
+                        else:
+                            logging.warning(f"No 'Work Type' column found in {file_name}. Available columns: {df.columns.tolist()}")
+                            continue
+                        logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
+                        states = ["N/A"] * len(work_types)
+                        client_names = [first_col] * len(work_types)
+                        total_rows = len(work_types)
+                        states_expanded = states
+                        work_types_expanded = work_types
+                        logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
+                    except Exception as e:
+                        logging.error(f"Error reading summary file {file_name}: {e}")
+                        continue
+
+                if not work_types_expanded:
+                    logging.warning(f"No valid work types found for {file_name}. Skipping.")
+                    continue
+
+                # Initialize output_df with correct number of rows
+                column_template = pd.read_excel(output_file, header=[0, 1]).columns
+                output_df = pd.DataFrame(index=range(total_rows), columns=column_template)
+                try:
+                    output_df[('Centene Capacity plan', 'Main LOB')] = client_names
+                    output_df[('Centene Capacity plan', 'State')] = states_expanded
+                    output_df[('Centene Capacity plan', 'Case type')] = work_types_expanded
+                    output_df[('Centene Capacity plan', 'temp_Case type')] = output_df[('Centene Capacity plan', 'Case type')].apply(get_temp_casetype)
+                    output_df[('Centene Capacity plan', 'Call Type ID')] = output_df[('Centene Capacity plan', 'Main LOB')].astype(str)+ " " + output_df[('Centene Capacity plan', 'temp_Case type')].astype(str)
+                    output_df.drop(columns=[('Centene Capacity plan', 'temp_Case type')], inplace=True)
+                except ValueError as e:
+                    logging.error(f"Length mismatch in {file_name}: {e}")
+                    logging.info(f"client_names: {len(client_names)}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}")
+                    continue
+                for month in month_headers:
+                    if file_type == 'medicare_medicaid_mmp':
+                        output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_mmp', df), axis=1)
+                    elif file_type == 'medicare_medicaid_nonmmp':
+                        output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_nonmmp', df), axis=1)
+                    elif file_type == 'medicare_medicaid_summary':
+                        output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_summary', df), axis=1)
+
+                output_df[('Centene Capacity plan', 'Target CPH')] = output_df.apply(calculations.get_target_cph, axis=1)
+                for month in month_headers:
+                    output_df[('FTE Required', month)] = output_df.apply(lambda row: get_fte_required(row, month, calculations), axis=1)
+                    output_df[('FTE Required', month)] = output_df[('FTE Required', month)].apply(lambda x: 0.5 if 0 < x < 0.5 else x)
+                output_df = output_df.fillna(0).infer_objects(copy=False)
+                output_df[output_df.select_dtypes(include=['number']).columns] = output_df.select_dtypes(include=['number']).round().astype(int)
+
+                # Initialize FTE Avail columns (will be populated after consolidation)
+                for month in month_headers:
+                    output_df[('FTE Avail', month)] = 0
+
+                output_dfs.append(output_df)
+
+        if output_dfs:
+            logging.info(f"Collected {len(output_dfs)} file outputs, consolidating...")
+            consolidated_df = pd.concat(output_dfs, ignore_index=True)
+            logging.info(f"Consolidated DataFrame shape: {consolidated_df.shape}")
+
+            # Debug: Show sample demand data
+            logging.info("=== DEMAND DATA SAMPLE ===")
+            logging.info(f"Unique platforms in demand: {consolidated_df[('Centene Capacity plan', 'Main LOB')].unique()[:10]}")
+            logging.info(f"Unique states in demand: {consolidated_df[('Centene Capacity plan', 'State')].unique()[:10]}")
+            logging.info(f"Unique worktypes in demand (first 10): {consolidated_df[('Centene Capacity plan', 'Case type')].unique()[:10]}")
+
+            # Initialize ResourceAllocator with complete demand data
+            logging.info("=== INITIALIZING RESOURCE ALLOCATOR ===")
+            allocator = ResourceAllocator(vendor_df, consolidated_df, month_headers)
+
+            # Apply allocation row by row
+            logging.info("Starting resource allocation...")
+            allocation_start = datetime.now()
+            for idx, row in consolidated_df.iterrows():
+                platform = row[('Centene Capacity plan', 'Main LOB')]
+                state = row[('Centene Capacity plan', 'State')]
+                worktype = row[('Centene Capacity plan', 'Case type')]
+
+                for month in month_headers:
+                    fte_required = row[('FTE Required', month)]
+                    allocated, _ = allocator.allocate(platform, state, month, worktype, fte_required)
+                    consolidated_df.at[idx, ('FTE Avail', month)] = allocated
+
+            allocation_end = datetime.now()
+            logging.info(f"Allocation completed in {allocation_end - allocation_start}")
+
+            # Export buckets after allocation for debugging (Excel files)
+            logging.info("Exporting post-allocation bucket state...")
+            allocator.export_buckets_after_allocation()
+
+            # Export roster allotment report (Excel file)
+            logging.info("Exporting roster allotment report...")
+            allocator.export_roster_allotment_report()
+
+            # Save allocation reports to database
+            logging.info("Saving allocation reports to database...")
+            try:
+                # Get DBManager for allocation reports using core_utils
+                db_manager = core_utils.get_db_manager(
+                    AllocationReportsModel,
+                    limit=1000,
+                    skip=0,
+                    select_columns=None
+                )
+
+                # Generate and save bucket summary report (with details)
+                summary_df, details_df = allocator.generate_buckets_summary()
+                # Combine summary and details into single report for storage
+                # Add a 'Type' column to distinguish summary from details
+                summary_df['ReportSection'] = 'Summary'
+                details_df['ReportSection'] = 'Details'
+                bucket_summary_combined = pd.concat([summary_df, details_df], ignore_index=True)
+
+                db_manager.save_allocation_report(
+                    df=bucket_summary_combined,
+                    month=data_month,
+                    year=data_year,
+                    report_type='bucket_summary',
+                    created_by=forecast_file_uploaded_by,
+                    updated_by=forecast_file_uploaded_by
+                )
+                logging.info("✓ Saved bucket_summary report to database")
+
+                # Generate and save buckets after allocation report
+                buckets_after_df = allocator.generate_buckets_after_allocation()
+                db_manager.save_allocation_report(
+                    df=buckets_after_df,
+                    month=data_month,
+                    year=data_year,
+                    report_type='bucket_after_allocation',
+                    created_by=forecast_file_uploaded_by,
+                    updated_by=forecast_file_uploaded_by
+                )
+                logging.info("✓ Saved bucket_after_allocation report to database")
+
+                # Generate and save roster allotment report
+                roster_allotment_df = allocator.generate_roster_allotment()
+                db_manager.save_allocation_report(
+                    df=roster_allotment_df,
+                    month=data_month,
+                    year=data_year,
+                    report_type='roster_allotment',
+                    created_by=forecast_file_uploaded_by,
+                    updated_by=forecast_file_uploaded_by
+                )
+                logging.info("✓ Saved roster_allotment report to database")
+
+            except Exception as e:
+                logging.error(f"Failed to save allocation reports to database: {e}")
+                logging.warning("Continuing with forecast processing despite database save failure...")
+
+            # Calculate capacity
             for month in month_headers:
-                output_df[('FTE Required', month)] = output_df.apply(lambda row: get_fte_required(row, month, calculations), axis=1)
-                output_df[('FTE Required', month)] = output_df[('FTE Required', month)].apply(lambda x: 0.5 if 0 < x < 0.5 else x)
-            output_df = output_df.fillna(0).infer_objects(copy=False)
-            output_df[output_df.select_dtypes(include=['number']).columns] = output_df.select_dtypes(include=['number']).round().astype(int)
+                consolidated_df[('Capacity', month)] = consolidated_df.apply(lambda row: get_capacity(row, month, calculations), axis=1)
 
-            # Initialize FTE Avail columns (will be populated after consolidation)
-            for month in month_headers:
-                output_df[('FTE Avail', month)] = 0
+            # Final cleanup
+            consolidated_df = consolidated_df.fillna(0).infer_objects(copy=False)
+            consolidated_df[consolidated_df.select_dtypes(include=['number']).columns] = consolidated_df.select_dtypes(include=['number']).round().astype(int)
 
-            output_dfs.append(output_df)
+            # Generate reports
+            logging.info("Generating allocation reports...")
+            summary_report = allocator.get_summary_report()
+            logging.info(f"=== ALLOCATION SUMMARY ===")
+            logging.info(f"Total Initial FTE: {summary_report['summary']['total_initial_fte']}")
+            logging.info(f"Total Allocated FTE: {summary_report['summary']['total_allocated_fte']}")
+            logging.info(f"Total Unutilized FTE: {summary_report['summary']['total_unutilized_fte']}")
+            logging.info(f"Allocation Success Rate: {summary_report['summary']['allocation_success_rate']:.2%}")
 
+            unmet_demand_df = allocator.get_unmet_demand_report()
+            if not unmet_demand_df.empty:
+                logging.warning(f"Found {len(unmet_demand_df)} allocation shortages")
+                unmet_output_path = os.path.join(curpth, "unmet_demand_report.xlsx")
+                unmet_demand_df.to_excel(unmet_output_path, index=False)
+                logging.info(f"Saved unmet demand report to {unmet_output_path}")
+            else:
+                logging.info("No allocation shortages - all demand met!")
 
-    # for file_type, directory in directories.items():
-    #     for file_name in [f.split(".xlsx")[0] for f in os.listdir(directory) if f.endswith(".xlsx")]:
-    #         logging.info(f"Processing {file_type} file: {file_name}")
-    #         vendor_filtered_df = filter_vendor_df(file_name, vendor_df)
-    #         client_names, states, work_types = [], [], []
+            unutilized_df = allocator.get_unutilized_report(consolidated_df)
+            if not unutilized_df.empty:
+                logging.info(f"Found {len(unutilized_df)} unutilized resource groups")
+                unutilized_output_path = os.path.join(curpth, "unutilized_resources_report.xlsx")
+                unutilized_df.to_excel(unutilized_output_path, index=False)
+                logging.info(f"Saved unutilized resources report to {unutilized_output_path}")
+            else:
+                logging.info("All vendor resources utilized!")
 
-    #         if file_type == 'mmp' and 'summary' not in file_name.lower():
-    #             try:
-    #                 df = pd.read_excel(os.path.join(directory, f"{file_name}.xlsx"), header=[0, 1])
-    #                 work_types = [str(wt).strip() for wt in df.columns.get_level_values(0)[6:15] if str(wt).strip()]
-    #                 logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-    #                 states = list(set(s for s in df[('State', 'State')].dropna() if s != 0 and isinstance(s, str)))
-    #                 logging.info(f"Extracted states: {states}, length: {len(states)}")
-    #                 if not work_types or not states:
-    #                     logging.warning(f"No valid work types or states for {file_name}. Skipping.")
-    #                     continue
-    #                 total_rows = len(states) * len(work_types)
-    #                 states_expanded = [s for s in states for _ in work_types]
-    #                 work_types_expanded = work_types * len(states)
-    #                 client_names = [file_name] * total_rows
-    #                 logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-    #                 print("!!!!!!!!!!!!")
-    #                 print(work_types)
-    #                 print(states_expanded)
-    #                 print(len(states))
-    #                 print("!!!!!!!!!!!!")
-    #                 print(total_rows)
-    #                 print(states_expanded)
-    #                 print(work_types_expanded)
-    #             except Exception as e:
-    #                 logging.error(f"Error reading MMP file {file_name}: {e}")
-    #                 continue
+            # Save processed data
+            preprocessor = PreProcessing("forecast")
+            mod_consolitated_df = preprocessor.preprocess_forecast_df(consolidated_df.copy())
+            update_forecast_data(mod_consolitated_df, data_month, data_year, forecast_file_uploaded_by, forecast_filename)
+            logging.info("Forecast data updated successfully.")
+            update_summary_data(data_month, data_year)
+            consolidated_df.to_excel(output_file)
+            logging.info(f"Saved consolidated output to {output_file}")
 
-    #         elif file_type == 'nonmmp' and 'summary' not in file_name.lower():
-    #             try:
-    #                 df = pd.read_excel(os.path.join(directory, f"{file_name}.xlsx"), header=[0, 1, 2])
-    #                 df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
-    #                 third_level_headers = [col[2] for col in df.columns]
-    #                 work_types = []
-    #                 index = 5
-    #                 while index < len(third_level_headers):
-    #                     work_types.extend([str(third_level_headers[index]).strip(), str(third_level_headers[index + 1]).strip()] if index + 1 < len(third_level_headers) else [str(third_level_headers[index]).strip()])
-    #                     index += 11
-    #                 logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-    #                 states = list(set(df[('', '', 'State')].dropna()))
-    #                 logging.info(f"Extracted states: {states}, length: {len(states)}")
-    #                 total_rows = len(states) * len(work_types)
-    #                 states_expanded = [s for s in states for _ in work_types]
-    #                 work_types_expanded = work_types * len(states)
-    #                 client_names = [file_name] * total_rows
-    #                 logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-    #             except Exception as e:
-    #                 logging.error(f"Error reading non-MMP file {file_name}: {e}")
-    #                 continue
+            # SUCCESS: Complete execution tracking
+            end_time = datetime.now()
+            duration = (end_time - start_time).total_seconds()
+            stats = {
+                'records_processed': len(consolidated_df) if not consolidated_df.empty else 0,
+                'allocation_success_rate': summary_report['summary'].get('allocation_success_rate', 0) if summary_report else 0
+            }
+            complete_execution(execution_id, success=True, stats=stats)
+            logging.info(f"Processing completed successfully. Total time: {duration:.2f}s")
 
-    #         elif file_type == 'summary' and 'mmp' not in file_name.lower():
-    #             try:
-    #                 df = pd.read_excel(os.path.join(directory, f"{file_name}.xlsx"), header=[0, 1, 2, 3])
-    #                 if df.empty:
-    #                     logging.warning(f"Empty DataFrame for {file_name}. Skipping.")
-    #                     continue
-    #                 logging.info(f"DataFrame shape for {file_name}: {df.shape}")
-    #                 df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
-    #                 df.columns = df.columns.sort_values()
-    #                 first_col = file_name.split("-summary")[0]
-    #                 logging.info(f"Summary file columns: {df.columns.tolist()}")
-    #                 work_type_col = None
-    #                 for col in df.columns:
-    #                     if col[2].lower() in ['work type', 'worktype', 'case type']:
-    #                         work_type_col = col
-    #                         break
-    #                 if work_type_col:
-    #                     try:
-    #                         work_type_values = list(df[work_type_col].dropna())
-    #                         logging.info(f"Work Type column values: {work_type_values}")
-    #                     except Exception as e:
-    #                         logging.warning(f"Failed to log Work Type values for {file_name}: {e}")
-    #                         work_type_values = []
-    #                     work_types = [str(wkt) for wkt in df[work_type_col].fillna('') if str(wkt).lower() != "total" and str(wkt).strip()]
-    #                 else:
-    #                     logging.warning(f"No 'Work Type' column found in {file_name}. Available columns: {df.columns.tolist()}")
-    #                     continue
-    #                 logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-    #                 states = ["N/A"] * len(work_types)
-    #                 client_names = [first_col] * len(work_types)
-    #                 total_rows = len(work_types)
-    #                 states_expanded = states
-    #                 work_types_expanded = work_types
-    #                 logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-    #             except Exception as e:
-    #                 logging.error(f"Error reading summary file {file_name}: {e}")
-    #                 continue
-
-    #         if not work_types_expanded:
-    #             logging.warning(f"No valid work types found for {file_name}. Skipping.")
-    #             continue
-
-    #         # Initialize output_df with correct number of rows
-    #         column_template = pd.read_excel(output_file, header=[0, 1]).columns
-    #         output_df = pd.DataFrame(index=range(total_rows), columns=column_template)
-    #         try:
-    #             output_df[('Centene Capacity plan', 'Main LOB')] = client_names
-    #             output_df[('Centene Capacity plan', 'State')] = states_expanded
-    #             output_df[('Centene Capacity plan', 'Case type')] = work_types_expanded
-    #             output_df[('Centene Capacity plan', 'temp_Case type')] = output_df[('Centene Capacity plan', 'Case type')].apply(get_temp_casetype)
-    #             output_df[('Centene Capacity plan', 'Call Type ID')] = output_df[('Centene Capacity plan', 'Main LOB')].astype(str) + output_df[('Centene Capacity plan', 'temp_Case type')].astype(str)
-    #             output_df.drop(columns=[('Centene Capacity plan', 'temp_Case type')], inplace=True)
-    #         except ValueError as e:
-    #             logging.error(f"Length mismatch in {file_name}: {e}")
-    #             logging.info(f"client_names: {len(client_names)}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}")
-    #             continue
-    #         for month in month_headers:
-    #             if file_type == 'mmp':
-    #                 output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'mmp'), axis=1)
-    #             elif file_type == 'nonmmp':
-    #                 output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'nonmmp'), axis=1)
-    #             elif file_type == 'summary':
-    #                 output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'summary', 3 + month_headers.index(month)), axis=1)
-
-    #         output_df[('Centene Capacity plan', 'Target CPH')] = output_df.apply(get_target_cph, axis=1)
-    #         for month in month_headers:
-    #             output_df[('FTE Required', month)] = output_df.apply(lambda row: get_fte_required(row, month), axis=1)
-    #             output_df[('FTE Required', month)] = output_df[('FTE Required', month)].apply(lambda x: 0.5 if 0 < x < 0.5 else x)
-    #         output_df = output_df.fillna(0).infer_objects(copy=False)
-    #         output_df[output_df.select_dtypes(include=['number']).columns] = output_df.select_dtypes(include=['number']).round().astype(int)
-
-    #         output_df = output_df.apply(lambda row: process_row_level(row, vendor_filtered_df), axis=1)
-    #         for month in month_headers:
-    #             output_df[('Capacity', month)] = output_df.apply(lambda row: get_capacity(row, month), axis=1)
-    #         output_df = output_df.fillna(0).infer_objects(copy=False)
-    #         output_df[output_df.select_dtypes(include=['number']).columns] = output_df.select_dtypes(include=['number']).round().astype(int)
-
-    #         output_dfs.append(output_df)
-
-    if output_dfs:
-        logging.info(f"Collected {len(output_dfs)} file outputs, consolidating...")
-        consolidated_df = pd.concat(output_dfs, ignore_index=True)
-        logging.info(f"Consolidated DataFrame shape: {consolidated_df.shape}")
-
-        # Debug: Show sample demand data
-        logging.info("=== DEMAND DATA SAMPLE ===")
-        logging.info(f"Unique platforms in demand: {consolidated_df[('Centene Capacity plan', 'Main LOB')].unique()[:10]}")
-        logging.info(f"Unique states in demand: {consolidated_df[('Centene Capacity plan', 'State')].unique()[:10]}")
-        logging.info(f"Unique worktypes in demand (first 10): {consolidated_df[('Centene Capacity plan', 'Case type')].unique()[:10]}")
-
-        # Initialize ResourceAllocator with complete demand data
-        logging.info("=== INITIALIZING RESOURCE ALLOCATOR ===")
-        allocator = ResourceAllocator(vendor_df, consolidated_df, month_headers)
-
-        # Apply allocation row by row
-        logging.info("Starting resource allocation...")
-        allocation_start = datetime.now()
-        for idx, row in consolidated_df.iterrows():
-            platform = row[('Centene Capacity plan', 'Main LOB')]
-            state = row[('Centene Capacity plan', 'State')]
-            worktype = row[('Centene Capacity plan', 'Case type')]
-
-            for month in month_headers:
-                fte_required = row[('FTE Required', month)]
-                allocated, _ = allocator.allocate(platform, state, month, worktype, fte_required)
-                consolidated_df.at[idx, ('FTE Avail', month)] = allocated
-
-        allocation_end = datetime.now()
-        logging.info(f"Allocation completed in {allocation_end - allocation_start}")
-
-        # Export buckets after allocation for debugging (Excel files)
-        logging.info("Exporting post-allocation bucket state...")
-        allocator.export_buckets_after_allocation()
-
-        # Export roster allotment report (Excel file)
-        logging.info("Exporting roster allotment report...")
-        allocator.export_roster_allotment_report()
-
-        # Save allocation reports to database
-        logging.info("Saving allocation reports to database...")
-        try:
-            from code.logics.db import DBManager, AllocationReportsModel
-            from code.settings import DATABASE_URL
-
-            # Initialize DBManager for allocation reports
-            db_manager = DBManager(
-                database_url=DATABASE_URL,
-                Model=AllocationReportsModel,
-                limit=1000,
-                skip=0,
-                select_columns=None
-            )
-
-            # Generate and save bucket summary report (with details)
-            summary_df, details_df = allocator.generate_buckets_summary()
-            # Combine summary and details into single report for storage
-            # Add a 'Type' column to distinguish summary from details
-            summary_df['ReportSection'] = 'Summary'
-            details_df['ReportSection'] = 'Details'
-            bucket_summary_combined = pd.concat([summary_df, details_df], ignore_index=True)
-
-            db_manager.save_allocation_report(
-                df=bucket_summary_combined,
-                month=data_month,
-                year=data_year,
-                report_type='bucket_summary',
-                created_by=forecast_file_uploaded_by,
-                updated_by=forecast_file_uploaded_by
-            )
-            logging.info("✓ Saved bucket_summary report to database")
-
-            # Generate and save buckets after allocation report
-            buckets_after_df = allocator.generate_buckets_after_allocation()
-            db_manager.save_allocation_report(
-                df=buckets_after_df,
-                month=data_month,
-                year=data_year,
-                report_type='bucket_after_allocation',
-                created_by=forecast_file_uploaded_by,
-                updated_by=forecast_file_uploaded_by
-            )
-            logging.info("✓ Saved bucket_after_allocation report to database")
-
-            # Generate and save roster allotment report
-            roster_allotment_df = allocator.generate_roster_allotment()
-            db_manager.save_allocation_report(
-                df=roster_allotment_df,
-                month=data_month,
-                year=data_year,
-                report_type='roster_allotment',
-                created_by=forecast_file_uploaded_by,
-                updated_by=forecast_file_uploaded_by
-            )
-            logging.info("✓ Saved roster_allotment report to database")
-
-        except Exception as e:
-            logging.error(f"Failed to save allocation reports to database: {e}")
-            logging.warning("Continuing with forecast processing despite database save failure...")
-
-        # Calculate capacity
-        for month in month_headers:
-            consolidated_df[('Capacity', month)] = consolidated_df.apply(lambda row: get_capacity(row, month, calculations), axis=1)
-
-        # Final cleanup
-        consolidated_df = consolidated_df.fillna(0).infer_objects(copy=False)
-        consolidated_df[consolidated_df.select_dtypes(include=['number']).columns] = consolidated_df.select_dtypes(include=['number']).round().astype(int)
-
-        # Generate reports
-        logging.info("Generating allocation reports...")
-        summary_report = allocator.get_summary_report()
-        logging.info(f"=== ALLOCATION SUMMARY ===")
-        logging.info(f"Total Initial FTE: {summary_report['summary']['total_initial_fte']}")
-        logging.info(f"Total Allocated FTE: {summary_report['summary']['total_allocated_fte']}")
-        logging.info(f"Total Unutilized FTE: {summary_report['summary']['total_unutilized_fte']}")
-        logging.info(f"Allocation Success Rate: {summary_report['summary']['allocation_success_rate']:.2%}")
-
-        unmet_demand_df = allocator.get_unmet_demand_report()
-        if not unmet_demand_df.empty:
-            logging.warning(f"Found {len(unmet_demand_df)} allocation shortages")
-            unmet_output_path = os.path.join(curpth, "unmet_demand_report.xlsx")
-            unmet_demand_df.to_excel(unmet_output_path, index=False)
-            logging.info(f"Saved unmet demand report to {unmet_output_path}")
         else:
-            logging.info("No allocation shortages - all demand met!")
+            # NO VALID DATAFRAMES: Mark as partial failure
+            logging.error("No valid DataFrames generated. Check input files.")
+            complete_execution(
+                execution_id,
+                success=False,
+                error="No valid DataFrames generated. Check input files.",
+                error_type='VALIDATION_ERROR'
+            )
 
-        unutilized_df = allocator.get_unutilized_report(consolidated_df)
-        if not unutilized_df.empty:
-            logging.info(f"Found {len(unutilized_df)} unutilized resource groups")
-            unutilized_output_path = os.path.join(curpth, "unutilized_resources_report.xlsx")
-            unutilized_df.to_excel(unutilized_output_path, index=False)
-            logging.info(f"Saved unutilized resources report to {unutilized_output_path}")
-        else:
-            logging.info("All vendor resources utilized!")
+    except ValueError as e:
+        # VALIDATION ERROR (Missing month config, missing columns, etc.)
+        logging.error(f"Validation error during allocation: {e}", exc_info=True)
+        complete_execution(
+            execution_id,
+            success=False,
+            error=str(e),
+            error_type='VALIDATION_ERROR',
+            stack_trace=traceback.format_exc()
+        )
+        raise  # Re-raise to signal failure
 
-        # Save processed data
-        preprocessor = PreProcessing("forecast")
-        mod_consolitated_df = preprocessor.preprocess_forecast_df(consolidated_df.copy())
-        update_forecast_data(mod_consolitated_df, data_month, data_year, forecast_file_uploaded_by, forecast_filename)
-        logging.info("Forecast data updated successfully.")
-        update_summary_data(data_month, data_year)
-        consolidated_df.to_excel(output_file)
-        logging.info(f"Saved consolidated output to {output_file}")
-    else:
-        logging.error("No valid DataFrames generated. Check input files.")
-
-    end_time = datetime.now()
-    logging.info(f"Processing completed. Total time: {end_time - start_time}")
+    except Exception as e:
+        # UNEXPECTED ERROR
+        logging.error(f"Unexpected error during allocation: {e}", exc_info=True)
+        complete_execution(
+            execution_id,
+            success=False,
+            error=str(e),
+            error_type='UNEXPECTED_ERROR',
+            stack_trace=traceback.format_exc()
+        )
+        raise  # Re-raise to signal failure
 
 # Legacy function - no longer used with ResourceAllocator
 # def process_row_level(row, month_headers, vendor_df):

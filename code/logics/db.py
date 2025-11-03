@@ -344,6 +344,110 @@ class AllocationReportsModel(SQLModel, table=True):
         Index('idx_allocation_month_year', 'Month', 'Year'),
     )
 
+class MonthConfigurationModel(SQLModel, table=True):
+    """
+    Model for storing month-specific configuration parameters for FTE calculations.
+    Each record represents configuration for a specific month, year, and work type (Domestic/Global).
+
+    These parameters are used in allocation logic for calculating FTE Required and FTE Available:
+    - FTE Required = Volume / (Target_CPH * WorkHours * Occupancy * (1 - Shrinkage) * WorkingDays)
+    - Capacity = Target_CPH * FTE_Available * (1 - Shrinkage) * WorkingDays * WorkHours
+
+    WorkType determines which configuration to use based on LOB locality parsing.
+    Special case: OIC Volumes - WorkType determined from worktype column content.
+    """
+    id: int | None = Field(default=None, primary_key=True)
+    Month: str = Field(sa_column=Column(String(15), nullable=False))  # e.g., "January", "February"
+    Year: int = Field(nullable=False)  # e.g., 2025
+    WorkType: str = Field(sa_column=Column(String(20), nullable=False))  # "Domestic" or "Global"
+    WorkingDays: int = Field(nullable=False)  # Number of working days in the month
+    Occupancy: float = Field(nullable=False)  # Occupancy rate (0.0 to 1.0, e.g., 0.95 for 95%)
+    Shrinkage: float = Field(nullable=False)  # Shrinkage rate (0.0 to 1.0, e.g., 0.10 for 10%)
+    WorkHours: int = Field(nullable=False)  # Work hours per day (e.g., 9)
+
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    UpdatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    )
+    UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+
+    # Unique constraint ensures only one configuration per (Month, Year, WorkType)
+    __table_args__ = (
+        UniqueConstraint('Month', 'Year', 'WorkType', name='uix_month_config'),
+        Index('idx_month_year_worktype', 'Month', 'Year', 'WorkType'),
+        Index('idx_month_year', 'Month', 'Year'),
+    )
+
+class AllocationExecutionModel(SQLModel, table=True):
+    """
+    Tracks every allocation process execution with complete audit trail.
+    Captures status, timing, errors, and all source files used.
+
+    This model provides comprehensive tracking for:
+    - Execution lifecycle (PENDING → IN_PROGRESS → SUCCESS/FAILED)
+    - Source files audit trail (forecast file, roster file with fallback detection)
+    - Processing statistics and metrics
+    - Error details with stack traces for debugging
+    - Configuration snapshot for audit compliance
+    """
+    id: int | None = Field(default=None, primary_key=True)
+
+    # Execution Identity
+    execution_id: str = Field(sa_column=Column(String(36), nullable=False, unique=True))  # UUID
+
+    # Time Period
+    Month: str = Field(sa_column=Column(String(15), nullable=False))
+    Year: int = Field(nullable=False)
+
+    # Status Tracking
+    Status: str = Field(sa_column=Column(String(20), nullable=False))
+    # Values: 'PENDING', 'IN_PROGRESS', 'SUCCESS', 'FAILED', 'PARTIAL_SUCCESS'
+
+    # Timing
+    StartTime: datetime = Field(sa_column=Column(DateTime, nullable=False))
+    EndTime: Optional[datetime] = Field(sa_column=Column(DateTime, nullable=True))
+    DurationSeconds: Optional[float] = Field(nullable=True)
+
+    # Source Files Audit Trail
+    ForecastFilename: str = Field(sa_column=Column(String(255), nullable=False))
+    RosterFilename: str = Field(sa_column=Column(String(255), nullable=False))
+    RosterMonthUsed: str = Field(sa_column=Column(String(15), nullable=False))
+    RosterYearUsed: int = Field(nullable=False)
+    RosterWasFallback: bool = Field(default=False, nullable=False)  # True if used latest instead of requested
+
+    # User Context
+    UploadedBy: str = Field(sa_column=Column(String(100), nullable=False))
+
+    # Processing Statistics
+    RecordsProcessed: Optional[int] = Field(nullable=True)
+    RecordsFailed: Optional[int] = Field(nullable=True)
+    AllocationSuccessRate: Optional[float] = Field(nullable=True)
+
+    # Error Details
+    ErrorMessage: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+    ErrorType: Optional[str] = Field(sa_column=Column(String(50), nullable=True))
+    # Values: 'MISSING_MONTH_CONFIG', 'VALIDATION_ERROR', 'DATABASE_ERROR', 'UNEXPECTED_ERROR'
+    StackTrace: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+
+    # Configuration Snapshot (JSON)
+    ConfigSnapshot: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+
+    # Audit Trail
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_execution_status_time', 'Status', 'StartTime'),
+        Index('idx_execution_month_year', 'Month', 'Year', 'StartTime'),
+        Index('idx_execution_id', 'execution_id'),
+        Index('idx_execution_uploaded_by', 'UploadedBy', 'StartTime'),
+    )
+
 class RawData(SQLModel, table=True):
     __tablename__ = "raw_data"
 

@@ -28,6 +28,7 @@ from code.settings import  (
     MSSQL_DATABASE_URL,
     BASE_DIR
 )
+from code.logics.manager_view import parse_main_lob
 
 
 if MODE.upper() == "DEBUG":
@@ -289,22 +290,14 @@ def extract_summary_tables(filestream) -> dict[str, pd.DataFrame]:
         while end_index < max_rows:
             if forecast_excel_df.iloc[end_index].astype(str).str.contains("Total", case=False, na=False).any():
                 if (end_index + 1 < max_rows and forecast_excel_df.iloc[end_index + 1].isna().all()):
-                    # if (end_index + 2 < max_rows and forecast_excel_df.iloc[end_index + 2].isna().all()):
-                    #     end_index += 1
-                    #     start_index = end_index + 1
                     break
             end_index += 1
 
         if end_index >= max_rows - 1:
             end_index = max_rows - 1
 
-        if "OIC" in safe_filename:
-            print(f"filename: {safe_filename} start index -> {start_index} and End index -> {end_index}")
-
         table_df = forecast_excel_df.iloc[start_index:end_index + 1]
         table_df = table_df.dropna(axis=1, how='all')
-        if "OIC" in safe_filename:
-            print(table_df.head())
         # Convert to string once for efficient filtering
         str_df = table_df.astype(str)
         # Filter out rows where any cell starts with "YYYY"
@@ -318,27 +311,22 @@ def extract_summary_tables(filestream) -> dict[str, pd.DataFrame]:
             start_index = end_index + 2
             continue
 
-        # Try to read as multi-index header if possible
-        try:
-            from io import BytesIO
-            buffer = BytesIO()
-            table_df.to_excel(buffer, index=False)
-            buffer.seek(0)
-            df_multi = pd.read_excel(buffer, header=[1, 2, 3, 4])
-            df_multi.columns = df_multi.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
-            df_multi.columns = pd.MultiIndex.from_tuples(
-                tuple(
-                    convert_to_month(col[2]) if i == 2 else col[i]
-                    for i in range(len(col))
-                )
-                for col in df_multi.columns
+        from io import BytesIO
+        buffer = BytesIO()
+        table_df.to_excel(buffer, index=False)
+        buffer.seek(0)
+        df_multi = pd.read_excel(buffer, header=[1, 2, 3, 4])
+        df_multi.columns = df_multi.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
+        df_multi.columns = pd.MultiIndex.from_tuples(
+            tuple(
+                convert_to_month(col[2]) if i == 2 else col[i]
+                for i in range(len(col))
             )
-            df_multi = df_multi.reset_index(drop=True)
-            df_multi = clean_multiindex_df(df_multi)
-            tables_dict[safe_filename] = df_multi
-        except Exception:
-            table_df = table_df.reset_index(drop=True)
-            tables_dict[safe_filename] = table_df
+            for col in df_multi.columns
+        )
+        df_multi = df_multi.reset_index(drop=True)
+        df_multi = clean_multiindex_df(df_multi)
+        tables_dict[safe_filename] = df_multi
 
         start_index = end_index + 2
 
@@ -615,7 +603,16 @@ class PreProcessing:
         }
         dfs["medicare_medicaid_mmp"] = mmp_parts
 
-        dfs["medicare_medicaid_summary"] = extract_summary_tables(file_stream)
+        try:
+            dfs["medicare_medicaid_summary"] = extract_summary_tables(file_stream)
+        except Exception as e:
+            logger.error(f"Error extracting summary tables: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+            
+        for safe_filename in dfs["medicare_medicaid_summary"].keys():
+            lob_components = parse_main_lob(safe_filename)
+            if lob_components.get("platform") is None:
+                raise HTTPException(status_code=400, detail=f"Platform is missing in summary: {safe_filename}")
         unique_months = []
         for _, df in dfs["medicare_medicaid_summary"].items():
             if not df.empty:
