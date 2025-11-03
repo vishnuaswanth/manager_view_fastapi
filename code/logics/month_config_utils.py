@@ -81,12 +81,12 @@ def add_month_configuration(
             # One config already exists - check if it's the opposite type
             pair_exists, opposite_type, _ = check_pair_exists(month_normalized, year, work_type)
 
-            if not pair_exists:
-                # The existing config is the SAME work type (shouldn't happen due to unique constraint)
-                # But the opposite work type is missing - this would complete the pair, so allow it
+            if pair_exists:
+                # The opposite work type exists - we're completing the pair, allow it
                 logger.info(f"Adding {work_type} for {month_normalized} {year} to complete the pair with {opposite_type}")
             else:
-                # This is actually redundant due to unique constraint, but keep for clarity
+                # The opposite work type doesn't exist, meaning the SAME work type already exists
+                # This is a duplicate attempt - reject it
                 return False, f"Configuration for {month_normalized} {year} ({work_type}) already exists"
 
         elif current_count == 2:

@@ -256,7 +256,7 @@ def get_fte_required(row, month, calculations: Calculations):
         fte_required = month_value / (target_cph * workhours * occupancy * (1 - shrinkage) * no_of_days)
         return fte_required
 
-    except (KeyError, TypeError, ValueError) as e:
+    except (KeyError, TypeError) as e:
         logging.warning(f"Missing month data for {month} in get_fte_required: {e}, returning 0")
         return 0
     except Exception as e:
@@ -1263,7 +1263,7 @@ def get_capacity(row, month, calculations: Calculations):
         capacity = target_cph * fte_available * (1 - shrinkage) * no_of_days * workhours
         return capacity
 
-    except Exception as e:
+    except (KeyError, TypeError) as e:
         logging.error(f"Error in get_capacity for {month}: {e}", exc_info=True)
         return 0
 

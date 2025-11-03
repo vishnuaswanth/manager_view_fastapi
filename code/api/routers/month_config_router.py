@@ -6,6 +6,7 @@ shrinkage, work hours) separated by work type (Domestic vs Global).
 """
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from typing import List, Dict, Optional
 import logging
 
@@ -31,21 +32,39 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
-@router.post("/api/month-config")
-def create_month_configuration(
-    month: str,
-    year: int,
-    work_type: str,
-    working_days: int,
-    occupancy: float,
-    shrinkage: float,
-    work_hours: int,
+# Pydantic models for request validation
+class MonthConfigRequest(BaseModel):
+    """Request model for single month configuration creation."""
+    month: str
+    year: int
+    work_type: str
+    working_days: int
+    occupancy: float
+    shrinkage: float
+    work_hours: int
     created_by: str
-):
+
+
+class BulkMonthConfigRequest(BaseModel):
+    """Request model for bulk month configuration creation."""
+    configurations: List[Dict]
+    created_by: str
+    skip_pairing_validation: bool = False
+
+
+class SeedMonthConfigRequest(BaseModel):
+    """Request model for seeding month configurations."""
+    base_year: int = 2025
+    num_years: int = 2
+    created_by: str = "System"
+
+
+@router.post("/api/month-config")
+def create_month_configuration(request: MonthConfigRequest):
     """
     Add a single month configuration to the database.
 
-    Body Parameters:
+    Body Parameters (JSON):
         month: Month name (e.g., "January")
         year: Year (e.g., 2025)
         work_type: "Domestic" or "Global"
@@ -60,14 +79,14 @@ def create_month_configuration(
     """
     try:
         success, message = add_month_configuration(
-            month=month,
-            year=year,
-            work_type=work_type,
-            working_days=working_days,
-            occupancy=occupancy,
-            shrinkage=shrinkage,
-            work_hours=work_hours,
-            created_by=created_by
+            month=request.month,
+            year=request.year,
+            work_type=request.work_type,
+            working_days=request.working_days,
+            occupancy=request.occupancy,
+            shrinkage=request.shrinkage,
+            work_hours=request.work_hours,
+            created_by=request.created_by
         )
 
         if success:
@@ -89,18 +108,14 @@ def create_month_configuration(
 
 
 @router.post("/api/month-config/bulk")
-def bulk_create_month_configurations(
-    configurations: List[Dict],
-    created_by: str,
-    skip_pairing_validation: bool = False
-):
+def bulk_create_month_configurations(request: BulkMonthConfigRequest):
     """
     Bulk add multiple month configurations.
 
     PAIRING VALIDATION: By default, validates that for each (month, year) in the batch,
     both Domestic and Global configurations are present. This ensures data integrity.
 
-    Body Parameters:
+    Body Parameters (JSON):
         configurations: Array of configuration objects, each with:
             - month: str
             - year: int
@@ -122,9 +137,9 @@ def bulk_create_month_configurations(
     """
     try:
         result = bulk_add_month_configurations(
-            configurations=configurations,
-            created_by=created_by,
-            skip_pairing_validation=skip_pairing_validation
+            configurations=request.configurations,
+            created_by=request.created_by,
+            skip_pairing_validation=request.skip_pairing_validation
         )
 
         # Check if validation failed
@@ -322,11 +337,7 @@ def delete_month_configuration_endpoint(config_id: int, allow_orphan: bool = Fal
 
 
 @router.post("/api/month-config/seed")
-def seed_month_configurations(
-    base_year: int = 2025,
-    num_years: int = 2,
-    created_by: str = "System"
-):
+def seed_month_configurations(request: SeedMonthConfigRequest = SeedMonthConfigRequest()):
     """
     Seed the database with initial month configuration data for deployment.
 
@@ -339,7 +350,7 @@ def seed_month_configurations(
     - Work Hours: 9
     - Working Days: Varies by month (20-22 days)
 
-    Body Parameters:
+    Body Parameters (JSON, all optional):
         base_year: Starting year (default: 2025)
         num_years: Number of years to seed (default: 2)
         created_by: Username (default: "System")
@@ -349,9 +360,9 @@ def seed_month_configurations(
     """
     try:
         result = seed_initial_data(
-            base_year=base_year,
-            num_years=num_years,
-            created_by=created_by
+            base_year=request.base_year,
+            num_years=request.num_years,
+            created_by=request.created_by
         )
 
         return success_response(
