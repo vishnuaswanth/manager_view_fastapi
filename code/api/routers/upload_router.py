@@ -162,6 +162,8 @@ async def upload_file(
             db_manager_skilling = core_utils.get_db_manager(Model["Skilling"])
             db_manager_skilling.save_to_db(skilling_df, replace=True)
 
+        except HTTPException:
+            raise  # Re-raise with original details
         except Exception as e:
             logger.error(f"Error processing roster file: {e}", exc_info=True)
             raise HTTPException(
@@ -173,6 +175,8 @@ async def upload_file(
     elif file_id == "forecast":
         try:
             dfs = pre_processor.process_forecast_file(io.BytesIO(contents))
+        except HTTPException:
+            raise  # Re-raise with original details
         except ValueError as ve:
             logger.error(f"Error processing forecast file: {ve}")
             raise HTTPException(
@@ -183,7 +187,7 @@ async def upload_file(
             logger.error(f"Unexpected error processing forecast file: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=error_response("Error processing forecast file")
+                detail=error_response("Error processing forecast file", str(e))
             )
 
         try:
@@ -203,11 +207,13 @@ async def upload_file(
 
             db_manager = core_utils.get_db_manager(RawData)
             db_manager.bulk_save_raw_data_with_history(items)
+        except HTTPException:
+            raise  # Re-raise with original details
         except Exception as e:
             logger.error(f"Error updating raw data: {e}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail=error_response("Error saving forecast data to database")
+                detail=error_response("Error saving forecast data to database", str(e))
             )
 
         try:
@@ -217,8 +223,14 @@ async def upload_file(
             forecast_meta["CreatedBy"] = user
             forecast_df = pd.DataFrame([forecast_meta])
             db_manager_forecast.save_to_db(forecast_df)
+        except HTTPException:
+            raise  # Re-raise with original details
         except Exception as e:
             logger.error(f"Error updating forecast months: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=error_response("Error updating forecast months metadata", str(e))
+            )
 
         # Trigger background allocation processing
         background_tasks.add_task(
