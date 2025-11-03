@@ -49,19 +49,25 @@ core_utils = get_core_utils()
 
 def invalidate_forecast_cache(month: str, year: int):
     """
-    Invalidate cached forecast data for a specific month/year.
+    Invalidate all forecast-related caches.
+
+    Called when a new forecast file is uploaded to clear all dependent caches:
+    - Manager view filters cache (available months, categories)
+    - Manager view data cache (hierarchical category trees)
+    - Forecast cascade filters cache (years, months, platforms, markets, localities, worktypes)
+
+    This ensures users see fresh data after upload without waiting for TTL expiration.
 
     Args:
-        month: Month name (e.g., "January")
-        year: Year number (e.g., 2025)
+        month: Month name (e.g., "January") - for logging only
+        year: Year number (e.g., 2025) - for logging only
     """
     try:
-        from code.cache import data_cache
-        report_month_key = f"{month}_{year}"
-        deleted_count = data_cache.delete_pattern(f"data:v1:{report_month_key}:")
-        logger.info(f"[Cache] Cleared {deleted_count} data cache entries for {month} {year}")
+        from code.cache import clear_all_caches
+        result = clear_all_caches()
+        logger.info(f"[Cache] Cleared all caches due to forecast upload for {month} {year}: {result}")
     except Exception as e:
-        logger.error(f"[Cache] Error invalidating cache for {month} {year}: {e}")
+        logger.error(f"[Cache] Error invalidating caches for {month} {year}: {e}", exc_info=True)
 
 
 @router.get("/")

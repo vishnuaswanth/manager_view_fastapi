@@ -12,12 +12,20 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy import and_
 
 from code.logics.db import MonthConfigurationModel
-from code.settings import DATABASE_URL
+from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.logics.core_utils import CoreUtils
 
 logger = logging.getLogger(__name__)
 
-# Initialize core utils for database operations
+# Determine database URL based on mode
+if MODE.upper() == "DEBUG":
+    DATABASE_URL = SQLITE_DATABASE_URL
+elif MODE.upper() == "PRODUCTION":
+    DATABASE_URL = MSSQL_DATABASE_URL
+else:
+    raise ValueError("Invalid MODE specified in config.")
+
+# Initialize core utils for database operations (singleton for this module)
 core_utils = CoreUtils(DATABASE_URL)
 
 

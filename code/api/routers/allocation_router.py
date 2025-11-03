@@ -16,10 +16,18 @@ from typing import Optional
 
 from code.logics.db import DBManager, AllocationReportsModel
 from code.logics.allocation_tracker import list_executions, get_execution_by_id
-from code.settings import DATABASE_URL
+from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.api.dependencies import get_logger
 from code.api.utils.responses import success_response, error_response, paginated_response
 from code.api.utils.validators import validate_month_year_pair, validate_pagination
+
+# Determine database URL based on mode
+if MODE.upper() == "DEBUG":
+    DATABASE_URL = SQLITE_DATABASE_URL
+elif MODE.upper() == "PRODUCTION":
+    DATABASE_URL = MSSQL_DATABASE_URL
+else:
+    raise ValueError("Invalid MODE specified in config.")
 
 # Initialize router and dependencies
 router = APIRouter()

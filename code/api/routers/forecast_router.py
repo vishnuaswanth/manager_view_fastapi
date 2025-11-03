@@ -23,19 +23,18 @@ from code.logics.cascade_filters import (
     get_month_name_from_number,
     get_month_number_from_name
 )
-from code.logics.cache_utils import TTLCache
 from code.api.dependencies import get_core_utils, get_logger
 from code.api.utils.responses import success_response, error_response
 from code.api.utils.validators import validate_year
+from code.cache import filters_cache
 
 # Initialize router and dependencies
 router = APIRouter()
 logger = get_logger(__name__)
 core_utils = get_core_utils()
 
-# Initialize cache for cascade filters
-# 5 minutes TTL, max 8 entries (shared with manager view filters)
-filters_cache = TTLCache(max_size=8, ttl_seconds=300)
+# Cache instance imported from shared code.cache module
+# filters_cache: 5 minutes TTL, max 8 entries (used for cascade filter endpoints)
 
 
 @router.get("/forecast/filter-years")
@@ -477,5 +476,4 @@ def get_forecast_worktypes(
         raise HTTPException(status_code=500, detail="Failed to retrieve worktypes")
 
 
-# Export cache for use in main.py cache invalidation
-__all__ = ['router', 'filters_cache']
+__all__ = ['router']

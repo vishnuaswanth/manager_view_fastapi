@@ -13,7 +13,6 @@ from code.api.utils.responses import error_response
 VALID_FILE_IDS = [
     "Forecast",
     "ProdTeamRoster",
-    "AllocatedVendorRoster",
     "ForecastMonths"
 ]
 

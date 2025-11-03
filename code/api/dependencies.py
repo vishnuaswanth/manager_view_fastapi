@@ -7,13 +7,12 @@ like database managers, loggers, and configuration.
 
 import logging
 from typing import Optional
-from code.settings import DATABASE_URL
+from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.logics.core_utils import CoreUtils
 from code.logics.db import (
     ForecastModel,
     ForecastMonthsModel,
     ProdTeamRosterModel,
-    AllocatedVendorRosterModel,
     UploadDataTimeDetails,
     MonthConfigurationModel,
     AllocationExecutionModel,
@@ -56,6 +55,14 @@ def get_core_utils() -> CoreUtils:
     """
     global _core_utils_instance
     if _core_utils_instance is None:
+        # Determine database URL based on mode (lazy initialization)
+        if MODE.upper() == "DEBUG":
+            DATABASE_URL = SQLITE_DATABASE_URL
+        elif MODE.upper() == "PRODUCTION":
+            DATABASE_URL = MSSQL_DATABASE_URL
+        else:
+            raise ValueError("Invalid MODE specified in config.")
+
         _core_utils_instance = CoreUtils(DATABASE_URL)
     return _core_utils_instance
 
@@ -99,7 +106,6 @@ MODEL_MAP = {
     "Forecast": ForecastModel,
     "ForecastMonths": ForecastMonthsModel,
     "ProdTeamRoster": ProdTeamRosterModel,
-    "AllocatedVendorRoster": AllocatedVendorRosterModel,
     "UploadDataTimeDetails": UploadDataTimeDetails,
     "MonthConfiguration": MonthConfigurationModel,
     "AllocationExecution": AllocationExecutionModel,

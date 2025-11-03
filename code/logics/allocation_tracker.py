@@ -14,10 +14,20 @@ from sqlalchemy.exc import SQLAlchemyError
 import pandas as pd
 
 from code.logics.db import AllocationExecutionModel
-from code.settings import DATABASE_URL
+from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.logics.core_utils import CoreUtils
 
 logger = logging.getLogger(__name__)
+
+# Determine database URL based on mode
+if MODE.upper() == "DEBUG":
+    DATABASE_URL = SQLITE_DATABASE_URL
+elif MODE.upper() == "PRODUCTION":
+    DATABASE_URL = MSSQL_DATABASE_URL
+else:
+    raise ValueError("Invalid MODE specified in config.")
+
+# Initialize CoreUtils instance (singleton for this module)
 core_utils = CoreUtils(DATABASE_URL)
 
 

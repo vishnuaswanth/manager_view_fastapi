@@ -22,20 +22,18 @@ from code.logics.manager_view import (
     diagnose_record_categorization
 )
 from code.logics.db import UploadDataTimeDetails, ForecastModel
-from code.logics.cache_utils import TTLCache
 from code.api.dependencies import get_core_utils, get_logger
 from code.api.utils.responses import success_response, error_response
+from code.cache import filters_cache, data_cache
 
 # Initialize router and dependencies
 router = APIRouter()
 logger = get_logger(__name__)
 core_utils = get_core_utils()
 
-# Initialize caches per API spec
-# Filters: 5 minutes TTL, max 8 entries
-# Data: 60 seconds TTL, max 64 entries
-filters_cache = TTLCache(max_size=8, ttl_seconds=300)
-data_cache = TTLCache(max_size=64, ttl_seconds=60)
+# Cache instances imported from shared code.cache module
+# filters_cache: 5 minutes TTL, max 8 entries
+# data_cache: 60 seconds TTL, max 64 entries
 
 
 @router.get("/api/manager-view/filters")
@@ -394,4 +392,4 @@ def debug_record_categorization_endpoint(
 
 
 # Export caches for use in main.py cache invalidation
-__all__ = ['router', 'filters_cache', 'data_cache']
+__all__ = ['router']
