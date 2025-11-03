@@ -42,3 +42,7 @@ MSSQL_DATABASE_URL = (
     f"mssql+pyodbc://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
     f"?driver={OPTIONS['driver'].replace(' ', '+')}"
 )
+
+# Cache TTLs
+CACHE_TTL_EXECUTIONS_ACTIVE = 5  # 5 seconds for active executions (PENDING, IN_PROGRESS)
+CACHE_TTL_EXECUTIONS_COMPLETED = 3600  # 1 hour for completed executions (SUCCESS, FAILED)

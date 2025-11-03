@@ -24,7 +24,7 @@ class TTLCache:
         """
         self.max_size = max_size
         self.ttl_seconds = ttl_seconds
-        self.cache: Dict[str, tuple] = {}  # key -> (value, timestamp)
+        self.cache: Dict[str, tuple] = {}  # key -> (value, timestamp, ttl)
         self.lock = Lock()
 
     def get(self, key: str) -> Optional[Any]:
@@ -41,10 +41,10 @@ class TTLCache:
             if key not in self.cache:
                 return None
 
-            value, timestamp = self.cache[key]
+            value, timestamp, ttl = self.cache[key]
 
             # Check if expired
-            if time.time() - timestamp > self.ttl_seconds:
+            if time.time() - timestamp > ttl:
                 del self.cache[key]
                 logger.debug(f"[Cache] Key expired: {key}")
                 return None
@@ -52,20 +52,21 @@ class TTLCache:
             logger.debug(f"[Cache] Hit: {key}")
             return value
 
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """
         Set value in cache with LRU eviction.
 
         Args:
             key: Cache key
             value: Value to cache
+            ttl: Optional TTL in seconds for this specific entry
         """
         with self.lock:
             # Evict expired entries first
             current_time = time.time()
             expired_keys = [
-                k for k, (_, ts) in self.cache.items()
-                if current_time - ts > self.ttl_seconds
+                k for k, (_, ts, entry_ttl) in self.cache.items()
+                if current_time - ts > entry_ttl
             ]
             for k in expired_keys:
                 del self.cache[k]
@@ -77,9 +78,10 @@ class TTLCache:
                 del self.cache[oldest_key]
                 logger.debug(f"[Cache] Evicted oldest key (LRU): {oldest_key}")
 
-            # Set new value
-            self.cache[key] = (value, current_time)
-            logger.debug(f"[Cache] Set: {key}")
+            # Set new value with either the provided TTL or the default one
+            entry_ttl = ttl if ttl is not None else self.ttl_seconds
+            self.cache[key] = (value, current_time, entry_ttl)
+            logger.debug(f"[Cache] Set: {key} with TTL {entry_ttl}s")
 
     def clear(self) -> None:
         """Clear all cache entries."""
@@ -135,8 +137,8 @@ class TTLCache:
         with self.lock:
             current_time = time.time()
             active_entries = sum(
-                1 for _, ts in self.cache.values()
-                if current_time - ts <= self.ttl_seconds
+                1 for _, ts, entry_ttl in self.cache.values()
+                if current_time - ts <= entry_ttl
             )
             return {
                 "size": len(self.cache),

@@ -28,6 +28,8 @@ from code.logics.cache_utils import TTLCache
 import logging
 from datetime import datetime
 
+from code.settings import CACHE_TTL_EXECUTIONS_ACTIVE, CACHE_TTL_EXECUTIONS_COMPLETED
+
 logger = logging.getLogger(__name__)
 
 # ============ Manager View & Forecast Cascade Caches ============
@@ -144,6 +146,20 @@ def generate_execution_detail_cache_key(execution_id: str) -> str:
     """
     return f"allocation_execution_detail:v1:{execution_id}"
 
+def get_ttl_for_execution_status(status: str) -> int:
+    """
+    Get cache TTL based on execution status.
+
+    Args:
+        status: Execution status (e.g., 'SUCCESS', 'PENDING')
+
+    Returns:
+        TTL in seconds
+    """
+    if status.upper() in ['SUCCESS', 'FAILED']:
+        return CACHE_TTL_EXECUTIONS_COMPLETED
+    else:
+        return CACHE_TTL_EXECUTIONS_ACTIVE
 
 # ============ Cache Invalidation Helpers ============
 
@@ -290,6 +306,7 @@ __all__ = [
     'generate_month_config_cache_key',
     'generate_execution_list_cache_key',
     'generate_execution_detail_cache_key',
+    'get_ttl_for_execution_status',
     'invalidate_month_config_cache',
     'invalidate_execution_list_cache',
     'invalidate_execution_detail_cache',
