@@ -259,6 +259,9 @@ def get_fte_required(row, month, calculations: Calculations):
     except (KeyError, TypeError) as e:
         logging.warning(f"Missing month data for {month} in get_fte_required: {e}, returning 0")
         return 0
+    except ValueError:
+        # ValueError indicates missing month config - must propagate to halt execution
+        raise
     except Exception as e:
         logging.error(f"Error in get_fte_required for {month}: {e}", exc_info=True)
         return 0
@@ -1266,6 +1269,9 @@ def get_capacity(row, month, calculations: Calculations):
     except (KeyError, TypeError) as e:
         logging.error(f"Error in get_capacity for {month}: {e}", exc_info=True)
         return 0
+    except ValueError:
+        # ValueError indicates missing month config - must propagate to halt execution
+        raise
 
 # Legacy per-file vendor filtering - no longer needed with ResourceAllocator
 # (ResourceAllocator handles platform/state matching internally)
