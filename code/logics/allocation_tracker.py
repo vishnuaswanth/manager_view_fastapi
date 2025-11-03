@@ -16,6 +16,10 @@ import pandas as pd
 from code.logics.db import AllocationExecutionModel
 from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.logics.core_utils import CoreUtils
+from code.cache import (
+    invalidate_execution_list_cache,
+    invalidate_execution_detail_cache
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +86,13 @@ def start_execution(
         df = pd.DataFrame([execution_record])
         db_manager.save_to_db(df, replace=False)
 
+        # Invalidate execution list cache after creating new execution
+        try:
+            invalidate_execution_list_cache()
+            logger.info(f"[Cache] Invalidated execution list cache after starting new execution")
+        except Exception as cache_error:
+            logger.warning(f"[Cache] Failed to invalidate execution list cache: {cache_error}")
+
         logger.info(f"Started execution tracking: {execution_id} for {month} {year}")
         return execution_id
 
@@ -114,6 +125,14 @@ def update_status(execution_id: str, status: str, config_snapshot: Optional[Dict
                     execution.ConfigSnapshot = json.dumps(config_snapshot)
                 session.commit()
                 logger.info(f"Updated execution {execution_id} status to {status}")
+
+                # Invalidate execution detail cache and list cache after status update
+                try:
+                    invalidate_execution_detail_cache(execution_id)
+                    invalidate_execution_list_cache()
+                    logger.info(f"[Cache] Invalidated caches after status update to {status}")
+                except Exception as cache_error:
+                    logger.warning(f"[Cache] Failed to invalidate caches: {cache_error}")
             else:
                 logger.warning(f"Execution {execution_id} not found for status update")
 
@@ -170,6 +189,14 @@ def complete_execution(
 
                 session.commit()
                 logger.info(f"Completed execution {execution_id} with status {execution.Status}")
+
+                # Invalidate execution detail cache and list cache after completion
+                try:
+                    invalidate_execution_detail_cache(execution_id)
+                    invalidate_execution_list_cache()
+                    logger.info(f"[Cache] Invalidated caches after execution completion (status={execution.Status})")
+                except Exception as cache_error:
+                    logger.warning(f"[Cache] Failed to invalidate caches: {cache_error}")
             else:
                 logger.warning(f"Execution {execution_id} not found for completion")
 

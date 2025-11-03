@@ -20,6 +20,12 @@ from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.api.dependencies import get_logger
 from code.api.utils.responses import success_response, error_response, paginated_response
 from code.api.utils.validators import validate_month_year_pair, validate_pagination
+from code.cache import (
+    allocation_list_cache,
+    allocation_detail_cache,
+    generate_execution_list_cache_key,
+    generate_execution_detail_cache_key
+)
 
 # Determine database URL based on mode
 if MODE.upper() == "DEBUG":
@@ -266,6 +272,10 @@ def list_allocation_executions(
                 "has_more": true
             }
         }
+
+    Cache:
+        TTL: 30 seconds (default)
+        Key: allocation_executions:v1:{month}:{year}:{status}:{uploaded_by}:{limit}:{offset}
     """
     try:
         # Validate pagination
@@ -282,7 +292,23 @@ def list_allocation_executions(
             from code.api.utils.validators import validate_execution_status
             status = validate_execution_status(status)
 
-        # Get executions
+        # Generate cache key
+        cache_key = generate_execution_list_cache_key(
+            month=month,
+            year=year,
+            status=status,
+            uploaded_by=uploaded_by,
+            limit=limit,
+            offset=offset
+        )
+
+        # Check cache first
+        cached_response = allocation_list_cache.get(cache_key)
+        if cached_response is not None:
+            logger.debug(f"[Cache] Returning cached execution list for {cache_key}")
+            return cached_response
+
+        # Get executions from database
         records, total = list_executions(
             month=month,
             year=year,
@@ -292,12 +318,18 @@ def list_allocation_executions(
             offset=offset
         )
 
-        return paginated_response(
+        response = paginated_response(
             data=records,
             total=total,
             limit=limit,
             offset=offset
         )
+
+        # Cache the response
+        allocation_list_cache.set(cache_key, response)
+        logger.info(f"[Cache] Cached execution list response: {len(records)} executions (total={total})")
+
+        return response
 
     except HTTPException:
         raise
@@ -347,7 +379,22 @@ def get_allocation_execution_details(execution_id: str):
 
     Raises:
         404: Execution not found
+
+    Cache:
+        TTL: Dynamic based on status
+            - PENDING/IN_PROGRESS: 5 seconds (active monitoring)
+            - SUCCESS/FAILED: 1 hour (immutable data)
+        Key: allocation_execution_detail:v1:{execution_id}
     """
+    # Generate cache key
+    cache_key = generate_execution_detail_cache_key(execution_id)
+
+    # Check cache first
+    cached_response = allocation_detail_cache.get(cache_key)
+    if cached_response is not None:
+        logger.debug(f"[Cache] Returning cached execution detail for {execution_id}")
+        return cached_response
+
     try:
         execution = get_execution_by_id(execution_id)
 
@@ -357,7 +404,22 @@ def get_allocation_execution_details(execution_id: str):
                 detail=error_response(f"Execution with ID {execution_id} not found")
             )
 
-        return success_response(data=execution)
+        response = success_response(data=execution)
+
+        # Determine TTL based on execution status
+        status = execution.get('status', '').upper()
+        if status in ['SUCCESS', 'FAILED']:
+            # Completed executions are immutable - cache for 1 hour
+            ttl_seconds = 3600
+        else:
+            # Active executions (PENDING, IN_PROGRESS) - cache for 5 seconds
+            ttl_seconds = 5
+
+        # Cache the response with appropriate TTL
+        allocation_detail_cache.set(cache_key, response, ttl=ttl_seconds)
+        logger.info(f"[Cache] Cached execution detail (status={status}, ttl={ttl_seconds}s)")
+
+        return response
 
     except HTTPException:
         raise

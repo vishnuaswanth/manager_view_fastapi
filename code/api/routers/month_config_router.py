@@ -20,6 +20,11 @@ from code.logics.month_config_utils import (
 )
 from code.api.dependencies import get_logger
 from code.api.utils.responses import success_response, error_response
+from code.cache import (
+    month_config_cache,
+    generate_month_config_cache_key,
+    invalidate_month_config_cache
+)
 
 # Initialize router and dependencies
 router = APIRouter()
@@ -66,6 +71,9 @@ def create_month_configuration(
         )
 
         if success:
+            # Invalidate month config cache after successful creation
+            invalidate_month_config_cache()
+            logger.info("[Cache] Invalidated month config cache after creation")
             return success_response(message=message)
         else:
             raise HTTPException(status_code=400, detail=error_response(message))
@@ -130,6 +138,11 @@ def bulk_create_month_configurations(
                 }
             )
 
+        # Invalidate month config cache after successful bulk operation
+        if result.get('succeeded', 0) > 0:
+            invalidate_month_config_cache()
+            logger.info(f"[Cache] Invalidated month config cache after bulk operation ({result['succeeded']} configs added)")
+
         return success_response(data=result, message="Bulk operation completed")
 
     except HTTPException:
@@ -158,7 +171,20 @@ def get_month_configurations(
 
     Returns:
         List of configuration objects
+
+    Cache:
+        TTL: 15 minutes (900 seconds)
+        Key: month_config:v1:{month}:{year}:{work_type}
     """
+    # Generate cache key
+    cache_key = generate_month_config_cache_key(month, year, work_type)
+
+    # Check cache first
+    cached_response = month_config_cache.get(cache_key)
+    if cached_response is not None:
+        logger.debug(f"[Cache] Returning cached month config for {cache_key}")
+        return cached_response
+
     try:
         configs = get_month_configuration(
             month=month,
@@ -166,9 +192,15 @@ def get_month_configurations(
             work_type=work_type
         )
 
-        return success_response(
+        response = success_response(
             data={"count": len(configs), "configurations": configs}
         )
+
+        # Cache the response
+        month_config_cache.set(cache_key, response)
+        logger.info(f"[Cache] Cached month config response: {len(configs)} configs")
+
+        return response
 
     except Exception as e:
         logger.error(f"Error retrieving month configurations: {e}", exc_info=True)
@@ -214,6 +246,9 @@ def update_month_configuration_endpoint(
         )
 
         if success:
+            # Invalidate month config cache after successful update
+            invalidate_month_config_cache()
+            logger.info(f"[Cache] Invalidated month config cache after update (config_id={config_id})")
             return success_response(message=message)
         else:
             raise HTTPException(
@@ -259,6 +294,9 @@ def delete_month_configuration_endpoint(config_id: int, allow_orphan: bool = Fal
         success, message = delete_month_configuration(config_id=config_id, allow_orphan=allow_orphan)
 
         if success:
+            # Invalidate month config cache after successful deletion
+            invalidate_month_config_cache()
+            logger.info(f"[Cache] Invalidated month config cache after deletion (config_id={config_id})")
             return success_response(message=message)
         else:
             # Check if this is an orphan prevention error
@@ -346,11 +384,30 @@ def validate_month_configurations():
             - paired_count: Number of properly paired month-years
             - orphaned_count: Number of orphaned configurations
             - recommendations: Suggested actions to fix issues
+
+    Cache:
+        TTL: 5 minutes (300 seconds)
+        Key: month_config_validate:v1
     """
+    # Generate cache key
+    cache_key = "month_config_validate:v1"
+
+    # Check cache first
+    cached_response = month_config_cache.get(cache_key)
+    if cached_response is not None:
+        logger.debug("[Cache] Returning cached month config validation")
+        return cached_response
+
     try:
         validation_result = validate_all_pairs()
 
-        return success_response(data=validation_result)
+        response = success_response(data=validation_result)
+
+        # Cache the response (5 minutes TTL - handled by cache instance default)
+        month_config_cache.set(cache_key, response)
+        logger.info(f"[Cache] Cached validation result: {validation_result.get('total_configs')} configs checked")
+
+        return response
 
     except Exception as e:
         logger.error(f"Error validating month configurations: {e}", exc_info=True)
