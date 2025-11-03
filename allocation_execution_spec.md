@@ -199,17 +199,33 @@ Get detailed information about a specific allocation execution including configu
     "stack_trace": null,
     "config_snapshot": {
       "month_config": {
-        "Domestic": {
-          "working_days": 21,
-          "occupancy": 0.95,
-          "shrinkage": 0.10,
-          "work_hours": 9
+        "January 2025": {
+          "Domestic": {
+            "working_days": 21,
+            "occupancy": 0.95,
+            "shrinkage": 0.10,
+            "work_hours": 9
+          },
+          "Global": {
+            "working_days": 21,
+            "occupancy": 0.90,
+            "shrinkage": 0.15,
+            "work_hours": 9
+          }
         },
-        "Global": {
-          "working_days": 21,
-          "occupancy": 0.90,
-          "shrinkage": 0.15,
-          "work_hours": 9
+        "February 2025": {
+          "Domestic": {
+            "working_days": 20,
+            "occupancy": 0.95,
+            "shrinkage": 0.10,
+            "work_hours": 9
+          },
+          "Global": {
+            "working_days": 20,
+            "occupancy": 0.90,
+            "shrinkage": 0.15,
+            "work_hours": 9
+          }
         }
       }
     },
@@ -498,10 +514,16 @@ When `roster_was_fallback` is `true`, it means:
 
 ### Configuration Snapshot
 The `config_snapshot` field captures the exact configuration used at execution time:
-- Month configuration (working days, occupancy, shrinkage, work hours)
-- Allows reproduction of results
-- Useful for debugging and audit trails
-- Stored as JSON in database
+- **Structure**: Organized by month-year (e.g., "January 2025", "February 2025")
+- **Per-Month Configs**: Each month contains both Domestic and Global configurations
+- **Parameters**: Working days, occupancy, shrinkage, work hours for each work type
+- **Multi-Month Support**: Captures all months processed in a single execution
+- **Use Cases**:
+  - Allows exact reproduction of results
+  - Useful for debugging and audit trails
+  - Track configuration changes over time
+  - Identify discrepancies between months
+- **Storage**: Stored as JSON in database `ConfigSnapshot` column
 
 ### Error Handling
 All errors include:

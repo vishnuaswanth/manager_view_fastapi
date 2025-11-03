@@ -1468,8 +1468,14 @@ def build_config_snapshot(calculations: Calculations) -> Dict:
         Dictionary with structure:
         {
             "month_config": {
-                "Domestic": {...},
-                "Global": {...}
+                "January 2025": {
+                    "Domestic": {...},
+                    "Global": {...}
+                },
+                "February 2025": {
+                    "Domestic": {...},
+                    "Global": {...}
+                }
             }
         }
     """
@@ -1477,13 +1483,20 @@ def build_config_snapshot(calculations: Calculations) -> Dict:
 
     # Extract configs from the calculations cache
     for (month, year, work_type), config in calculations._config_cache.items():
-        if work_type not in config_snapshot["month_config"]:
-            config_snapshot["month_config"][work_type] = {
-                "working_days": config['working_days'],
-                "occupancy": config['occupancy'],
-                "shrinkage": config['shrinkage'],
-                "work_hours": config['work_hours']
-            }
+        # Create month-year key for grouping
+        month_year_key = f"{month} {year}"
+
+        # Initialize month-year entry if not exists
+        if month_year_key not in config_snapshot["month_config"]:
+            config_snapshot["month_config"][month_year_key] = {}
+
+        # Store config under work_type within the month-year
+        config_snapshot["month_config"][month_year_key][work_type] = {
+            "working_days": config['working_days'],
+            "occupancy": config['occupancy'],
+            "shrinkage": config['shrinkage'],
+            "work_hours": config['work_hours']
+        }
 
     return config_snapshot
 
