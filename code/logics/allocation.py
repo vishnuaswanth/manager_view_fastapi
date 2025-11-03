@@ -1454,6 +1454,40 @@ def get_roster_file_metadata(requested_month: str, requested_year: int, core_uti
         }
 
 
+def build_config_snapshot(calculations: Calculations) -> Dict:
+    """
+    Build configuration snapshot from loaded configs in calculations cache.
+
+    Captures all month configurations that were actually used during this execution
+    for audit trail and debugging purposes.
+
+    Args:
+        calculations: Calculations instance with populated _config_cache
+
+    Returns:
+        Dictionary with structure:
+        {
+            "month_config": {
+                "Domestic": {...},
+                "Global": {...}
+            }
+        }
+    """
+    config_snapshot = {"month_config": {}}
+
+    # Extract configs from the calculations cache
+    for (month, year, work_type), config in calculations._config_cache.items():
+        if work_type not in config_snapshot["month_config"]:
+            config_snapshot["month_config"][work_type] = {
+                "working_days": config['working_days'],
+                "occupancy": config['occupancy'],
+                "shrinkage": config['shrinkage'],
+                "work_hours": config['work_hours']
+            }
+
+    return config_snapshot
+
+
 def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: str, forecast_filename: str):
     """
     Simulates logic after forecast file upload and updates the processed forecast data.
@@ -1788,12 +1822,28 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                 'records_processed': len(consolidated_df) if not consolidated_df.empty else 0,
                 'allocation_success_rate': summary_report['summary'].get('allocation_success_rate', 0) if summary_report else 0
             }
+
+            # Capture configuration snapshot for audit trail
+            config_snapshot = build_config_snapshot(calculations)
+            if config_snapshot.get('month_config'):
+                update_status(execution_id, 'SUCCESS', config_snapshot=config_snapshot)
+                logging.info(f"Captured config snapshot: {list(config_snapshot['month_config'].keys())}")
+
             complete_execution(execution_id, success=True, stats=stats)
             logging.info(f"Processing completed successfully. Total time: {duration:.2f}s")
 
         else:
             # NO VALID DATAFRAMES: Mark as partial failure
             logging.error("No valid DataFrames generated. Check input files.")
+
+            # Capture config snapshot if available
+            try:
+                config_snapshot = build_config_snapshot(calculations)
+                if config_snapshot.get('month_config'):
+                    update_status(execution_id, 'FAILED', config_snapshot=config_snapshot)
+            except Exception as snapshot_error:
+                logging.warning(f"Failed to capture config snapshot: {snapshot_error}")
+
             complete_execution(
                 execution_id,
                 success=False,
@@ -1804,6 +1854,16 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
     except ValueError as e:
         # VALIDATION ERROR (Missing month config, missing columns, etc.)
         logging.error(f"Validation error during allocation: {e}", exc_info=True)
+
+        # Capture config snapshot if available (may be empty if missing config caused the error)
+        try:
+            config_snapshot = build_config_snapshot(calculations)
+            if config_snapshot.get('month_config'):
+                update_status(execution_id, 'FAILED', config_snapshot=config_snapshot)
+                logging.info(f"Captured partial config snapshot on error: {list(config_snapshot['month_config'].keys())}")
+        except Exception as snapshot_error:
+            logging.warning(f"Failed to capture config snapshot on ValueError: {snapshot_error}")
+
         complete_execution(
             execution_id,
             success=False,
@@ -1816,6 +1876,15 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
     except Exception as e:
         # UNEXPECTED ERROR
         logging.error(f"Unexpected error during allocation: {e}", exc_info=True)
+
+        # Capture config snapshot if available
+        try:
+            config_snapshot = build_config_snapshot(calculations)
+            if config_snapshot.get('month_config'):
+                update_status(execution_id, 'FAILED', config_snapshot=config_snapshot)
+        except Exception as snapshot_error:
+            logging.warning(f"Failed to capture config snapshot on Exception: {snapshot_error}")
+
         complete_execution(
             execution_id,
             success=False,
