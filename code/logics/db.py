@@ -363,7 +363,7 @@ class MonthConfigurationModel(SQLModel, table=True):
     WorkingDays: int = Field(nullable=False)  # Number of working days in the month
     Occupancy: float = Field(nullable=False)  # Occupancy rate (0.0 to 1.0, e.g., 0.95 for 95%)
     Shrinkage: float = Field(nullable=False)  # Shrinkage rate (0.0 to 1.0, e.g., 0.10 for 10%)
-    WorkHours: int = Field(nullable=False)  # Work hours per day (e.g., 9)
+    WorkHours: float = Field(nullable=False)  # Work hours per day (e.g., 9)
 
     CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
     CreatedDateTime: datetime = Field(

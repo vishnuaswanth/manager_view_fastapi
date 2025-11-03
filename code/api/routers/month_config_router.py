@@ -41,7 +41,7 @@ class MonthConfigRequest(BaseModel):
     working_days: int
     occupancy: float
     shrinkage: float
-    work_hours: int
+    work_hours: float
     created_by: str
 
 
@@ -231,7 +231,7 @@ def update_month_configuration_endpoint(
     working_days: Optional[int] = None,
     occupancy: Optional[float] = None,
     shrinkage: Optional[float] = None,
-    work_hours: Optional[int] = None,
+    work_hours: Optional[float] = None,
     updated_by: str = "System"
 ):
     """

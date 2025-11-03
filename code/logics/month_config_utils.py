@@ -36,7 +36,7 @@ def add_month_configuration(
     working_days: int,
     occupancy: float,
     shrinkage: float,
-    work_hours: int,
+    work_hours: float,
     created_by: str
 ) -> Tuple[bool, str]:
     """
@@ -146,7 +146,7 @@ def bulk_add_month_configurations(
             - working_days: int
             - occupancy: float
             - shrinkage: float
-            - work_hours: int
+            - work_hours: float
         created_by: Username of the person creating the records
         skip_pairing_validation: If True, skips batch pairing validation (default: False)
                                 Use with caution - may create orphaned records
@@ -377,7 +377,7 @@ def update_month_configuration(
     working_days: Optional[int] = None,
     occupancy: Optional[float] = None,
     shrinkage: Optional[float] = None,
-    work_hours: Optional[int] = None,
+    work_hours: Optional[float] = None,
     updated_by: str = "System"
 ) -> Tuple[bool, str]:
     """
@@ -634,7 +634,7 @@ def seed_initial_data(base_year: int = 2025, num_years: int = 2, created_by: str
     default_params = {
         'occupancy': 0.95,
         'shrinkage': 0.10,
-        'work_hours': 9
+        'work_hours': 9.0
     }
 
     configurations = []
