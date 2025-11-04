@@ -24,15 +24,15 @@ API Endpoints:
     GET /download_allocation_report/roster_allotment?month={month}&year={year}
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 import pandas as pd
 import io
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from code.logics.db import DBManager, AllocationReportsModel
-from code.logics.allocation_tracker import list_executions, get_execution_by_id
+from code.logics.allocation_tracker import list_executions, get_execution_by_id, get_execution_kpis
 from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.api.dependencies import get_logger
 from code.api.utils.responses import success_response, error_response, paginated_response
@@ -432,7 +432,7 @@ def download_allocation_roster_allotment_by_execution(execution_id: str):
 def list_allocation_executions(
     month: Optional[str] = None,
     year: Optional[int] = None,
-    status: Optional[str] = None,
+    status: Optional[List[str]] = Query(None),
     uploaded_by: Optional[str] = None,
     limit: int = 50,
     offset: int = 0
@@ -443,7 +443,8 @@ def list_allocation_executions(
     Query Parameters:
         month: Filter by month (optional)
         year: Filter by year (optional)
-        status: Filter by status (PENDING, IN_PROGRESS, SUCCESS, FAILED) (optional)
+        status: Filter by status (can specify multiple times, e.g., ?status=SUCCESS&status=FAILED) (optional)
+                Valid values: PENDING, IN_PROGRESS, SUCCESS, FAILED, PARTIAL_SUCCESS
         uploaded_by: Filter by username (optional)
         limit: Maximum records to return (default: 50, max: 100)
         offset: Pagination offset (default: 0)
@@ -476,9 +477,20 @@ def list_allocation_executions(
             }
         }
 
+    Examples:
+        # Single status filter
+        GET /api/allocation/executions?month=January&year=2025&status=SUCCESS
+
+        # Multiple status filter
+        GET /api/allocation/executions?status=SUCCESS&status=FAILED
+
+        # Filter active executions
+        GET /api/allocation/executions?status=PENDING&status=IN_PROGRESS
+
     Cache:
         TTL: 30 seconds (default)
         Key: allocation_executions:v1:{month}:{year}:{status}:{uploaded_by}:{limit}:{offset}
+        Note: For multiple statuses, key uses comma-separated sorted values
     """
     try:
         # Validate pagination
@@ -491,15 +503,18 @@ def list_allocation_executions(
         if year:
             from code.api.utils.validators import validate_year
             year = validate_year(year)
+
+        # Validate status list if provided
+        validated_statuses = None
         if status:
             from code.api.utils.validators import validate_execution_status
-            status = validate_execution_status(status)
+            validated_statuses = [validate_execution_status(s) for s in status]
 
-        # Generate cache key
+        # Generate cache key (convert list to sorted tuple for consistent hashing)
         cache_key = generate_execution_list_cache_key(
             month=month,
             year=year,
-            status=status,
+            status=tuple(sorted(validated_statuses)) if validated_statuses else None,
             uploaded_by=uploaded_by,
             limit=limit,
             offset=offset
@@ -515,7 +530,7 @@ def list_allocation_executions(
         records, total = list_executions(
             month=month,
             year=year,
-            status=status,
+            status=validated_statuses,
             uploaded_by=uploaded_by,
             limit=limit,
             offset=offset
@@ -626,4 +641,131 @@ def get_allocation_execution_details(execution_id: str):
         raise HTTPException(
             status_code=500,
             detail=error_response("Failed to get execution details", str(e))
+        )
+
+
+@router.get("/api/allocation/executions/kpi")
+def get_allocation_execution_kpis(
+    month: Optional[str] = None,
+    year: Optional[int] = None,
+    status: Optional[List[str]] = Query(None),
+    uploaded_by: Optional[str] = None
+):
+    """
+    Get aggregated KPI metrics for allocation executions.
+
+    Supports flexible filtering - any combination of filters can be applied:
+    - Just year (e.g., all 2025 executions)
+    - Month and year (e.g., January 2025)
+    - Just status(es) (e.g., all failed executions)
+    - Just uploaded_by (e.g., all executions by user)
+    - Any combination of the above
+
+    Query Parameters:
+        month: Filter by month (optional)
+        year: Filter by year (optional)
+        status: Filter by status (can specify multiple times) (optional)
+                Valid values: PENDING, IN_PROGRESS, SUCCESS, FAILED, PARTIAL_SUCCESS
+        uploaded_by: Filter by username (optional)
+
+    Returns:
+        {
+            "success": true,
+            "data": {
+                "total_executions": 150,
+                "success_rate": 0.85,
+                "average_duration_seconds": 320.5,
+                "failed_count": 12,
+                "partial_success_count": 8,
+                "in_progress_count": 2,
+                "pending_count": 3,
+                "success_count": 125,
+                "total_records_processed": 187500,
+                "total_records_failed": 9375
+            },
+            "timestamp": "2025-01-15T14:30:00Z"
+        }
+
+    Examples:
+        # All KPIs (no filters)
+        GET /api/allocation/executions/kpi
+
+        # KPIs for specific year
+        GET /api/allocation/executions/kpi?year=2025
+
+        # KPIs for specific month/year
+        GET /api/allocation/executions/kpi?month=January&year=2025
+
+        # KPIs for specific user
+        GET /api/allocation/executions/kpi?uploaded_by=john.doe
+
+        # KPIs for specific statuses
+        GET /api/allocation/executions/kpi?status=SUCCESS&status=FAILED
+
+        # Combined filters
+        GET /api/allocation/executions/kpi?year=2025&status=SUCCESS&uploaded_by=john.doe
+
+    Cache:
+        TTL: 60 seconds
+        Key: allocation_executions_kpi:v1:{month}:{year}:{status}:{uploaded_by}
+    """
+    try:
+        # Validate month/year if provided
+        if month:
+            from code.api.utils.validators import validate_month
+            month = validate_month(month)
+        if year:
+            from code.api.utils.validators import validate_year
+            year = validate_year(year)
+
+        # Validate status list if provided
+        validated_statuses = None
+        if status:
+            from code.api.utils.validators import validate_execution_status
+            validated_statuses = [validate_execution_status(s) for s in status]
+
+        # Generate cache key
+        from datetime import datetime, timezone
+        status_part = tuple(sorted(validated_statuses)) if validated_statuses else None
+        cache_key = f"allocation_executions_kpi:v1:{month or ''}:{year or ''}:{status_part or ''}:{uploaded_by or ''}"
+
+        # Check cache first
+        cached_response = allocation_list_cache.get(cache_key)
+        if cached_response is not None:
+            logger.debug(f"[Cache] Returning cached KPI data for {cache_key}")
+            return cached_response
+
+        # Get KPI data
+        kpi_data = get_execution_kpis(
+            month=month,
+            year=year,
+            status=validated_statuses,
+            uploaded_by=uploaded_by
+        )
+
+        if kpi_data is None:
+            raise HTTPException(
+                status_code=500,
+                detail=error_response("Failed to calculate KPIs")
+            )
+
+        response = {
+            "success": True,
+            "data": kpi_data,
+            "timestamp": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        }
+
+        # Cache the response (60 seconds TTL)
+        allocation_list_cache.set(cache_key, response, ttl=60)
+        logger.info(f"[Cache] Cached KPI response (60s TTL)")
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting allocation execution KPIs: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_response("Failed to get execution KPIs", str(e))
         )

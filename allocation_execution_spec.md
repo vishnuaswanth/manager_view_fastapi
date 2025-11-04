@@ -12,9 +12,10 @@ This document describes the API endpoints for managing and monitoring allocation
 ## Table of Contents
 1. [List Allocation Executions](#1-list-allocation-executions)
 2. [Get Execution Details](#2-get-execution-details)
-3. [Status Workflow](#status-workflow)
-4. [Example Use Cases](#example-use-cases)
-5. [Performance Notes](#performance-notes)
+3. [Get Execution KPIs](#3-get-execution-kpis)
+4. [Status Workflow](#status-workflow)
+5. [Example Use Cases](#example-use-cases)
+6. [Performance Notes](#performance-notes)
 
 ---
 
@@ -34,10 +35,22 @@ List allocation executions with filtering and pagination. Returns minimal data o
 |-----------|------|----------|---------|-------------|
 | `month` | string | No | - | Filter by month name (e.g., "January") |
 | `year` | integer | No | - | Filter by year (e.g., 2025) |
-| `status` | string | No | - | Filter by status: `PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `PARTIAL_SUCCESS` |
+| `status` | string[] | No | - | Filter by status (can specify multiple): `PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `PARTIAL_SUCCESS` |
 | `uploaded_by` | string | No | - | Filter by username |
 | `limit` | integer | No | 50 | Max records per page (max: 100) |
 | `offset` | integer | No | 0 | Pagination offset |
+
+**Multiple Status Filtering:**
+
+You can filter by multiple statuses by specifying the `status` parameter multiple times:
+
+```bash
+# Filter by SUCCESS or FAILED status
+GET /api/allocation/executions?status=SUCCESS&status=FAILED
+
+# Filter by all active statuses (PENDING and IN_PROGRESS)
+GET /api/allocation/executions?status=PENDING&status=IN_PROGRESS
+```
 
 ### Response Format
 
@@ -99,9 +112,18 @@ GET /api/allocation/executions
 GET /api/allocation/executions?month=January&year=2025
 ```
 
-**Filter by status:**
+**Filter by single status:**
 ```bash
 GET /api/allocation/executions?status=SUCCESS
+```
+
+**Filter by multiple statuses:**
+```bash
+# Get both successful and failed executions
+GET /api/allocation/executions?status=SUCCESS&status=FAILED
+
+# Get all active executions
+GET /api/allocation/executions?status=PENDING&status=IN_PROGRESS
 ```
 
 **Filter by user:**
@@ -122,6 +144,11 @@ GET /api/allocation/executions?status=FAILED
 **Get in-progress executions (for monitoring):**
 ```bash
 GET /api/allocation/executions?status=IN_PROGRESS
+```
+
+**Get completed executions (successful or failed):**
+```bash
+GET /api/allocation/executions?status=SUCCESS&status=FAILED&status=PARTIAL_SUCCESS
 ```
 
 ### Error Responses
@@ -150,6 +177,8 @@ Results are ordered by **start time descending** (newest first, oldest last).
 ### Caching
 - **TTL:** 30 seconds
 - **Cache Key:** `allocation_executions:v1:{month}:{year}:{status}:{uploaded_by}:{limit}:{offset}`
+  - For multiple statuses, the key uses comma-separated sorted values (e.g., `FAILED,SUCCESS`)
+  - Example: `allocation_executions:v1:January:2025:FAILED,SUCCESS:john.doe:50:0`
 - **Invalidation:** Automatically cleared when new executions are created or statuses change
 
 ---
@@ -296,6 +325,180 @@ GET /api/allocation/executions/550e8400-e29b-41d4-a716-446655440000
 
 ---
 
+## 3. Get Execution KPIs
+
+### Endpoint
+```http
+GET /api/allocation/executions/kpi
+```
+
+### Description
+Get aggregated KPI (Key Performance Indicator) metrics for allocation executions. Supports flexible filtering with any combination of filters.
+
+### Query Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `month` | string | No | - | Filter by month name (e.g., "January") |
+| `year` | integer | No | - | Filter by year (e.g., 2025) |
+| `status` | string[] | No | - | Filter by status (can specify multiple): PENDING, IN_PROGRESS, SUCCESS, FAILED, PARTIAL_SUCCESS |
+| `uploaded_by` | string | No | - | Filter by username |
+
+**Flexible Filtering:**
+
+All filters are optional and can be combined in any way:
+- Just year (e.g., all 2025 executions)
+- Month and year (e.g., January 2025)
+- Just status(es) (e.g., all failed executions)
+- Just uploaded_by (e.g., all executions by user)
+- Any combination of the above
+
+### Response Format
+
+**Status Code:** `200 OK`
+
+```json
+{
+  "success": true,
+  "data": {
+    "total_executions": 150,
+    "success_rate": 0.85,
+    "average_duration_seconds": 320.5,
+    "failed_count": 12,
+    "partial_success_count": 8,
+    "in_progress_count": 2,
+    "pending_count": 3,
+    "success_count": 125,
+    "total_records_processed": 187500,
+    "total_records_failed": 9375
+  },
+  "timestamp": "2025-01-15T14:30:00Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_executions` | integer | Total number of executions matching filters |
+| `success_rate` | float | Success rate (0.0-1.0) = success_count / total_executions |
+| `average_duration_seconds` | float | Average duration of completed executions (only SUCCESS, FAILED, PARTIAL_SUCCESS) |
+| `failed_count` | integer | Number of FAILED executions |
+| `partial_success_count` | integer | Number of PARTIAL_SUCCESS executions |
+| `in_progress_count` | integer | Number of IN_PROGRESS executions |
+| `pending_count` | integer | Number of PENDING executions |
+| `success_count` | integer | Number of SUCCESS executions |
+| `total_records_processed` | integer | Sum of all records_processed across all executions |
+| `total_records_failed` | integer | Sum of all records_failed across all executions |
+
+### Example Requests
+
+**Get all KPIs (no filters):**
+```bash
+GET /api/allocation/executions/kpi
+```
+
+**Get KPIs for specific year:**
+```bash
+GET /api/allocation/executions/kpi?year=2025
+```
+
+**Get KPIs for specific month and year:**
+```bash
+GET /api/allocation/executions/kpi?month=January&year=2025
+```
+
+**Get KPIs for specific user:**
+```bash
+GET /api/allocation/executions/kpi?uploaded_by=john.doe
+```
+
+**Get KPIs for specific statuses:**
+```bash
+# Single status
+GET /api/allocation/executions/kpi?status=SUCCESS
+
+# Multiple statuses
+GET /api/allocation/executions/kpi?status=SUCCESS&status=FAILED
+```
+
+**Combined filters:**
+```bash
+# Year + status
+GET /api/allocation/executions/kpi?year=2025&status=SUCCESS
+
+# Month + year + user
+GET /api/allocation/executions/kpi?month=January&year=2025&uploaded_by=john.doe
+
+# Multiple statuses + user
+GET /api/allocation/executions/kpi?status=SUCCESS&status=FAILED&uploaded_by=john.doe
+```
+
+### Error Responses
+
+**500 Internal Server Error**
+```json
+{
+  "success": false,
+  "error": "Failed to get execution KPIs",
+  "status_code": 500
+}
+```
+
+### Caching
+- **TTL:** 60 seconds
+- **Cache Key:** `allocation_executions_kpi:v1:{month}:{year}:{status}:{uploaded_by}`
+  - For multiple statuses, key uses tuple of sorted values
+- **Invalidation:** Not automatically invalidated (relies on TTL expiration)
+
+### Use Cases
+
+**Dashboard Summary:**
+```bash
+# Get overall system health
+GET /api/allocation/executions/kpi
+
+# Get monthly performance
+GET /api/allocation/executions/kpi?month=January&year=2025
+```
+
+**User Performance Tracking:**
+```bash
+# Get user's overall performance
+GET /api/allocation/executions/kpi?uploaded_by=john.doe
+
+# Get user's monthly performance
+GET /api/allocation/executions/kpi?month=January&year=2025&uploaded_by=john.doe
+```
+
+**Quality Monitoring:**
+```bash
+# Get only failed executions metrics
+GET /api/allocation/executions/kpi?status=FAILED
+
+# Get completed executions metrics
+GET /api/allocation/executions/kpi?status=SUCCESS&status=FAILED&status=PARTIAL_SUCCESS
+```
+
+**Yearly Trends:**
+```bash
+# Get all 2025 metrics
+GET /api/allocation/executions/kpi?year=2025
+
+# Compare to 2024
+GET /api/allocation/executions/kpi?year=2024
+```
+
+### Notes
+
+- **Zero Results:** If no executions match the filters, all counts will be 0 and rates will be 0.0
+- **Average Duration:** Only includes completed executions (SUCCESS, FAILED, PARTIAL_SUCCESS) that have a duration value
+- **Success Rate:** Calculated as `success_count / total_executions`. A rate of 0.85 means 85% success rate
+- **Timestamp:** Response includes ISO 8601 timestamp in UTC timezone
+- **Performance:** KPI calculation is optimized but may be slower for large datasets. Use specific filters when possible
+
+---
+
 ## Status Workflow
 
 ```
@@ -328,7 +531,10 @@ Use these exact values for the `status` query parameter:
 Poll every 10 seconds for in-progress executions and get their details:
 
 ```bash
-# List active executions
+# List active executions (both pending and in-progress)
+GET /api/allocation/executions?status=PENDING&status=IN_PROGRESS
+
+# List only in-progress executions
 GET /api/allocation/executions?status=IN_PROGRESS
 
 # Get details of a specific active execution
@@ -339,7 +545,8 @@ GET /api/allocation/executions/550e8400-e29b-41d4-a716-446655440000
 ```javascript
 // Poll for active executions every 10 seconds
 setInterval(async () => {
-  const response = await fetch('/api/allocation/executions?status=IN_PROGRESS');
+  // Get both pending and in-progress executions
+  const response = await fetch('/api/allocation/executions?status=PENDING&status=IN_PROGRESS');
   const data = await response.json();
 
   // Update UI with active executions
@@ -393,7 +600,52 @@ GET /api/allocation/executions/{execution_id}
 
 ---
 
-### Use Case 4: User Activity Report
+### Use Case 4: Multiple Status Filtering
+Filter by multiple statuses to get combined results:
+
+```bash
+# Get all completed executions (success and failed)
+GET /api/allocation/executions?status=SUCCESS&status=FAILED&status=PARTIAL_SUCCESS
+
+# Get all non-active executions for review
+GET /api/allocation/executions?status=SUCCESS&status=FAILED
+
+# Get all executions that need attention (failed or in-progress)
+GET /api/allocation/executions?status=FAILED&status=IN_PROGRESS
+
+# Combined with date filter - get all January 2025 completed executions
+GET /api/allocation/executions?month=January&year=2025&status=SUCCESS&status=FAILED&status=PARTIAL_SUCCESS
+```
+
+**Use Cases:**
+- **Dashboard Summary**: Show all completed executions (success + failed + partial)
+- **Audit Review**: Review all non-successful executions (failed + partial_success)
+- **Active Monitoring**: Track all active states (pending + in_progress)
+- **Health Dashboard**: Show success vs failure rates by filtering both statuses
+
+**Frontend Example:**
+```javascript
+// Get completion statistics
+async function getCompletionStats(month, year) {
+  // Get all completed executions
+  const response = await fetch(
+    `/api/allocation/executions?month=${month}&year=${year}&status=SUCCESS&status=FAILED&status=PARTIAL_SUCCESS&limit=100`
+  );
+  const data = await response.json();
+
+  // Calculate statistics
+  const total = data.pagination.total;
+  const success = data.data.filter(e => e.status === 'SUCCESS').length;
+  const failed = data.data.filter(e => e.status === 'FAILED').length;
+  const partial = data.data.filter(e => e.status === 'PARTIAL_SUCCESS').length;
+
+  return { total, success, failed, partial };
+}
+```
+
+---
+
+### Use Case 5: User Activity Report
 Generate reports for specific users:
 
 ```bash
@@ -409,7 +661,7 @@ GET /api/allocation/executions?uploaded_by=john.doe&status=FAILED
 
 ---
 
-### Use Case 5: Monthly Execution Summary
+### Use Case 6: Monthly Execution Summary
 Get all executions for a specific month/year:
 
 ```bash
@@ -418,6 +670,9 @@ GET /api/allocation/executions?month=January&year=2025
 
 # Successful January 2025 executions
 GET /api/allocation/executions?month=January&year=2025&status=SUCCESS
+
+# All completed January 2025 executions (for reporting)
+GET /api/allocation/executions?month=January&year=2025&status=SUCCESS&status=FAILED&status=PARTIAL_SUCCESS
 
 # Get statistics by iterating through all pages
 GET /api/allocation/executions?month=January&year=2025&limit=100&offset=0
@@ -467,14 +722,25 @@ GET /api/allocation/executions?month=January&year=2025&limit=100&offset=0
 
 **All filters can be combined:**
 ```bash
+# Single status filter
 GET /api/allocation/executions?month=January&year=2025&status=SUCCESS&uploaded_by=john.doe&limit=20&offset=0
+
+# Multiple status filter
+GET /api/allocation/executions?month=January&year=2025&status=SUCCESS&status=FAILED&uploaded_by=john.doe&limit=20&offset=0
 ```
 
 **Filter Validation:**
 - Month: Must be valid month name (January-December)
 - Year: Must be in range 2020-2100
-- Status: Must be one of the valid status values
+- Status: Must be one of the valid status values (can specify multiple)
+  - Multiple statuses are combined with OR logic (returns executions matching ANY status)
+  - Example: `?status=SUCCESS&status=FAILED` returns executions that are either SUCCESS OR FAILED
 - All filters are optional
+
+**Multiple Status Benefits:**
+- Reduce API calls - get multiple statuses in one request
+- Flexible filtering for dashboards and reports
+- Better performance than making multiple requests
 
 ---
 
@@ -541,6 +807,25 @@ Consider implementing rate limiting for:
 ---
 
 ## Changelog
+
+### Version 1.2.0 (2025-01-04)
+- **NEW**: Added KPI endpoint (`GET /api/allocation/executions/kpi`)
+  - Provides aggregated metrics: total executions, success rate, average duration, status breakdowns
+  - Supports flexible filtering: year only, month+year, status(es), uploaded_by, or any combination
+  - Includes total records processed and failed across all matching executions
+  - Cached for 60 seconds for better performance
+  - Perfect for dashboards, user performance tracking, and quality monitoring
+- Added comprehensive KPI endpoint documentation with examples
+- Updated Table of Contents to include KPI endpoint section
+
+### Version 1.1.0 (2025-01-04)
+- **NEW**: Added multiple status filtering support
+  - `status` parameter now accepts multiple values (e.g., `?status=SUCCESS&status=FAILED`)
+  - Enables filtering by multiple statuses in a single request
+  - Uses OR logic - returns executions matching ANY of the specified statuses
+  - Cache key updated to handle multiple statuses (comma-separated sorted values)
+- Updated examples and use cases for multiple status filtering
+- Added Use Case 4: Multiple Status Filtering with practical examples
 
 ### Version 1.0.0 (2025-01-03)
 - Initial API specification

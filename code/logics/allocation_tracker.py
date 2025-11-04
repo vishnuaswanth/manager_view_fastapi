@@ -257,7 +257,7 @@ def get_execution_by_id(execution_id: str) -> Optional[Dict]:
 def list_executions(
     month: Optional[str] = None,
     year: Optional[int] = None,
-    status: Optional[str] = None,
+    status: Optional[List[str]] = None,
     uploaded_by: Optional[str] = None,
     limit: int = 50,
     offset: int = 0
@@ -268,7 +268,7 @@ def list_executions(
     Args:
         month: Filter by month (optional)
         year: Filter by year (optional)
-        status: Filter by status (optional)
+        status: Filter by status list (optional, can filter by multiple statuses)
         uploaded_by: Filter by user (optional)
         limit: Maximum records to return (default: 50)
         offset: Pagination offset (default: 0)
@@ -289,7 +289,8 @@ def list_executions(
             if year:
                 query = query.filter(AllocationExecutionModel.Year == year)
             if status:
-                query = query.filter(AllocationExecutionModel.Status == status)
+                # Support multiple status filtering
+                query = query.filter(AllocationExecutionModel.Status.in_(status))
             if uploaded_by:
                 query = query.filter(AllocationExecutionModel.UploadedBy == uploaded_by)
 
@@ -324,3 +325,126 @@ def list_executions(
     except Exception as e:
         logger.error(f"Failed to list executions: {e}", exc_info=True)
         return [], 0
+
+
+def get_execution_kpis(
+    month: Optional[str] = None,
+    year: Optional[int] = None,
+    status: Optional[List[str]] = None,
+    uploaded_by: Optional[str] = None
+) -> Optional[Dict]:
+    """
+    Calculate aggregated KPI metrics for allocation executions.
+
+    Supports flexible filtering - any combination of filters can be applied:
+    - Just year
+    - Month and year
+    - Just status(es)
+    - Just uploaded_by
+    - Any combination
+
+    Args:
+        month: Filter by month (optional)
+        year: Filter by year (optional)
+        status: Filter by status list (optional, can filter by multiple statuses)
+        uploaded_by: Filter by user (optional)
+
+    Returns:
+        Dictionary with KPI metrics:
+        {
+            'total_executions': int,
+            'success_rate': float,
+            'average_duration_seconds': float,
+            'failed_count': int,
+            'partial_success_count': int,
+            'in_progress_count': int,
+            'pending_count': int,
+            'success_count': int,
+            'total_records_processed': int,
+            'total_records_failed': int
+        }
+        Returns None if error occurs
+    """
+    try:
+        db_manager = core_utils.get_db_manager(AllocationExecutionModel, limit=None, skip=0, select_columns=None)
+
+        with db_manager.SessionLocal() as session:
+            query = session.query(AllocationExecutionModel)
+
+            # Apply filters (same logic as list_executions)
+            if month:
+                query = query.filter(AllocationExecutionModel.Month == month)
+            if year:
+                query = query.filter(AllocationExecutionModel.Year == year)
+            if status:
+                query = query.filter(AllocationExecutionModel.Status.in_(status))
+            if uploaded_by:
+                query = query.filter(AllocationExecutionModel.UploadedBy == uploaded_by)
+
+            # Get all matching executions
+            executions = query.all()
+
+            # Calculate KPIs
+            total_executions = len(executions)
+
+            if total_executions == 0:
+                # Return zero metrics if no executions found
+                return {
+                    'total_executions': 0,
+                    'success_rate': 0.0,
+                    'average_duration_seconds': 0.0,
+                    'failed_count': 0,
+                    'partial_success_count': 0,
+                    'in_progress_count': 0,
+                    'pending_count': 0,
+                    'success_count': 0,
+                    'total_records_processed': 0,
+                    'total_records_failed': 0
+                }
+
+            # Count by status
+            success_count = sum(1 for e in executions if e.Status == 'SUCCESS')
+            failed_count = sum(1 for e in executions if e.Status == 'FAILED')
+            partial_success_count = sum(1 for e in executions if e.Status == 'PARTIAL_SUCCESS')
+            in_progress_count = sum(1 for e in executions if e.Status == 'IN_PROGRESS')
+            pending_count = sum(1 for e in executions if e.Status == 'PENDING')
+
+            # Calculate success rate
+            success_rate = success_count / total_executions if total_executions > 0 else 0.0
+
+            # Calculate average duration (only for completed executions with duration)
+            completed_with_duration = [
+                e for e in executions
+                if e.DurationSeconds is not None and e.Status in ['SUCCESS', 'FAILED', 'PARTIAL_SUCCESS']
+            ]
+            average_duration = (
+                sum(e.DurationSeconds for e in completed_with_duration) / len(completed_with_duration)
+                if completed_with_duration else 0.0
+            )
+
+            # Sum records processed and failed
+            total_records_processed = sum(
+                e.RecordsProcessed for e in executions
+                if e.RecordsProcessed is not None
+            )
+            total_records_failed = sum(
+                e.RecordsFailed for e in executions
+                if e.RecordsFailed is not None
+            )
+
+            return {
+                'total_executions': total_executions,
+                'success_rate': round(success_rate, 4),
+                'average_duration_seconds': round(average_duration, 2),
+                'failed_count': failed_count,
+                'partial_success_count': partial_success_count,
+                'in_progress_count': in_progress_count,
+                'pending_count': pending_count,
+                'success_count': success_count,
+                'total_records_processed': total_records_processed,
+                'total_records_failed': total_records_failed
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to calculate execution KPIs: {e}", exc_info=True)
+        return None

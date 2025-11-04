@@ -100,7 +100,7 @@ def generate_month_config_cache_key(
 def generate_execution_list_cache_key(
     month: str = None,
     year: int = None,
-    status: str = None,
+    status = None,  # Can be str, list, or tuple
     uploaded_by: str = None,
     limit: int = 50,
     offset: int = 0
@@ -111,7 +111,7 @@ def generate_execution_list_cache_key(
     Args:
         month: Month name (optional)
         year: Year number (optional)
-        status: Execution status (optional)
+        status: Execution status (optional) - can be single string or tuple/list of strings
         uploaded_by: Username (optional)
         limit: Pagination limit (default: 50)
         offset: Pagination offset (default: 0)
@@ -122,10 +122,22 @@ def generate_execution_list_cache_key(
     Examples:
         generate_execution_list_cache_key("January", 2025, "SUCCESS", "john", 50, 0)
         -> "allocation_executions:v1:January:2025:SUCCESS:john:50:0"
+
+        generate_execution_list_cache_key("January", 2025, ("FAILED", "SUCCESS"), "john", 50, 0)
+        -> "allocation_executions:v1:January:2025:FAILED,SUCCESS:john:50:0"
     """
     month_part = month or ""
     year_part = str(year) if year else ""
-    status_part = status or ""
+
+    # Handle status as string, list, or tuple
+    if status:
+        if isinstance(status, (list, tuple)):
+            status_part = ",".join(sorted(status))  # Sort for consistent cache keys
+        else:
+            status_part = status
+    else:
+        status_part = ""
+
     uploaded_by_part = uploaded_by or ""
     return f"allocation_executions:v1:{month_part}:{year_part}:{status_part}:{uploaded_by_part}:{limit}:{offset}"
 
