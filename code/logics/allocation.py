@@ -1748,37 +1748,40 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 
                 db_manager.save_allocation_report(
                     df=bucket_summary_combined,
+                    execution_id=execution_id,
                     month=data_month,
                     year=data_year,
                     report_type='bucket_summary',
                     created_by=forecast_file_uploaded_by,
                     updated_by=forecast_file_uploaded_by
                 )
-                logging.info("✓ Saved bucket_summary report to database")
+                logging.info(f"✓ Saved bucket_summary report to database (execution_id: {execution_id})")
 
                 # Generate and save buckets after allocation report
                 buckets_after_df = allocator.generate_buckets_after_allocation()
                 db_manager.save_allocation_report(
                     df=buckets_after_df,
+                    execution_id=execution_id,
                     month=data_month,
                     year=data_year,
                     report_type='bucket_after_allocation',
                     created_by=forecast_file_uploaded_by,
                     updated_by=forecast_file_uploaded_by
                 )
-                logging.info("✓ Saved bucket_after_allocation report to database")
+                logging.info(f"✓ Saved bucket_after_allocation report to database (execution_id: {execution_id})")
 
                 # Generate and save roster allotment report
                 roster_allotment_df = allocator.generate_roster_allotment()
                 db_manager.save_allocation_report(
                     df=roster_allotment_df,
+                    execution_id=execution_id,
                     month=data_month,
                     year=data_year,
                     report_type='roster_allotment',
                     created_by=forecast_file_uploaded_by,
                     updated_by=forecast_file_uploaded_by
                 )
-                logging.info("✓ Saved roster_allotment report to database")
+                logging.info(f"✓ Saved roster_allotment report to database (execution_id: {execution_id})")
 
             except Exception as e:
                 logging.error(f"Failed to save allocation reports to database: {e}")
@@ -1841,6 +1844,14 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
             if config_snapshot.get('month_config'):
                 update_status(execution_id, 'SUCCESS', config_snapshot=config_snapshot)
                 logging.info(f"Captured config snapshot: {list(config_snapshot['month_config'].keys())}")
+
+            # Cleanup old reports (retention policy - keep last 10 executions)
+            try:
+                db_manager.cleanup_old_reports(data_month, data_year, keep_last_n=10)
+                logging.info("✓ Retention policy cleanup completed")
+            except Exception as cleanup_error:
+                logging.warning(f"Failed to cleanup old reports: {cleanup_error}")
+                # Don't fail the execution if cleanup fails
 
             complete_execution(execution_id, success=True, stats=stats)
             logging.info(f"Processing completed successfully. Total time: {duration:.2f}s")

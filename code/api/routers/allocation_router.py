@@ -2,9 +2,26 @@
 Allocation report download and execution tracking endpoints.
 
 Provides endpoints for:
-- Downloading allocation reports (bucket summary, bucket after allocation, roster allotment)
+- Downloading allocation reports by execution_id (recommended)
+- Downloading allocation reports by month/year (backward compatibility - fetches latest execution)
 - Listing allocation execution history
 - Getting detailed execution information
+
+Report Types:
+- bucket_summary: Bucket structure and vendor details
+- bucket_after_allocation: Allocation status per bucket
+- roster_allotment: Vendor-level allocation details
+
+API Endpoints:
+  By execution_id (recommended):
+    GET /api/allocation/executions/{execution_id}/reports/bucket_summary
+    GET /api/allocation/executions/{execution_id}/reports/bucket_after_allocation
+    GET /api/allocation/executions/{execution_id}/reports/roster_allotment
+
+  By month/year (backward compatible):
+    GET /download_allocation_report/bucket_summary?month={month}&year={year}
+    GET /download_allocation_report/bucket_after_allocation?month={month}&year={year}
+    GET /download_allocation_report/roster_allotment?month={month}&year={year}
 """
 
 from fastapi import APIRouter, HTTPException
@@ -68,8 +85,8 @@ def download_allocation_bucket_summary(month: str, year: int):
             select_columns=None
         )
 
-        # Retrieve report data
-        df = db_manager.get_allocation_report_as_dataframes(month, year, 'bucket_summary')
+        # Retrieve latest execution's report data for backward compatibility
+        df = db_manager.get_latest_execution_report(month, year, 'bucket_summary')
 
         if df is None or df.empty:
             raise HTTPException(
@@ -133,8 +150,8 @@ def download_allocation_bucket_after_allocation(month: str, year: int):
             select_columns=None
         )
 
-        # Retrieve report data
-        df = db_manager.get_allocation_report_as_dataframes(month, year, 'bucket_after_allocation')
+        # Retrieve latest execution's report data for backward compatibility
+        df = db_manager.get_latest_execution_report(month, year, 'bucket_after_allocation')
 
         if df is None or df.empty:
             raise HTTPException(
@@ -193,8 +210,8 @@ def download_allocation_roster_allotment(month: str, year: int):
             select_columns=None
         )
 
-        # Retrieve report data
-        df = db_manager.get_allocation_report_as_dataframes(month, year, 'roster_allotment')
+        # Retrieve latest execution's report data for backward compatibility
+        df = db_manager.get_latest_execution_report(month, year, 'roster_allotment')
 
         if df is None or df.empty:
             raise HTTPException(
@@ -220,6 +237,191 @@ def download_allocation_roster_allotment(month: str, year: int):
         raise
     except Exception as e:
         logger.error(f"Error downloading roster_allotment report: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_response("Failed to download report", str(e))
+        )
+
+
+@router.get("/api/allocation/executions/{execution_id}/reports/bucket_summary")
+def download_allocation_bucket_summary_by_execution(execution_id: str):
+    """
+    Download bucket summary allocation report by execution_id as Excel file.
+
+    Path Parameters:
+        execution_id: UUID of the execution
+
+    Returns:
+        Excel file with bucket summary data (Summary and Details sheets)
+
+    Response Headers:
+        Content-Disposition: attachment; filename=bucket_summary_{execution_id}.xlsx
+
+    Raises:
+        404: Report not found for execution_id
+    """
+    try:
+        # Initialize DBManager
+        db_manager = DBManager(
+            database_url=DATABASE_URL,
+            Model=AllocationReportsModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
+        )
+
+        # Retrieve report data by execution_id
+        df = db_manager.get_allocation_report_by_execution_id_as_dataframe(execution_id, 'bucket_summary')
+
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=error_response(f"No bucket_summary report found for execution {execution_id}")
+            )
+
+        # Split combined report back into Summary and Details
+        summary_df = df[df['ReportSection'] == 'Summary'].drop(columns=['ReportSection'])
+        details_df = df[df['ReportSection'] == 'Details'].drop(columns=['ReportSection'])
+
+        # Create Excel file with two sheets
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            summary_df.to_excel(writer, sheet_name='Bucket_Summary', index=False)
+            details_df.to_excel(writer, sheet_name='Vendor_Details', index=False)
+        output.seek(0)
+
+        filename = f"bucket_summary_{execution_id}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading bucket_summary report by execution_id: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_response("Failed to download report", str(e))
+        )
+
+
+@router.get("/api/allocation/executions/{execution_id}/reports/bucket_after_allocation")
+def download_allocation_bucket_after_allocation_by_execution(execution_id: str):
+    """
+    Download buckets after allocation report by execution_id as Excel file.
+
+    Path Parameters:
+        execution_id: UUID of the execution
+
+    Returns:
+        Excel file with allocation status per bucket
+
+    Response Headers:
+        Content-Disposition: attachment; filename=buckets_after_allocation_{execution_id}.xlsx
+
+    Raises:
+        404: Report not found for execution_id
+    """
+    try:
+        # Initialize DBManager
+        db_manager = DBManager(
+            database_url=DATABASE_URL,
+            Model=AllocationReportsModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
+        )
+
+        # Retrieve report data by execution_id
+        df = db_manager.get_allocation_report_by_execution_id_as_dataframe(execution_id, 'bucket_after_allocation')
+
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=error_response(f"No bucket_after_allocation report found for execution {execution_id}")
+            )
+
+        # Create Excel file
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+
+        filename = f"buckets_after_allocation_{execution_id}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading bucket_after_allocation report by execution_id: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_response("Failed to download report", str(e))
+        )
+
+
+@router.get("/api/allocation/executions/{execution_id}/reports/roster_allotment")
+def download_allocation_roster_allotment_by_execution(execution_id: str):
+    """
+    Download roster allotment allocation report by execution_id as Excel file.
+
+    Path Parameters:
+        execution_id: UUID of the execution
+
+    Returns:
+        Excel file with vendor-level allocation details
+
+    Response Headers:
+        Content-Disposition: attachment; filename=roster_allotment_{execution_id}.xlsx
+
+    Raises:
+        404: Report not found for execution_id
+    """
+    try:
+        # Initialize DBManager
+        db_manager = DBManager(
+            database_url=DATABASE_URL,
+            Model=AllocationReportsModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
+        )
+
+        # Retrieve report data by execution_id
+        df = db_manager.get_allocation_report_by_execution_id_as_dataframe(execution_id, 'roster_allotment')
+
+        if df is None or df.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=error_response(f"No roster_allotment report found for execution {execution_id}")
+            )
+
+        # Create Excel file
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False)
+        output.seek(0)
+
+        filename = f"roster_allotment_{execution_id}.xlsx"
+
+        return StreamingResponse(
+            output,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename={filename}"}
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading roster_allotment report by execution_id: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=error_response("Failed to download report", str(e))

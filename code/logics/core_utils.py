@@ -88,7 +88,7 @@ def get_model_or_all_models(file_id:str=None)-> Union[Dict[str, Type], Type]:
     ALL_MODELS_KEY = 'All'
 
     if file_id.lower() == ALL_MODELS_KEY.lower():
-        return {key: value for key, value in MODEL_FIELD_MAPPING.items() if key != 'upload_roster'}
+        return {key: value for key, value in MODEL_FIELD_MAPPING.items() if key not in ['upload_roster', 'allocation_reports']}
 
     model = MODEL_FIELD_MAPPING.get(file_id.lower())
     if model is None:
@@ -608,7 +608,7 @@ class PreProcessing:
         except Exception as e:
             logger.error(f"Error extracting summary tables: {e}")
             raise HTTPException(status_code=400, detail=str(e))
-            
+
         for safe_filename in dfs["medicare_medicaid_summary"].keys():
             lob_components = parse_main_lob(safe_filename)
             if lob_components.get("platform") is None:

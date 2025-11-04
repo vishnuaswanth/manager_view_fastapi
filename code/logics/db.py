@@ -322,9 +322,11 @@ class ForecastMonthsModel(SQLModel, table=True):
 class AllocationReportsModel(SQLModel, table=True):
     """
     Model for storing allocation reports (bucket summary, bucket after allocation, roster allotment).
-    For each (Month, Year, ReportType) combination, only the latest report is stored.
+    Each execution_id can have multiple report types. Historical reports are preserved.
+    Reports are linked to AllocationExecutionModel via execution_id.
     """
     id: int | None = Field(default=None, primary_key=True)
+    execution_id: str = Field(sa_column=Column(String(36), nullable=False, index=True))  # UUID from AllocationExecutionModel
     Month: str = Field(sa_column=Column(String(15), nullable=False))
     Year: int = Field(nullable=False)
     ReportType: str = Field(sa_column=Column(String(50), nullable=False))  # 'bucket_summary', 'bucket_after_allocation', 'roster_allotment'
@@ -338,9 +340,10 @@ class AllocationReportsModel(SQLModel, table=True):
     )
     UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
 
-    # UniqueConstraint ensures only one report per (Month, Year, ReportType)
+    # UniqueConstraint ensures only one report per (execution_id, ReportType)
     __table_args__ = (
-        UniqueConstraint('Month', 'Year', 'ReportType', name='uix_allocation_report'),
+        UniqueConstraint('execution_id', 'ReportType', name='uix_allocation_report'),
+        Index('idx_allocation_execution', 'execution_id'),
         Index('idx_allocation_month_year', 'Month', 'Year'),
     )
 
@@ -1279,6 +1282,7 @@ class DBManager:
     def save_allocation_report(
         self,
         df: pd.DataFrame,
+        execution_id: str,
         month: str,
         year: int,
         report_type: str,
@@ -1287,10 +1291,11 @@ class DBManager:
     ):
         """
         Save allocation report to database using UPSERT logic.
-        If a report with the same (Month, Year, ReportType) exists, it will be replaced.
+        If a report with the same (execution_id, ReportType) exists, it will be replaced.
 
         Args:
             df: DataFrame containing the report data
+            execution_id: Unique execution identifier (UUID) from AllocationExecutionModel
             month: Month name (e.g., 'January')
             year: Year (e.g., 2025)
             report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
@@ -1308,11 +1313,10 @@ class DBManager:
             # Convert DataFrame to JSON string
             report_json = df.to_json(orient='records', date_format='iso')
 
-            # Check if report already exists
+            # Check if report already exists for this execution_id and report_type
             existing_report = session.query(Model).filter(
                 and_(
-                    Model.Month == normalized_month,
-                    Model.Year == year,
+                    Model.execution_id == execution_id,
                     Model.ReportType == report_type
                 )
             ).first()
@@ -1322,10 +1326,11 @@ class DBManager:
                 existing_report.ReportData = report_json
                 existing_report.UpdatedBy = updated_by
                 existing_report.UpdatedDateTime = datetime.now()
-                logger.info(f"[DBManager] Updated allocation report: {report_type} for {normalized_month} {year}")
+                logger.info(f"[DBManager] Updated allocation report: {report_type} for execution {execution_id}")
             else:
                 # Insert new report
                 new_report = Model(
+                    execution_id=execution_id,
                     Month=normalized_month,
                     Year=year,
                     ReportType=report_type,
@@ -1334,7 +1339,7 @@ class DBManager:
                     UpdatedBy=updated_by
                 )
                 session.add(new_report)
-                logger.info(f"[DBManager] Inserted new allocation report: {report_type} for {normalized_month} {year}")
+                logger.info(f"[DBManager] Inserted new allocation report: {report_type} for execution {execution_id} ({normalized_month} {year})")
 
             session.commit()
 
@@ -1421,6 +1426,186 @@ class DBManager:
         except Exception as e:
             logger.error(f"[DBManager] Error converting allocation report to DataFrame: {e}")
             raise
+
+    def get_allocation_report_by_execution_id(
+        self,
+        execution_id: str,
+        report_type: str
+    ) -> Optional[str]:
+        """
+        Retrieve allocation report by execution_id as JSON string.
+
+        Args:
+            execution_id: Unique execution identifier (UUID)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            JSON string of the report data, or None if not found
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            report = session.query(Model).filter(
+                and_(
+                    Model.execution_id == execution_id,
+                    Model.ReportType == report_type
+                )
+            ).first()
+
+            if report:
+                logger.info(f"[DBManager] Retrieved allocation report by execution_id: {report_type} for {execution_id}")
+                return report.ReportData
+            else:
+                logger.info(f"[DBManager] No allocation report found: {report_type} for execution {execution_id}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error retrieving allocation report by execution_id: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_allocation_report_by_execution_id_as_dataframe(
+        self,
+        execution_id: str,
+        report_type: str
+    ) -> Optional[pd.DataFrame]:
+        """
+        Retrieve allocation report by execution_id and convert to DataFrame.
+
+        Args:
+            execution_id: Unique execution identifier (UUID)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            DataFrame containing the report data, or None if not found
+        """
+        try:
+            report_json = self.get_allocation_report_by_execution_id(execution_id, report_type)
+
+            if report_json:
+                # Convert JSON string back to DataFrame
+                import json
+                df = pd.DataFrame(json.loads(report_json))
+                logger.info(f"[DBManager] Converted allocation report to DataFrame: {report_type} ({len(df)} rows)")
+                return df
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error converting allocation report to DataFrame: {e}")
+            raise
+
+    def get_latest_execution_report(
+        self,
+        month: str,
+        year: int,
+        report_type: str
+    ) -> Optional[pd.DataFrame]:
+        """
+        Get latest execution's report for a given month/year (backward compatibility).
+
+        This method fetches the most recent execution for the specified month/year,
+        then retrieves the corresponding report.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            DataFrame containing the report data, or None if not found
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+
+            # Find latest report for this month/year/type by CreatedDateTime
+            report = session.query(Model).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year,
+                    Model.ReportType == report_type
+                )
+            ).order_by(Model.CreatedDateTime.desc()).first()
+
+            if report:
+                logger.info(f"[DBManager] Retrieved latest allocation report: {report_type} for {normalized_month} {year} (execution: {report.execution_id})")
+                # Convert JSON string back to DataFrame
+                import json
+                df = pd.DataFrame(json.loads(report.ReportData))
+                return df
+            else:
+                logger.info(f"[DBManager] No allocation report found: {report_type} for {normalized_month} {year}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error retrieving latest execution report: {e}")
+            raise
+        finally:
+            session.close()
+
+    def cleanup_old_reports(
+        self,
+        month: str,
+        year: int,
+        keep_last_n: int = 10
+    ):
+        """
+        Cleanup old allocation reports, keeping only the last N executions per month/year.
+
+        This implements the retention policy to prevent unbounded database growth.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            keep_last_n: Number of most recent executions to keep (default: 10)
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+
+            # Get all unique execution_ids for this month/year, ordered by creation time
+            executions = session.query(Model.execution_id, Model.CreatedDateTime).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year
+                )
+            ).distinct().order_by(Model.CreatedDateTime.desc()).all()
+
+            # If we have more than keep_last_n executions, delete the older ones
+            if len(executions) > keep_last_n:
+                # Get execution_ids to delete (all except the most recent keep_last_n)
+                executions_to_delete = [exec_tuple[0] for exec_tuple in executions[keep_last_n:]]
+
+                if executions_to_delete:
+                    # Delete all reports for these executions
+                    deleted_count = session.query(Model).filter(
+                        and_(
+                            Model.Month == normalized_month,
+                            Model.Year == year,
+                            Model.execution_id.in_(executions_to_delete)
+                        )
+                    ).delete(synchronize_session=False)
+
+                    session.commit()
+                    logger.info(f"[DBManager] Cleaned up {deleted_count} old reports for {normalized_month} {year} (kept last {keep_last_n} executions)")
+                else:
+                    logger.info(f"[DBManager] No old reports to cleanup for {normalized_month} {year}")
+            else:
+                logger.info(f"[DBManager] No cleanup needed for {normalized_month} {year} ({len(executions)} executions, keeping {keep_last_n})")
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[DBManager] Error cleaning up old reports: {e}")
+            raise
+        finally:
+            session.close()
 
     def get_forecast_months_list(self, month:str, year:int, filename:str=None) -> List[str]:
         if not (month and year):
