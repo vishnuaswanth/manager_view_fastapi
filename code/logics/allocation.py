@@ -89,6 +89,28 @@ month_with_days = dict(zip(req_vars_df['months'], req_vars_df['No.of days occupa
 
 # Helper functions
 def get_value(row, month, filetype, df:pd.DataFrame=None):
+    """
+    Retrieves a specific forecast value from a pre-loaded DataFrame based on file type.
+
+    This function is designed to look up values from different structured forecast files
+    (MMP, Non-MMP, Summary) that have been loaded into pandas DataFrames. It filters the
+    DataFrame based on state and month and then finds the corresponding value for a
+    specific work type.
+
+    Args:
+        row (pd.Series): A row from the main output DataFrame, containing context
+            like 'Main LOB', 'State', and 'Case type'.
+        month (str): The month (e.g., "January") for which to retrieve the forecast value.
+        filetype (str): The type of forecast file the DataFrame originated from.
+            Expected values: 'medicare_medicaid_nonmmp', 'medicare_medicaid_mmp',
+            'medicare_medicaid_summary'.
+        df (pd.DataFrame, optional): The pre-loaded DataFrame to search within.
+            If None or empty, the function returns 0. Defaults to None.
+
+    Returns:
+        int or float: The forecast value found in the DataFrame. Returns 0 if the
+        value is not found, the DataFrame is empty, or an error occurs during lookup.
+    """
     if df is None or getattr(df, 'empty', True):
         return 0
 
