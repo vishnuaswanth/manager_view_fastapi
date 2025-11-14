@@ -437,6 +437,12 @@ class PreProcessing:
             for col in df.columns.values
         ]
 
+        # Remove unnamed columns (often contain index values)
+        unnamed_cols = [col for col in df.columns if 'Unnamed' in str(col)]
+        if unnamed_cols:
+            df = df.drop(columns=unnamed_cols)
+            logger.info(f"Removed {len(unnamed_cols)} unnamed column(s) from forecast data")
+
         return df
 
 
