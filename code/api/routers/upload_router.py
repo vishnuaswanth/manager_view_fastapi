@@ -272,6 +272,154 @@ async def upload_file(
     return success_response(message="File uploaded and data saved successfully")
 
 
+@router.post("/upload/altered_forecast")
+async def upload_altered_forecast(
+    user: str,
+    file: UploadFile = File(...),
+):
+    """
+    Upload altered/modified forecast file (downloaded format) to replace existing data.
+
+    This endpoint handles re-uploading a forecast file that was previously downloaded,
+    possibly with modifications. It replaces existing ForecastModel data for the
+    given month/year without triggering allocation processing.
+
+    Query Parameters:
+        user: Username of the person uploading
+
+    Request Body:
+        file: Excel file in downloaded forecast format (2-level headers with
+              Client Forecast, FTE Required, FTE Avail, and Capacity columns)
+
+    Responses:
+        200: File uploaded and existing data replaced successfully
+        400: Invalid file type, format, or missing month/year in filename
+        500: Processing or database error
+
+    Processing:
+        - Validates file type (.xlsx, .xlsm, .csv)
+        - Extracts month/year from filename
+        - Parses 2-level header structure
+        - Removes totals row if present
+        - Replaces existing ForecastModel data for the month/year
+        - Updates ForecastMonthsModel with month mappings
+        - Invalidates forecast caches
+        - Does NOT trigger allocation processing
+    """
+    # Validate file type
+    if not file.filename.endswith(('.xlsx', '.xlsm', '.csv')):
+        raise HTTPException(
+            status_code=400,
+            detail=error_response("Invalid file type. Expected .xlsx, .xlsm, or .csv")
+        )
+
+    try:
+        # Read file contents
+        contents = await file.read()
+
+        # Extract month and year from filename
+        pre_processor = PreProcessing('forecast')
+        month_year = pre_processor.get_month_year(file.filename)
+
+        if not month_year:
+            raise HTTPException(
+                status_code=400,
+                detail=error_response(
+                    "Filename must contain month and year",
+                    {"example": "forecast_Jan_2024.xlsx or forecast_January-2024.xlsx"}
+                )
+            )
+
+        # Process forecast file with 2-level headers (downloaded format)
+        df = pre_processor._process_forecast(io.BytesIO(contents), header_rows=2)
+
+
+
+        # Assign standard column names from MAPPING
+        columns = pre_processor.MAPPING['forecast']
+        if len(df.columns) != len(columns):
+            raise HTTPException(
+                status_code=400,
+                detail=error_response(
+                    f"Column count mismatch. Expected {len(columns)} columns, got {len(df.columns)}",
+                    {
+                        "expected": len(columns),
+                        "actual": len(df.columns),
+                        "hint": "Ensure the file is in the correct downloaded forecast format"
+                    }
+                )
+            )
+        df.columns = columns
+
+        # Remove totals row if present (detect "Total" in first column)
+        if not df.empty and df.iloc[:, 0].dtype == object:
+            df = df[~df.iloc[:, 0].astype(str).str.contains("Total", case=False, na=False)]
+
+        # Add metadata columns
+        meta_info = {
+            "Month": month_year["Month"],
+            "Year": int(month_year["Year"]),
+            "CreatedBy": user,
+            "UpdatedBy": user,
+            "UploadedFile": file.filename
+        }
+        for col, val in meta_info.items():
+            df[col] = val
+
+        # Save to ForecastModel with replace=True (deletes old data for this month/year)
+        Model = get_model_or_all_models('forecast')
+        db_manager = core_utils.get_db_manager(Model)
+        db_manager.save_to_db(df, replace=True)
+
+        # Update ForecastMonthsModel with month mappings
+        db_manager_forecast = core_utils.get_db_manager(ForecastMonthsModel)
+        forecast_meta = pre_processor.month_codes
+        forecast_meta["UploadedFile"] = file.filename
+        forecast_meta["CreatedBy"] = user
+        forecast_df = pd.DataFrame([forecast_meta])
+        db_manager_forecast.save_to_db(forecast_df)
+
+        # Invalidate all forecast-related caches
+        invalidate_forecast_cache(month_year["Month"], int(month_year["Year"]))
+
+        # Track upload time
+        db_manager_time = core_utils.get_db_manager(UploadDataTimeDetails)
+        db_manager_time.insert_upload_data_time_details_if_not_exists(
+            month_year["Month"],
+            int(month_year["Year"])
+        )
+
+        logger.info(
+            f"Altered forecast uploaded successfully: {file.filename} "
+            f"for {month_year['Month']} {month_year['Year']} by {user}"
+        )
+
+        return success_response(
+            message="Altered forecast uploaded and data replaced successfully",
+            data={
+                "month": month_year["Month"],
+                "year": int(month_year["Year"]),
+                "rows_inserted": len(df),
+                "filename": file.filename
+            }
+        )
+
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions with original details
+    except ValueError as ve:
+        logger.error(f"Validation error processing altered forecast: {ve}")
+        raise HTTPException(
+            status_code=400,
+            detail=error_response("Invalid forecast file format", str(ve))
+        )
+    except Exception as e:
+        logger.error(f"Error processing altered forecast file: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_response("Error processing altered forecast file", str(e))
+        )
+
+
 @router.get("/records/{file_id}")
 def get_records(
     file_id: str,
