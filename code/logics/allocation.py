@@ -5,6 +5,7 @@ import re
 import copy
 import traceback
 import logging
+import calendar
 from datetime import datetime
 from typing import List, Dict, Tuple
 
@@ -88,6 +89,43 @@ month_with_days = dict(zip(req_vars_df['months'], req_vars_df['No.of days occupa
 # state_with_worktype_volume_dict = {}
 
 # Helper functions
+def get_year_for_month(data_month: str, data_year: int, current_month: str) -> int:
+    """
+    Calculate the correct year for a month in a consecutive 6-month sequence.
+
+    When processing month_headers (6 consecutive months), months may wrap from
+    December into January of the next year. This function determines the correct
+    year to use for config lookups.
+
+    Args:
+        data_month (str): The first month in the sequence (e.g., "August")
+        data_year (int): The year of the first month (e.g., 2024)
+        current_month (str): The month we need to determine the year for (e.g., "January")
+
+    Returns:
+        int: The correct year for the current_month
+
+    Examples:
+        >>> get_year_for_month("August", 2024, "August")
+        2024
+        >>> get_year_for_month("August", 2024, "December")
+        2024
+        >>> get_year_for_month("August", 2024, "January")
+        2025  # Wrapped to next year
+        >>> get_year_for_month("January", 2024, "June")
+        2024  # No wrapping
+    """
+    # Create mapping from month name to month number (1-12)
+    month_to_num = {month: idx for idx, month in enumerate(calendar.month_name) if month}
+
+    # Convert month names to numbers
+    data_month_num = month_to_num[data_month]
+    current_month_num = month_to_num[current_month]
+
+    # If current month number < starting month number, we've wrapped to next year
+    return data_year + 1 if current_month_num < data_month_num else data_year
+
+
 def get_value(row, month, filetype, df:pd.DataFrame=None):
     """
     Retrieves a specific forecast value from a pre-loaded DataFrame based on file type.
@@ -264,7 +302,7 @@ def get_fte_required(row, month, calculations: Calculations):
             work_type = 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
 
         # Get work-type-specific configuration
-        year = calculations.data_year if calculations.data_year else datetime.now().year  # Fallback to current year
+        year = get_year_for_month(calculations.data_month, calculations.data_year, month)
         config = calculations.get_config_for_worktype(month, year, work_type)
 
         no_of_days = config['working_days']
@@ -1277,7 +1315,7 @@ def get_capacity(row, month, calculations: Calculations):
             work_type = 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
 
         # Get work-type-specific configuration
-        year = calculations.data_year if calculations.data_year else datetime.now().year  # Fallback to current year
+        year = get_year_for_month(calculations.data_month, calculations.data_year, month)
         config = calculations.get_config_for_worktype(month, year, work_type)
 
         no_of_days = config['working_days']
