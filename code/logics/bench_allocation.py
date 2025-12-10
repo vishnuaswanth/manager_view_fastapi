@@ -20,10 +20,10 @@ import pandas as pd
 import logging
 import re
 
-from code.core_utils import CoreUtils
+from code.logics.core_utils import CoreUtils
 from code.logics.db import AllocationReportsModel, ForecastModel, MonthConfigurationModel
 from code.logics.allocation import parse_main_lob, normalize_locality, Calculations
-from code.logics.allocation_validity import validate_allocation_is_current
+from code.logics.allocation_validity import validate_allocation_is_curre
 
 logger = logging.getLogger(__name__)
 
@@ -651,7 +651,7 @@ def allocate_bench_for_month(
         consolidated_allocations = {}
         for allocation in all_allocations:
             f_id = allocation['forecast_row']['forecast_id']
-            
+
             if f_id not in consolidated_allocations:
                 # Initialize with the row state (which is updated in-place during allocation)
                 consolidated_allocations[f_id] = {
@@ -662,23 +662,23 @@ def allocate_bench_for_month(
                     'fte_change': 0,
                     'capacity_change': 0
                 }
-            
+
             # Add vendor details
             consolidated_allocations[f_id]['vendors'].append(allocation['vendor'])
-            
+
             # Update counts
             if allocation['allocation_type'] == 'gap_fill':
                 consolidated_allocations[f_id]['gap_fill_count'] += 1
             elif allocation['allocation_type'] == 'excess_distribution':
                 consolidated_allocations[f_id]['excess_distribution_count'] += 1
-                
+
             # Update total change
             consolidated_allocations[f_id]['fte_change'] += allocation['fte_allocated']
 
         # Recalculate capacity for consolidated rows
         for f_id, data in consolidated_allocations.items():
             row = data['forecast_row']
-            
+
             # Determine work type (Domestic/Global)
             main_lob = row['main_lob']
             case_type = row['case_type']
@@ -696,20 +696,20 @@ def allocate_bench_for_month(
             # Get config for this specific row's month/year
             try:
                 config = calculations.get_config_for_worktype(row['month_name'], row['month_year'], work_type)
-                
+
                 # Calculate new capacity
                 new_capacity = (
-                    row['target_cph'] * 
-                    row['fte_avail'] * 
-                    (1 - config['shrinkage']) * 
-                    config['working_days'] * 
+                    row['target_cph'] *
+                    row['fte_avail'] *
+                    (1 - config['shrinkage']) *
+                    config['working_days'] *
                     config['work_hours']
                 )
-                
+
                 old_capacity = row['capacity']
                 row['capacity'] = int(round(new_capacity))
                 data['capacity_change'] = row['capacity'] - old_capacity
-                
+
             except Exception as e:
                 logger.warning(f"Could not recalculate capacity for forecast_id {f_id}: {e}")
 

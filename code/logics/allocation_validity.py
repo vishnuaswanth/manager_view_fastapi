@@ -12,7 +12,7 @@ from datetime import datetime
 import logging
 
 from code.logics.db import AllocationValidityModel
-from code.core_utils import CoreUtils
+from code.logics.core_utils import CoreUtils
 
 logger = logging.getLogger(__name__)
 

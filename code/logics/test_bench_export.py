@@ -1,8 +1,8 @@
 import pandas as pd
-from code.core_utils import CoreUtils
+from code.logics.core_utils import CoreUtils
 from code.logics.bench_allocation import allocate_bench_for_month
 from code.logics.bench_allocation_export import create_changes_workbook
-from code.settings import DATABASE_URL  # Assuming this exists
+from code.main import DATABASE_URL  # Assuming this exists
 import os
 import logging
 
@@ -14,35 +14,35 @@ def test_bench_allocation_export(month="March", year=2025):
     """
     Test function to run bench allocation for a specific month/year
     and export the results to Excel files in the logics folder.
-    
+
     This function does NOT update the database.
     """
     logger.info(f"Starting test bench allocation for {month} {year}")
-    
+
     # Initialize CoreUtils
     core_utils = CoreUtils(DATABASE_URL)
-    
+
     # 1. Run allocation logic
     # This reads from DB but returns a result dict (doesn't write to DB)
     result = allocate_bench_for_month(month, year, core_utils)
-    
+
     if not result['success']:
         logger.error(f"Allocation failed: {result.get('error')}")
         return
 
     logger.info("Allocation logic completed successfully.")
-    
+
     # 2. Prepare data for 'modified forecast' Excel
     # The result['allocations'] is now a consolidated list of dicts.
     # Each dict has 'forecast_row' (with updated values), 'vendors', etc.
-    
+
     modified_rows = []
     changes_detail = []
     vendor_assignments = []
-    
+
     for alloc in result['allocations']:
         row = alloc['forecast_row']
-        
+
         # Structure for Modified Forecast Sheet (matches download format roughly)
         # Note: ForecatModel has Month1-Month6. The forecast_row is unnormalized (single month).
         # To truly match download format, we'd need to map this back to 6-month wide format,
@@ -60,7 +60,11 @@ def test_bench_allocation_export(month="March", year=2025):
             'Capacity (New)': row['capacity']
         }
         modified_rows.append(modified_row)
-        
+
+        capacity_before = row['capacity'] - alloc.get('capacity_change', 0)
+        capacity_change = alloc.get('capacity_change', 0)
+        capacity_pct_change = (capacity_change / capacity_before) if capacity_before else 0
+
         # Structure for Changes Detail Sheet
         change = {
             'main_lob': row['main_lob'],
@@ -72,12 +76,14 @@ def test_bench_allocation_export(month="March", year=2025):
             'fte_avail_after': row['fte_avail'],
             'fte_change': alloc['fte_change'],
             'allocation_type': f"Gap: {alloc['gap_fill_count']}, Excess: {alloc['excess_distribution_count']}",
-            'capacity_before': row['capacity'] - alloc.get('capacity_change', 0),
+            'vendors_allocated': len(alloc['vendors']),
+            'capacity_before': capacity_before,
             'capacity_after': row['capacity'],
-            'capacity_change': alloc.get('capacity_change', 0)
+            'capacity_change': capacity_change,
+            'capacity_pct_change': capacity_pct_change
         }
         changes_detail.append(change)
-        
+
         # Structure for Vendor Assignments Sheet
         for vendor in alloc['vendors']:
             assignment = {
@@ -92,7 +98,7 @@ def test_bench_allocation_export(month="March", year=2025):
 
     # Convert to DataFrame
     modified_forecast_df = pd.DataFrame(modified_rows)
-    
+
     # 3. Create Summary Dict
     summary = {
         'month': month,
@@ -114,12 +120,12 @@ def test_bench_allocation_export(month="March", year=2025):
         vendor_assignments=vendor_assignments,
         output_dir=output_dir
     )
-    
+
     logger.info(f"Bench allocation export created at: {excel_path}")
-    
-    # Note: Roster Model and Buckets After Allocation are typically generated 
+
+    # Note: Roster Model and Buckets After Allocation are typically generated
     # inside the 'allocator' class in allocation.py. bench_allocation.py uses a different logic.
-    # The 'vendor_assignments' sheet in the workbook above serves as the updated roster list 
+    # The 'vendor_assignments' sheet in the workbook above serves as the updated roster list
     # for the bench vendors specifically.
 
 if __name__ == "__main__":
