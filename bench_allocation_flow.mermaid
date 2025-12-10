@@ -1,0 +1,83 @@
+flowchart TD
+    %% Global Styles
+    classDef bucket fill:#e1f5fe,stroke:#01579b,stroke-width:2px;
+    classDef process fill:#f3e5f5,stroke:#4a148c,stroke-width:2px;
+    classDef decision fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
+    classDef data fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef state fill:#fbe9e7,stroke:#bf360c,stroke-width:2px;
+
+    subgraph Bucket_Context [Bucket: HelpDesk / US / Jan / TechSupport]
+        direction TB
+        
+        subgraph Inputs
+            FR[Forecast Rows]:::data
+            V[Unallocated Vendors]:::data
+        end
+
+        FR -->|Contains| R1[Row 1: FL<br>Req: 2, Avail: 0<br>Gap: 2]
+        FR -->|Contains| R2[Row 2: TX<br>Req: 1, Avail: 0<br>Gap: 1]
+        FR -->|Contains| R3[Row 3: NY<br>Req: 3, Avail: 2<br>Gap: 1]
+
+        V -->|Contains| VA[Vendor A<br>States: FL, GA, N/A]
+        V -->|Contains| VB[Vendor B<br>States: TX, N/A]
+        V -->|Contains| VC[Vendor C<br>States: N/A]
+        V -->|Contains| VD[Vendor D<br>States: NY, FL, N/A]
+    end
+
+    subgraph Phase1 [Phase 1: Fill Gaps]
+        direction TB
+        P1_Start(Start Gap Fill):::process
+        
+        %% Row 1 Processing
+        R1_Check{Row 1 Gap > 0?}:::decision
+        P1_Start --> R1_Check
+        R1_Check -- Yes --> R1_Search[Search Vendors for 'FL']:::process
+        R1_Search -->|Found| VA_Alloc[Allocate Vendor A to Row 1]:::state
+        VA_Alloc -->|Found| VD_Alloc[Allocate Vendor D to Row 1]:::state
+        VD_Alloc --> R1_Done[Row 1 Gap Filled<br>Rem Gap: 0]:::process
+
+        %% Row 2 Processing
+        R2_Check{Row 2 Gap > 0?}:::decision
+        R1_Done --> R2_Check
+        R2_Check -- Yes --> R2_Search[Search Vendors for 'TX']:::process
+        R2_Search -->|Found| VB_Alloc[Allocate Vendor B to Row 2]:::state
+        VB_Alloc --> R2_Done[Row 2 Gap Filled<br>Rem Gap: 0]:::process
+
+        %% Row 3 Processing
+        R3_Check{Row 3 Gap > 0?}:::decision
+        R2_Done --> R3_Check
+        R3_Check -- Yes --> R3_Search[Search Vendors for 'NY']:::process
+        R3_Search -->|Remaining: Vendor C| C_Check{Vendor C has 'NY'?}:::decision
+        C_Check -- No Only N/A --> R3_Skip[Skip - Strict State Match Required]:::process
+        R3_Skip --> P1_End(End Gap Fill):::process
+    end
+
+    Bucket_Context --> Phase1
+
+    subgraph Phase2 [Phase 2: Distribute Excess]
+        direction TB
+        P2_Start(Start Excess Dist):::process
+        P1_End --> P2_Start
+        
+        Calc_Shares[Calculate Proportional Shares]:::process
+        P2_Start --> Calc_Shares
+        
+        %% Calculation Logic
+        Calc_Shares -->|Total Demand: 6| Shares_Info[R1: 33%, R2: 16%, R3: 50%]:::data
+        Shares_Info -->|Vendor C Left| Alloc_Slot[Assign 1 Slot to Highest Need<br>Row 3 gets slot]:::process
+        
+        %% Allocation Logic with Fallback
+        Alloc_Slot --> Match_Excess[Match Vendor C to Row 3]:::process
+        Match_Excess --> Ex_State_Check{Vendor C has 'NY'?}:::decision
+        Ex_State_Check -- No --> Ex_Fallback_Check{Vendor C has 'N/A'?}:::decision
+        Ex_Fallback_Check -- Yes --> VC_Alloc[Allocate Vendor C to Row 3]:::state
+        VC_Alloc --> P2_End(End Allocation):::process
+    end
+    
+    subgraph Final_Output [Final Status]
+        Res1[Row 1: Gap Filled]:::data
+        Res2[Row 2: Gap Filled]:::data
+        Res3[Row 3: Gap Partial Filled<br>1 Gap Left, 1 Excess Added]:::data
+    end
+
+    Phase2 --> Final_Output

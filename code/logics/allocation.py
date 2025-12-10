@@ -27,6 +27,7 @@ from code.logics.db import ProdTeamRosterModel, AllocationReportsModel
 # Local application imports - utility modules
 from code.logics.month_config_utils import get_specific_config
 from code.logics.allocation_tracker import start_execution, update_status, complete_execution
+from code.logics.allocation_validity import create_validity_record
 from code.logics.export_utils import (
     get_latest_or_requested_dataframe,
     update_forecast_data,
@@ -1842,6 +1843,19 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                     updated_by=forecast_file_uploaded_by
                 )
                 logging.info(f"✓ Saved roster_allotment report to database (execution_id: {execution_id})")
+
+                # Create allocation validity record
+                logging.info("Creating allocation validity record...")
+                validity_result = create_validity_record(
+                    month=data_month,
+                    year=data_year,
+                    execution_id=execution_id,
+                    core_utils=core_utils
+                )
+                if validity_result.get('success'):
+                    logging.info(f"✓ {validity_result.get('message')}")
+                else:
+                    logging.warning(f"Failed to create validity record: {validity_result.get('error')}")
 
             except Exception as e:
                 logging.error(f"Failed to save allocation reports to database: {e}")

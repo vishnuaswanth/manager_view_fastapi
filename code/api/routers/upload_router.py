@@ -30,6 +30,7 @@ from code.logics.export_utils import (
     download_forecast_excel
 )
 from code.logics.allocation import process_files
+from code.logics.allocation_validity import invalidate_allocation
 from code.logics.db import (
     InValidSearchException,
     ForecastMonthsModel,
@@ -185,6 +186,18 @@ async def upload_altered_forecast(
 
         # Invalidate all forecast-related caches
         invalidate_forecast_cache(month_year["Month"], int(month_year["Year"]))
+
+        # Invalidate allocation validity (forecast data was manually edited)
+        invalidate_result = invalidate_allocation(
+            month=month_year["Month"],
+            year=int(month_year["Year"]),
+            reason=f"Altered forecast uploaded via API by {user}",
+            core_utils=core_utils
+        )
+        if invalidate_result.get('success'):
+            logger.info(f"Allocation invalidated for {month_year['Month']} {month_year['Year']}")
+        else:
+            logger.warning(f"Failed to invalidate allocation: {invalidate_result.get('error')}")
 
         # Track upload time
         db_manager_time = core_utils.get_db_manager(UploadDataTimeDetails)

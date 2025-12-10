@@ -495,6 +495,40 @@ class RawData(SQLModel, table=True):
     }
 
 
+class AllocationValidityModel(SQLModel, table=True):
+    """
+    Tracks whether allocation is still valid for a given month/year.
+    Gets invalidated when forecast data is manually edited through any API.
+
+    This prevents bench allocation from using stale allocation reports.
+    """
+    __tablename__ = "allocation_validity"
+
+    id: int = Field(default=None, primary_key=True)
+    month: str = Field(sa_column=Column(String(20), nullable=False))
+    year: int = Field(sa_column=Column(Integer, nullable=False))
+    allocation_execution_id: str = Field(sa_column=Column(String(255), nullable=False))
+    is_valid: bool = Field(default=True, nullable=False)
+
+    created_datetime: datetime = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    invalidated_datetime: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime)
+    )
+    invalidated_reason: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text)
+    )
+
+    __table_args__ = (
+        Index('idx_validity_month_year', 'month', 'year'),
+        UniqueConstraint('month', 'year', name='uq_month_year'),
+    )
+
+
 class InValidSearchException(Exception):
     """Exception raised for custom error scenarios.
 
