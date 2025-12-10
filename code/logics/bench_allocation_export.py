@@ -315,7 +315,7 @@ def _create_changes_detail_sheet(wb: Workbook, changes: List[Dict]):
     }
 
     # Reorder and rename
-    changes_df = changes_df[columns]
+    changes_df = changes_df.reindex(columns=columns)
     changes_df = changes_df.rename(columns=display_columns)
 
     # Write headers
@@ -397,7 +397,7 @@ def _create_vendor_assignments_sheet(wb: Workbook, vendor_assignments: List[Dict
     }
 
     # Reorder and rename
-    assignments_df = assignments_df[columns]
+    assignments_df = assignments_df.reindex(columns=columns)
     assignments_df = assignments_df.rename(columns=display_columns)
 
     # Write headers

@@ -10,6 +10,63 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def fetch_forecast_by_id(forecast_id: int, core_utils: CoreUtils) -> dict:
+    """
+    Fetch complete forecast record by ID from database.
+    Returns dict with all ForecastModel columns.
+    """
+    from code.logics.db import ForecastModel
+
+    # Get database session through core_utils
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0)
+
+    # Query by ID using the session
+    result = db_manager.session.query(ForecastModel).filter(ForecastModel.id == forecast_id).first()
+
+    if not result:
+        raise ValueError(f"Forecast record with ID {forecast_id} not found")
+
+    # Convert to dict with all columns
+    return {
+        'forecast_id': result.id,
+        'main_lob': result.Centene_Capacity_Plan_Main_LOB,
+        'state': result.Centene_Capacity_Plan_State,
+        'case_type': result.Centene_Capacity_Plan_Case_Type,
+        'call_type_id': result.Centene_Capacity_Plan_Call_Type_ID,
+        'target_cph': result.Centene_Capacity_Plan_Target_CPH,
+        'Client_Forecast_Month1': result.Client_Forecast_Month1,
+        'Client_Forecast_Month2': result.Client_Forecast_Month2,
+        'Client_Forecast_Month3': result.Client_Forecast_Month3,
+        'Client_Forecast_Month4': result.Client_Forecast_Month4,
+        'Client_Forecast_Month5': result.Client_Forecast_Month5,
+        'Client_Forecast_Month6': result.Client_Forecast_Month6,
+        'FTE_Required_Month1': result.FTE_Required_Month1,
+        'FTE_Required_Month2': result.FTE_Required_Month2,
+        'FTE_Required_Month3': result.FTE_Required_Month3,
+        'FTE_Required_Month4': result.FTE_Required_Month4,
+        'FTE_Required_Month5': result.FTE_Required_Month5,
+        'FTE_Required_Month6': result.FTE_Required_Month6,
+        'FTE_Avail_Month1': result.FTE_Avail_Month1,
+        'FTE_Avail_Month2': result.FTE_Avail_Month2,
+        'FTE_Avail_Month3': result.FTE_Avail_Month3,
+        'FTE_Avail_Month4': result.FTE_Avail_Month4,
+        'FTE_Avail_Month5': result.FTE_Avail_Month5,
+        'FTE_Avail_Month6': result.FTE_Avail_Month6,
+        'Capacity_Month1': result.Capacity_Month1,
+        'Capacity_Month2': result.Capacity_Month2,
+        'Capacity_Month3': result.Capacity_Month3,
+        'Capacity_Month4': result.Capacity_Month4,
+        'Capacity_Month5': result.Capacity_Month5,
+        'Capacity_Month6': result.Capacity_Month6,
+        'Month': result.Month,
+        'Year': result.Year,
+        'UploadedFile': result.UploadedFile,
+        'CreatedBy': result.CreatedBy,
+        'CreatedDateTime': result.CreatedDateTime,
+        'UpdatedBy': result.UpdatedBy,
+        'UpdatedDateTime': result.UpdatedDateTime
+    }
+
 def test_bench_allocation_export(month="March", year=2025):
     """
     Test function to run bench allocation for a specific month/year
@@ -40,28 +97,85 @@ def test_bench_allocation_export(month="March", year=2025):
     changes_detail = []
     vendor_assignments = []
 
+    # Track unique forecast IDs to avoid duplicates
+    processed_forecast_ids = set()
+
     for alloc in result['allocations']:
         row = alloc['forecast_row']
+        forecast_id = row['forecast_id']
 
-        # Structure for Modified Forecast Sheet (matches download format roughly)
-        # Note: ForecatModel has Month1-Month6. The forecast_row is unnormalized (single month).
-        # To truly match download format, we'd need to map this back to 6-month wide format,
-        # but for this test/debug export, we'll dump the relevant single-month data.
-        modified_row = {
-            'Centene Capacity Plan Main LOB': row['main_lob'],
-            'Centene Capacity Plan State': row['state'],
-            'Centene Capacity Plan Case Type': row['case_type'],
-            'Month': row['month_name'],
-            'Year': row['month_year'],
-            'FTE Required': row['fte_required'],
-            'FTE Avail (Old)': row['fte_avail_original'],
-            'FTE Avail (New)': row['fte_avail'],
-            'Capacity (Old)': row['capacity'] - alloc.get('capacity_change', 0),
-            'Capacity (New)': row['capacity']
-        }
-        modified_rows.append(modified_row)
+        # Only process each forecast_id once (avoid duplicate rows)
+        if forecast_id in processed_forecast_ids:
+            # Still need to process changes_detail and vendor_assignments
+            # but skip modified_rows
+            pass
+        else:
+            processed_forecast_ids.add(forecast_id)
 
-        capacity_before = row['capacity'] - alloc.get('capacity_change', 0)
+            # Fetch complete forecast record from database with all 6 months
+            try:
+                complete_record = fetch_forecast_by_id(forecast_id, core_utils)
+            except ValueError as e:
+                logger.error(f"Could not fetch forecast record {forecast_id}: {e}")
+                continue
+
+            # Get the month index for this allocation
+            m_idx = row['month_index']
+
+            # Build modified row with all 6 months of data
+            modified_row = {
+                'Centene Capacity Plan Main LOB': complete_record['main_lob'],
+                'Centene Capacity Plan State': complete_record['state'],
+                'Centene Capacity Plan Case Type': complete_record['case_type'],
+                'Centene Capacity Plan Call Type ID': complete_record.get('call_type_id'),
+                'Centene Capacity Plan Target CPH': complete_record.get('target_cph'),
+
+                # All 6 months of Client Forecast (from database)
+                'Client Forecast Month1': complete_record.get('Client_Forecast_Month1'),
+                'Client Forecast Month2': complete_record.get('Client_Forecast_Month2'),
+                'Client Forecast Month3': complete_record.get('Client_Forecast_Month3'),
+                'Client Forecast Month4': complete_record.get('Client_Forecast_Month4'),
+                'Client Forecast Month5': complete_record.get('Client_Forecast_Month5'),
+                'Client Forecast Month6': complete_record.get('Client_Forecast_Month6'),
+
+                # All 6 months of FTE Required (from database)
+                'FTE Required Month1': complete_record.get('FTE_Required_Month1'),
+                'FTE Required Month2': complete_record.get('FTE_Required_Month2'),
+                'FTE Required Month3': complete_record.get('FTE_Required_Month3'),
+                'FTE Required Month4': complete_record.get('FTE_Required_Month4'),
+                'FTE Required Month5': complete_record.get('FTE_Required_Month5'),
+                'FTE Required Month6': complete_record.get('FTE_Required_Month6'),
+
+                # All 6 months of FTE Avail (from database)
+                'FTE Avail Month1': complete_record.get('FTE_Avail_Month1'),
+                'FTE Avail Month2': complete_record.get('FTE_Avail_Month2'),
+                'FTE Avail Month3': complete_record.get('FTE_Avail_Month3'),
+                'FTE Avail Month4': complete_record.get('FTE_Avail_Month4'),
+                'FTE Avail Month5': complete_record.get('FTE_Avail_Month5'),
+                'FTE Avail Month6': complete_record.get('FTE_Avail_Month6'),
+
+                # All 6 months of Capacity (from database)
+                'Capacity Month1': complete_record.get('Capacity_Month1'),
+                'Capacity Month2': complete_record.get('Capacity_Month2'),
+                'Capacity Month3': complete_record.get('Capacity_Month3'),
+                'Capacity Month4': complete_record.get('Capacity_Month4'),
+                'Capacity Month5': complete_record.get('Capacity_Month5'),
+                'Capacity Month6': complete_record.get('Capacity_Month6'),
+
+                'Month': complete_record['Month'],
+                'Year': complete_record['Year'],
+                'UploadedFile': complete_record.get('UploadedFile'),
+                'UpdatedBy': 'Bench Allocation Test',
+                'UpdatedDateTime': None
+            }
+
+            # Update the specific allocated month with modified values
+            modified_row[f'FTE Avail Month{m_idx}'] = row['fte_avail']
+            modified_row[f'Capacity Month{m_idx}'] = row['capacity']
+
+            modified_rows.append(modified_row)
+
+        capacity_before = row.get('capacity_original', row['capacity'])
         capacity_change = alloc.get('capacity_change', 0)
         capacity_pct_change = (capacity_change / capacity_before) if capacity_before else 0
 
@@ -90,9 +204,12 @@ def test_bench_allocation_export(month="March", year=2025):
                 'vendor_name': f"{vendor.get('first_name')} {vendor.get('last_name')}",
                 'vendor_cn': vendor.get('cn'),
                 'vendor_skills': vendor.get('skills'),
+                'vendor_states': ", ".join(vendor.get('state_list', [])),
                 'allocated_to_lob': row['main_lob'],
                 'allocated_to_state': row['state'],
-                'allocated_to_worktype': row['case_type']
+                'allocated_to_worktype': row['case_type'],
+                'allocation_month': row['month_name'],
+                'allocation_type': "Bench"
             }
             vendor_assignments.append(assignment)
 

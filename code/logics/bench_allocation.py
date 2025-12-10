@@ -223,7 +223,8 @@ def unnormalize_forecast_data(
                 'fte_required': getattr(record, f'FTE_Required_Month{month_idx}', 0) or 0,
                 'fte_avail': getattr(record, f'FTE_Avail_Month{month_idx}', 0) or 0,
                 'fte_avail_original': getattr(record, f'FTE_Avail_Month{month_idx}', 0) or 0,
-                'capacity': getattr(record, f'Capacity_Month{month_idx}', 0) or 0
+                'capacity': getattr(record, f'Capacity_Month{month_idx}', 0) or 0,
+                'capacity_original': getattr(record, f'Capacity_Month{month_idx}', 0) or 0
             }
             rows.append(row)
 
@@ -706,7 +707,7 @@ def allocate_bench_for_month(
                     config['work_hours']
                 )
 
-                old_capacity = row['capacity']
+                old_capacity = row.get('capacity_original', row['capacity'])
                 row['capacity'] = int(round(new_capacity))
                 data['capacity_change'] = row['capacity'] - old_capacity
 
