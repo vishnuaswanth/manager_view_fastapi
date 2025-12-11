@@ -1190,8 +1190,8 @@ class ResourceAllocator:
 
         Returns:
             DataFrame with one row per vendor, showing:
-            - Vendor identification (FirstName, LastName, CN)
-            - Work details (PrimaryPlatform, NewWorkType, Location, State)
+            - Vendor identification (FirstName, LastName, CN, OPID)
+            - Work details (PrimaryPlatform, PrimaryMarket, NewWorkType, Location, State, PartofProduction, Production%)
             - Allocation status (Allocated/Not Allocated)
             - Per-month allocation details (LOB, State, Worktype)
 
@@ -1207,12 +1207,16 @@ class ResourceAllocator:
             first_name = vendor_row.get('FirstName', '')
             last_name = vendor_row.get('LastName', '')
             cn = vendor_row.get('CN', '')
+            opid = vendor_row.get('OPID', '')
 
             # Extract work details
             primary_platform = vendor_row.get('PrimaryPlatform', '')
+            primary_market = vendor_row.get('PrimaryMarket', '')
             new_worktype = vendor_row.get('NewWorkType', '')
             location = vendor_row.get('Location', '')
             state = vendor_row.get('State', '')  # Original state without normalization
+            part_of_production = vendor_row.get('PartofProduction', '')
+            production_pct = vendor_row.get('Production%', '')
 
             # Check if this vendor was allocated (in any month)
             vendor_allocations = self.vendor_allocations.get(idx, {})
@@ -1224,10 +1228,14 @@ class ResourceAllocator:
                 'FirstName': first_name,
                 'LastName': last_name,
                 'CN': cn,
+                'OPID': opid,
                 'PrimaryPlatform': primary_platform,
+                'PrimaryMarket': primary_market,
                 'NewWorkType': new_worktype,
                 'Location': location,
                 'State': state,  # Original vendor state
+                'PartofProduction': part_of_production,
+                'Production%': production_pct,
                 'Status': status
             }
 
@@ -1263,8 +1271,8 @@ class ResourceAllocator:
         Export vendor-level allocation report showing allocation status for each vendor.
 
         Creates roster_allotment.xlsx with one row per vendor, showing:
-        - Vendor identification (FirstName, LastName, CN)
-        - Work details (PrimaryPlatform, NewWorkType, Location, State)
+        - Vendor identification (FirstName, LastName, CN, OPID)
+        - Work details (PrimaryPlatform, PrimaryMarket, NewWorkType, Location, State, PartofProduction, Production%)
         - Allocation status (Allocated/Not Allocated)
         - Per-month allocation details (LOB, State, Worktype)
 
@@ -1605,7 +1613,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         # Filter to eligible vendors only (Production/Ramp, Claims Analyst)
         logging.info(f"Raw vendor data: {vendor_df_raw.shape}")
         vendor_df = vendor_df_raw[
-            (vendor_df_raw['PartofProduction'].isin(['Production', 'Ramp'])) &
+            (vendor_df_raw['PartofProduction'].isin(['Production'])) &
             (vendor_df_raw['BeelineTitle'] == 'Claims Analyst')
         ].copy()
         logging.info(f"Filtered vendor data: {vendor_df.shape} (eligible vendors only)")

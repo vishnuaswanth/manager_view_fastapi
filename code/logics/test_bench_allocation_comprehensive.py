@@ -115,62 +115,62 @@ def check_allocation_result(month="March", year=2025):
     logger.info("Running bench allocation...")
     result = allocate_bench_for_month(month, year, core_utils)
 
-    if not result['success']:
-        logger.error(f"Allocation failed: {result.get('error')}")
+    if not result.success:
+        logger.error(f"Allocation failed: {result.error}")
         return None
 
     logger.info("✓ Allocation completed successfully!")
-    logger.info(f"  Total bench allocated: {result['total_bench_allocated']}")
-    logger.info(f"  Gaps filled: {result['gaps_filled']}")
-    logger.info(f"  Excess distributed: {result['excess_distributed']}")
-    logger.info(f"  Rows modified: {result['rows_modified']}")
+    logger.info(f"  Total bench allocated: {result.total_bench_allocated}")
+    logger.info(f"  Gaps filled: {result.gaps_filled}")
+    logger.info(f"  Excess distributed: {result.excess_distributed}")
+    logger.info(f"  Rows modified: {result.rows_modified}")
 
     # Prepare data for Excel export
     logger.info("\nPreparing data for Excel export...")
     allocations_data = []
     vendors_data = []
 
-    for idx, alloc in enumerate(result['allocations']):
-        forecast_row = alloc['forecast_row']
+    for idx, alloc in enumerate(result.allocations):
+        forecast_row = alloc.forecast_row
 
         # Main allocation info
         alloc_info = {
             'Index': idx + 1,
-            'Forecast ID': forecast_row.get('forecast_id'),
-            'Main LOB': forecast_row.get('main_lob'),
-            'State': forecast_row.get('state'),
-            'Case Type': forecast_row.get('case_type'),
-            'Month Name': forecast_row.get('month_name'),
-            'Month Year': forecast_row.get('month_year'),
-            'Month Index': forecast_row.get('month_index'),
-            'Target CPH': forecast_row.get('target_cph'),
-            'Forecast': forecast_row.get('forecast'),
-            'FTE Required': forecast_row.get('fte_required'),
-            'FTE Avail Original': forecast_row.get('fte_avail_original'),
-            'FTE Avail After': forecast_row.get('fte_avail'),
-            'FTE Change': alloc.get('fte_change', 0),
-            'Capacity Original': forecast_row.get('capacity_original'),
-            'Capacity After': forecast_row.get('capacity'),
-            'Capacity Change': alloc.get('capacity_change', 0),
-            'Gap Fill Count': alloc.get('gap_fill_count', 0),
-            'Excess Dist Count': alloc.get('excess_distribution_count', 0),
-            'Vendors Count': len(alloc.get('vendors', []))
+            'Forecast ID': forecast_row.forecast_id,
+            'Main LOB': forecast_row.main_lob,
+            'State': forecast_row.state,
+            'Case Type': forecast_row.case_type,
+            'Month Name': forecast_row.month_name,
+            'Month Year': forecast_row.month_year,
+            'Month Index': forecast_row.month_index,
+            'Target CPH': forecast_row.target_cph,
+            'Forecast': forecast_row.forecast,
+            'FTE Required': forecast_row.fte_required,
+            'FTE Avail Original': forecast_row.fte_avail_original,
+            'FTE Avail After': forecast_row.fte_avail,
+            'FTE Change': alloc.fte_change,
+            'Capacity Original': forecast_row.capacity_original,
+            'Capacity After': forecast_row.capacity,
+            'Capacity Change': alloc.capacity_change,
+            'Gap Fill Count': alloc.gap_fill_count,
+            'Excess Dist Count': alloc.excess_distribution_count,
+            'Vendors Count': len(alloc.vendors)
         }
         allocations_data.append(alloc_info)
 
         # Vendor details
-        for vendor in alloc.get('vendors', []):
+        for vendor in alloc.vendors:
             vendor_info = {
                 'Alloc Index': idx + 1,
-                'Forecast ID': forecast_row.get('forecast_id'),
-                'Vendor Name': f"{vendor.get('first_name', '')} {vendor.get('last_name', '')}",
-                'Vendor CN': vendor.get('cn'),
-                'Vendor Skills': vendor.get('skills'),
-                'Vendor States': ', '.join(vendor.get('state_list', [])),
-                'Allocated To LOB': forecast_row.get('main_lob'),
-                'Allocated To State': forecast_row.get('state'),
-                'Allocated To Case': forecast_row.get('case_type'),
-                'Allocation Month': forecast_row.get('month_name')
+                'Forecast ID': forecast_row.forecast_id,
+                'Vendor Name': f"{vendor.first_name} {vendor.last_name}",
+                'Vendor CN': vendor.cn,
+                'Vendor Skills': vendor.skills,
+                'Vendor States': ', '.join(vendor.state_list),
+                'Allocated To LOB': forecast_row.main_lob,
+                'Allocated To State': forecast_row.state,
+                'Allocated To Case': forecast_row.case_type,
+                'Allocation Month': forecast_row.month_name
             }
             vendors_data.append(vendor_info)
 
@@ -191,13 +191,13 @@ def check_allocation_result(month="March", year=2025):
             'Total Vendors Allocated'
         ],
         'Value': [
-            result['month'],
-            result['year'],
-            result['total_bench_allocated'],
-            result['gaps_filled'],
-            result['excess_distributed'],
-            result['rows_modified'],
-            len(set([a['forecast_row']['forecast_id'] for a in result['allocations']])),
+            result.month,
+            result.year,
+            result.total_bench_allocated,
+            result.gaps_filled,
+            result.excess_distributed,
+            result.rows_modified,
+            len(set([a.forecast_row.forecast_id for a in result.allocations])),
             len(vendors_data)
         ]
     }
@@ -281,8 +281,8 @@ def test_full_export(month="March", year=2025):
     logger.info("Running bench allocation...")
     result = allocate_bench_for_month(month, year, core_utils)
 
-    if not result['success']:
-        logger.error(f"Allocation failed: {result.get('error')}")
+    if not result.success:
+        logger.error(f"Allocation failed: {result.error}")
         return None
 
     logger.info("✓ Allocation completed successfully!")
@@ -296,9 +296,9 @@ def test_full_export(month="March", year=2025):
     # Track unique forecast IDs to avoid duplicates
     processed_forecast_ids = set()
 
-    for alloc in result['allocations']:
-        row = alloc['forecast_row']
-        forecast_id = row['forecast_id']
+    for alloc in result.allocations:
+        row = alloc.forecast_row
+        forecast_id = row.forecast_id
 
         # Only process each forecast_id once (avoid duplicate rows in Modified Forecast sheet)
         if forecast_id in processed_forecast_ids:
@@ -315,7 +315,7 @@ def test_full_export(month="March", year=2025):
                 continue
 
             # Get the month index for this allocation
-            m_idx = row['month_index']
+            m_idx = row.month_index
 
             logger.info(f"  Processing forecast_id {forecast_id} - {complete_record['main_lob']} / {complete_record['state']} / {complete_record['case_type']}")
 
@@ -367,45 +367,45 @@ def test_full_export(month="March", year=2025):
             }
 
             # Update the specific allocated month with modified values
-            modified_row[f'FTE Avail Month{m_idx}'] = row['fte_avail']
-            modified_row[f'Capacity Month{m_idx}'] = row['capacity']
+            modified_row[f'FTE Avail Month{m_idx}'] = row.fte_avail
+            modified_row[f'Capacity Month{m_idx}'] = row.capacity
 
             modified_rows.append(modified_row)
 
         # Build changes detail (for all allocations, even duplicates)
-        capacity_before = row.get('capacity_original', row['capacity'])
-        capacity_change = alloc.get('capacity_change', 0)
+        capacity_before = row.capacity_original
+        capacity_change = alloc.capacity_change
         capacity_pct_change = (capacity_change / capacity_before) if capacity_before else 0
 
         change = {
-            'main_lob': row['main_lob'],
-            'state': row['state'],
-            'case_type': row['case_type'],
-            'month': row['month_name'],
-            'fte_required': row['fte_required'],
-            'fte_avail_before': row['fte_avail_original'],
-            'fte_avail_after': row['fte_avail'],
-            'fte_change': alloc['fte_change'],
-            'allocation_type': f"Gap: {alloc['gap_fill_count']}, Excess: {alloc['excess_distribution_count']}",
-            'vendors_allocated': len(alloc['vendors']),
+            'main_lob': row.main_lob,
+            'state': row.state,
+            'case_type': row.case_type,
+            'month': row.month_name,
+            'fte_required': row.fte_required,
+            'fte_avail_before': row.fte_avail_original,
+            'fte_avail_after': row.fte_avail,
+            'fte_change': alloc.fte_change,
+            'allocation_type': f"Gap: {alloc.gap_fill_count}, Excess: {alloc.excess_distribution_count}",
+            'vendors_allocated': len(alloc.vendors),
             'capacity_before': capacity_before,
-            'capacity_after': row['capacity'],
+            'capacity_after': row.capacity,
             'capacity_change': capacity_change,
             'capacity_pct_change': capacity_pct_change
         }
         changes_detail.append(change)
 
         # Vendor assignments
-        for vendor in alloc['vendors']:
+        for vendor in alloc.vendors:
             assignment = {
-                'vendor_name': f"{vendor.get('first_name')} {vendor.get('last_name')}",
-                'vendor_cn': vendor.get('cn'),
-                'vendor_skills': vendor.get('skills'),
-                'vendor_states': ", ".join(vendor.get('state_list', [])),
-                'allocated_to_lob': row['main_lob'],
-                'allocated_to_state': row['state'],
-                'allocated_to_worktype': row['case_type'],
-                'allocation_month': row['month_name'],
+                'vendor_name': f"{vendor.first_name} {vendor.last_name}",
+                'vendor_cn': vendor.cn,
+                'vendor_skills': vendor.skills,
+                'vendor_states': ", ".join(vendor.state_list),
+                'allocated_to_lob': row.main_lob,
+                'allocated_to_state': row.state,
+                'allocated_to_worktype': row.case_type,
+                'allocation_month': row.month_name,
                 'allocation_type': "Bench"
             }
             vendor_assignments.append(assignment)
@@ -417,10 +417,10 @@ def test_full_export(month="March", year=2025):
     summary = {
         'month': month,
         'year': year,
-        'total_bench_allocated': result['total_bench_allocated'],
-        'gaps_filled': result['gaps_filled'],
-        'excess_distributed': result['excess_distributed'],
-        'rows_modified': result['rows_modified'],
+        'total_bench_allocated': result.total_bench_allocated,
+        'gaps_filled': result.gaps_filled,
+        'excess_distributed': result.excess_distributed,
+        'rows_modified': result.rows_modified,
         'validation': {'valid': True}
     }
 

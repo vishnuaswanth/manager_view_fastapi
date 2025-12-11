@@ -16,6 +16,7 @@ Key Features:
 from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 from calendar import month_name as cal_month_name
+from dataclasses import dataclass, field
 import pandas as pd
 import logging
 import re
@@ -26,6 +27,64 @@ from code.logics.allocation import parse_main_lob, normalize_locality, Calculati
 from code.logics.allocation_validity import validate_allocation_is_curre
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# TYPE-SAFE DATA STRUCTURES
+# ============================================================================
+
+@dataclass
+class VendorAllocation:
+    """Single vendor allocation details"""
+    first_name: str
+    last_name: str
+    cn: str
+    skills: str
+    state_list: List[str]
+
+
+@dataclass
+class ForecastRowData:
+    """Forecast row data with allocation updates"""
+    forecast_id: int
+    main_lob: str
+    state: str
+    case_type: str
+    target_cph: int
+    month_name: str
+    month_year: int
+    month_index: int
+    forecast: float
+    fte_required: int
+    fte_avail: int
+    fte_avail_original: int
+    capacity: int
+    capacity_original: int
+
+
+@dataclass
+class AllocationRecord:
+    """Single allocation record with forecast and vendor details"""
+    forecast_row: ForecastRowData
+    vendors: List[VendorAllocation]
+    gap_fill_count: int
+    excess_distribution_count: int
+    fte_change: int
+    capacity_change: int
+
+
+@dataclass
+class AllocationResult:
+    """Complete allocation result with type safety"""
+    success: bool
+    month: str
+    year: int
+    total_bench_allocated: int
+    gaps_filled: int
+    excess_distributed: int
+    rows_modified: int
+    allocations: List[AllocationRecord]
+    error: str = ""  # Only populated if success=False
 
 
 def parse_vendor_state_list(state_str: str, valid_states: set) -> List[str]:
@@ -84,6 +143,7 @@ def parse_vendor_state_list(state_str: str, valid_states: set) -> List[str]:
 
 
 def get_unallocated_vendors_with_states(
+    execution_id: str,
     month: str,
     year: int,
     core_utils: CoreUtils
@@ -92,8 +152,9 @@ def get_unallocated_vendors_with_states(
     Get unallocated vendors from roster_allotment report with StateList parsing.
 
     Args:
-        month: Month name (e.g., "January")
-        year: Year (e.g., 2025)
+        execution_id: The execution UUID from AllocationExecutionModel
+        month: Month name (e.g., "January") - for fallback/validation
+        year: Year (e.g., 2025) - for fallback/validation
         core_utils: CoreUtils instance for database access
 
     Returns:
@@ -104,13 +165,28 @@ def get_unallocated_vendors_with_states(
     Raises:
         ValueError: If roster_allotment report not found
     """
-    db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=1, skip=0, select_columns=None)
+    import json
 
-    # Get latest roster_allotment report
+    db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=None, skip=0, select_columns=None)
+
+    # Get roster_allotment report using execution_id
     try:
-        report_df = db_manager.get_latest_execution_report(month, year, 'roster_allotment')
-        if report_df is None or report_df.empty:
-            raise ValueError(f"No roster_allotment report found for {month} {year}")
+        with db_manager.SessionLocal() as session:
+            report = session.query(AllocationReportsModel).filter(
+                AllocationReportsModel.execution_id == execution_id,
+                AllocationReportsModel.ReportType == 'roster_allotment'
+            ).first()
+
+            if not report:
+                raise ValueError(f"No roster_allotment report found for execution_id: {execution_id}")
+
+            # Parse JSON report data to DataFrame
+            report_data = json.loads(report.ReportData)
+            report_df = pd.DataFrame(report_data)
+
+            if report_df.empty:
+                raise ValueError(f"Empty roster_allotment report for execution_id: {execution_id}")
+
     except Exception as e:
         raise ValueError(f"Error reading roster_allotment report: {e}")
 
@@ -149,13 +225,70 @@ def get_unallocated_vendors_with_states(
             'location': row.get('Location', ''),
             'skills': row.get('NewWorkType', ''),
             'state_list': state_list,
-            'original_state': row.get('State', '')
+            'original_state': row.get('State', ''),
+            'allocated': False
         }
         vendors.append(vendor_dict)
 
     logger.info(f"Found {len(vendors)} unallocated vendors for {month} {year}")
 
     return vendors, valid_states
+
+
+def get_month_mappings_from_db(core_utils: CoreUtils, uploaded_file: str, report_year: int) -> Dict[int, Dict[str, any]]:
+    """
+    Get month mappings from ForecastMonthsModel for a given uploaded file.
+
+    This function retrieves the actual month names from the database instead of
+    generating them, making the code future-proof against business rule changes.
+
+    Args:
+        core_utils: CoreUtils instance for database access
+        uploaded_file: The UploadedFile name from ForecastModel
+        report_year: The year of the report (for year wrapping calculation)
+
+    Returns:
+        Dict mapping month_index (1-6) to {'month': name, 'year': year}
+
+    Raises:
+        ValueError: If no month mappings found for the uploaded file
+    """
+    from code.logics.db import ForecastMonthsModel
+
+    db_manager = core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
+
+    with db_manager.SessionLocal() as session:
+        months_record = session.query(ForecastMonthsModel).filter(
+            ForecastMonthsModel.UploadedFile == uploaded_file
+        ).first()
+
+        if not months_record:
+            raise ValueError(f"No month mappings found for file: {uploaded_file}")
+
+    # Build mappings from DB data
+    month_names = list(cal_month_name)[1:]  # ['January', 'February', ..., 'December']
+    mappings = {}
+
+    # Get the first month to determine year wrapping
+    first_month_name = months_record.Month1
+    first_month_num = month_names.index(first_month_name) + 1 if first_month_name in month_names else 1
+
+    for i in range(1, 7):
+        month_name = getattr(months_record, f'Month{i}')
+        month_num = month_names.index(month_name) + 1 if month_name in month_names else i
+
+        # Calculate year with wrapping
+        # If current month number < first month number, we've wrapped to next year
+        if i > 1 and month_num < first_month_num:
+            year = report_year + 1
+        else:
+            year = report_year
+
+        mappings[i] = {'month': month_name, 'year': year}
+
+        logger.debug(f"Month{i} → {month_name} {year}")
+
+    return mappings
 
 
 def unnormalize_forecast_data(
@@ -168,6 +301,8 @@ def unnormalize_forecast_data(
 
     Each ForecastModel record has 6 months of data. This function creates
     one row per (LOB, State, Case_Type, Month) combination.
+
+    Uses ForecastMonthsModel to get actual month names (future-proof).
 
     Args:
         month: Month name (e.g., "January")
@@ -201,14 +336,22 @@ def unnormalize_forecast_data(
         if not forecast_records:
             raise ValueError(f"No forecast data found for {month} {year}")
 
+    # Get month mappings from ForecastMonthsModel (future-proof!)
+    if forecast_records:
+        uploaded_file = forecast_records[0].UploadedFile
+        month_mappings = get_month_mappings_from_db(core_utils, uploaded_file, year)
+        logger.debug(f"Using ForecastMonthsModel month mappings for file: {uploaded_file}")
+    else:
+        raise ValueError(f"No forecast records found for {month} {year}")
+
     # Unnormalize to month-level rows
     rows = []
     for record in forecast_records:
         for month_idx in range(1, 7):  # Month1 through Month6
-            # Calculate actual month name for this index
-            month_year_tuple = get_year_for_month(month, year, month_idx)
-            actual_month_name = month_year_tuple['month']
-            actual_year = month_year_tuple['year']
+            # Get actual month name and year from DB mappings
+            month_data = month_mappings[month_idx]
+            actual_month_name = month_data['month']
+            actual_year = month_data['year']
 
             row = {
                 'forecast_id': record.id,
@@ -420,12 +563,13 @@ def fill_gaps(
             # Find compatible vendor (state match)
             compatible_vendor = None
             for vendor in vendors:
-                if demand_state in vendor['state_list']:
+                if not vendor.get('allocated') and demand_state in vendor['state_list']:
                     compatible_vendor = vendor
                     break
 
             if compatible_vendor:
                 # Allocate this vendor
+                compatible_vendor['allocated'] = True
                 allocations.append({
                     'forecast_row': row,
                     'vendor': compatible_vendor,
@@ -465,7 +609,8 @@ def distribute_proportionally(
         List of allocation dicts: [{forecast_row, vendor, fte_allocated, type}]
     """
     allocations = []
-    vendors = bucket_data['vendors']  # Already updated by fill_gaps
+    # Filter for available vendors first (exclude those allocated in other buckets)
+    vendors = [v for v in bucket_data['vendors'] if not v.get('allocated')]
     forecast_rows = bucket_data['forecast_rows']
 
     if not vendors:
@@ -523,7 +668,7 @@ def distribute_proportionally(
             search_start = vendor_idx
             while vendor_idx < len(vendors):
                 vendor = vendors[vendor_idx]
-                if demand_state in vendor['state_list']:
+                if not vendor.get('allocated') and demand_state in vendor['state_list']:
                     compatible_vendor = vendor
                     break
                 vendor_idx += 1
@@ -533,12 +678,13 @@ def distribute_proportionally(
                 vendor_idx = search_start
                 while vendor_idx < len(vendors):
                     vendor = vendors[vendor_idx]
-                    if 'N/A' in vendor['state_list']:  # All vendors have N/A
+                    if not vendor.get('allocated') and 'N/A' in vendor['state_list']:  # All vendors have N/A
                         compatible_vendor = vendor
                         break
                     vendor_idx += 1
 
             if compatible_vendor:
+                compatible_vendor['allocated'] = True
                 allocations.append({
                     'forecast_row': row,
                     'vendor': compatible_vendor,
@@ -722,21 +868,48 @@ def allocate_bench_for_month(
         logger.info(f"Excess distributed: {excess_distributed}")
         logger.info(f"Rows modified: {len(consolidated_allocations)}")
 
-        return {
-            'success': True,
-            'month': month,
-            'year': year,
-            'total_bench_allocated': len(all_allocations),
-            'gaps_filled': gaps_filled,
-            'excess_distributed': excess_distributed,
-            'rows_modified': len(consolidated_allocations),
-            'allocations': final_allocations_list
-        }
+        # Convert to dataclass structure for type safety
+        allocation_records = []
+        for data in final_allocations_list:
+            # Convert forecast_row dict to ForecastRowData
+            forecast_row = ForecastRowData(**data['forecast_row'])
+
+            # Convert vendors list of dicts to VendorAllocation instances
+            vendors = [VendorAllocation(**v) for v in data['vendors']]
+
+            # Create AllocationRecord
+            allocation_record = AllocationRecord(
+                forecast_row=forecast_row,
+                vendors=vendors,
+                gap_fill_count=data['gap_fill_count'],
+                excess_distribution_count=data['excess_distribution_count'],
+                fte_change=data['fte_change'],
+                capacity_change=data['capacity_change']
+            )
+            allocation_records.append(allocation_record)
+
+        return AllocationResult(
+            success=True,
+            month=month,
+            year=year,
+            total_bench_allocated=len(all_allocations),
+            gaps_filled=gaps_filled,
+            excess_distributed=excess_distributed,
+            rows_modified=len(consolidated_allocations),
+            allocations=allocation_records
+        )
 
     except Exception as e:
         logger.error(f"Error during bench allocation: {e}", exc_info=True)
-        return {
-            'success': False,
-            'error': str(e)
-        }
+        return AllocationResult(
+            success=False,
+            month=month,
+            year=year,
+            total_bench_allocated=0,
+            gaps_filled=0,
+            excess_distributed=0,
+            rows_modified=0,
+            allocations=[],
+            error=str(e)
+        )
 
