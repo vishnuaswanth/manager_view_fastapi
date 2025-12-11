@@ -6,6 +6,7 @@ from sqlalchemy import (
     Column,
     Integer,
     String,
+    Text,
     and_,
     inspect,
     extract,
@@ -14,7 +15,8 @@ from sqlalchemy import (
     or_,
     Index,
     true,
-    literal_column
+    literal_column,
+    UniqueConstraint
 )
 
 from sqlalchemy.orm import sessionmaker, declarative_base, aliased
@@ -317,6 +319,138 @@ class ForecastMonthsModel(SQLModel, table=True):
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
     )
 
+class AllocationReportsModel(SQLModel, table=True):
+    """
+    Model for storing allocation reports (bucket summary, bucket after allocation, roster allotment).
+    Each execution_id can have multiple report types. Historical reports are preserved.
+    Reports are linked to AllocationExecutionModel via execution_id.
+    """
+    id: int | None = Field(default=None, primary_key=True)
+    execution_id: str = Field(sa_column=Column(String(36), nullable=False, index=True))  # UUID from AllocationExecutionModel
+    Month: str = Field(sa_column=Column(String(15), nullable=False))
+    Year: int = Field(nullable=False)
+    ReportType: str = Field(sa_column=Column(String(50), nullable=False))  # 'bucket_summary', 'bucket_after_allocation', 'roster_allotment'
+    ReportData: str = Field(sa_column=Column(Text, nullable=False))  # JSON string of DataFrame
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    UpdatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    )
+    UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+
+    # UniqueConstraint ensures only one report per (execution_id, ReportType)
+    __table_args__ = (
+        UniqueConstraint('execution_id', 'ReportType', name='uix_allocation_report'),
+        Index('idx_allocation_execution', 'execution_id'),
+        Index('idx_allocation_month_year', 'Month', 'Year'),
+    )
+
+class MonthConfigurationModel(SQLModel, table=True):
+    """
+    Model for storing month-specific configuration parameters for FTE calculations.
+    Each record represents configuration for a specific month, year, and work type (Domestic/Global).
+
+    These parameters are used in allocation logic for calculating FTE Required and FTE Available:
+    - FTE Required = Volume / (Target_CPH * WorkHours * Occupancy * (1 - Shrinkage) * WorkingDays)
+    - Capacity = Target_CPH * FTE_Available * (1 - Shrinkage) * WorkingDays * WorkHours
+
+    WorkType determines which configuration to use based on LOB locality parsing.
+    Special case: OIC Volumes - WorkType determined from worktype column content.
+    """
+    id: int | None = Field(default=None, primary_key=True)
+    Month: str = Field(sa_column=Column(String(15), nullable=False))  # e.g., "January", "February"
+    Year: int = Field(nullable=False)  # e.g., 2025
+    WorkType: str = Field(sa_column=Column(String(20), nullable=False))  # "Domestic" or "Global"
+    WorkingDays: int = Field(nullable=False)  # Number of working days in the month
+    Occupancy: float = Field(nullable=False)  # Occupancy rate (0.0 to 1.0, e.g., 0.95 for 95%)
+    Shrinkage: float = Field(nullable=False)  # Shrinkage rate (0.0 to 1.0, e.g., 0.10 for 10%)
+    WorkHours: float = Field(nullable=False)  # Work hours per day (e.g., 9)
+
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    UpdatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    )
+    UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+
+    # Unique constraint ensures only one configuration per (Month, Year, WorkType)
+    __table_args__ = (
+        UniqueConstraint('Month', 'Year', 'WorkType', name='uix_month_config'),
+        Index('idx_month_year_worktype', 'Month', 'Year', 'WorkType'),
+        Index('idx_month_year', 'Month', 'Year'),
+    )
+
+class AllocationExecutionModel(SQLModel, table=True):
+    """
+    Tracks every allocation process execution with complete audit trail.
+    Captures status, timing, errors, and all source files used.
+
+    This model provides comprehensive tracking for:
+    - Execution lifecycle (PENDING → IN_PROGRESS → SUCCESS/FAILED)
+    - Source files audit trail (forecast file, roster file with fallback detection)
+    - Processing statistics and metrics
+    - Error details with stack traces for debugging
+    - Configuration snapshot for audit compliance
+    """
+    id: int | None = Field(default=None, primary_key=True)
+
+    # Execution Identity
+    execution_id: str = Field(sa_column=Column(String(36), nullable=False, unique=True))  # UUID
+
+    # Time Period
+    Month: str = Field(sa_column=Column(String(15), nullable=False))
+    Year: int = Field(nullable=False)
+
+    # Status Tracking
+    Status: str = Field(sa_column=Column(String(20), nullable=False))
+    # Values: 'PENDING', 'IN_PROGRESS', 'SUCCESS', 'FAILED', 'PARTIAL_SUCCESS'
+
+    # Timing
+    StartTime: datetime = Field(sa_column=Column(DateTime, nullable=False))
+    EndTime: Optional[datetime] = Field(sa_column=Column(DateTime, nullable=True))
+    DurationSeconds: Optional[float] = Field(nullable=True)
+
+    # Source Files Audit Trail
+    ForecastFilename: str = Field(sa_column=Column(String(255), nullable=False))
+    RosterFilename: str = Field(sa_column=Column(String(255), nullable=False))
+    RosterMonthUsed: str = Field(sa_column=Column(String(15), nullable=False))
+    RosterYearUsed: int = Field(nullable=False)
+    RosterWasFallback: bool = Field(default=False, nullable=False)  # True if used latest instead of requested
+
+    # User Context
+    UploadedBy: str = Field(sa_column=Column(String(100), nullable=False))
+
+    # Processing Statistics
+    RecordsProcessed: Optional[int] = Field(nullable=True)
+    RecordsFailed: Optional[int] = Field(nullable=True)
+    AllocationSuccessRate: Optional[float] = Field(nullable=True)
+
+    # Error Details
+    ErrorMessage: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+    ErrorType: Optional[str] = Field(sa_column=Column(String(50), nullable=True))
+    # Values: 'MISSING_MONTH_CONFIG', 'VALIDATION_ERROR', 'DATABASE_ERROR', 'UNEXPECTED_ERROR'
+    StackTrace: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+
+    # Configuration Snapshot (JSON)
+    ConfigSnapshot: Optional[str] = Field(sa_column=Column(Text, nullable=True))
+
+    # Audit Trail
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_execution_status_time', 'Status', 'StartTime'),
+        Index('idx_execution_month_year', 'Month', 'Year', 'StartTime'),
+        Index('idx_execution_id', 'execution_id'),
+        Index('idx_execution_uploaded_by', 'UploadedBy', 'StartTime'),
+    )
+
 class RawData(SQLModel, table=True):
     __tablename__ = "raw_data"
 
@@ -359,6 +493,40 @@ class RawData(SQLModel, table=True):
     model_config = {
         "arbitrary_types_allowed": True
     }
+
+
+class AllocationValidityModel(SQLModel, table=True):
+    """
+    Tracks whether allocation is still valid for a given month/year.
+    Gets invalidated when forecast data is manually edited through any API.
+
+    This prevents bench allocation from using stale allocation reports.
+    """
+    __tablename__ = "allocation_validity"
+
+    id: int = Field(default=None, primary_key=True)
+    month: str = Field(sa_column=Column(String(20), nullable=False))
+    year: int = Field(sa_column=Column(Integer, nullable=False))
+    allocation_execution_id: str = Field(sa_column=Column(String(255), nullable=False))
+    is_valid: bool = Field(default=True, nullable=False)
+
+    created_datetime: datetime = Field(
+        default=None,
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    invalidated_datetime: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime)
+    )
+    invalidated_reason: Optional[str] = Field(
+        default=None,
+        sa_column=Column(Text)
+    )
+
+    __table_args__ = (
+        Index('idx_validity_month_year', 'month', 'year'),
+        UniqueConstraint('month', 'year', name='uq_month_year'),
+    )
 
 
 class InValidSearchException(Exception):
@@ -1144,6 +1312,334 @@ class DBManager:
             except Exception as e:
                 logger.error(f"[DBManager] Failed to get latest month/year: {str(e)}")
                 return None
+
+    def save_allocation_report(
+        self,
+        df: pd.DataFrame,
+        execution_id: str,
+        month: str,
+        year: int,
+        report_type: str,
+        created_by: str,
+        updated_by: str = None
+    ):
+        """
+        Save allocation report to database using UPSERT logic.
+        If a report with the same (execution_id, ReportType) exists, it will be replaced.
+
+        Args:
+            df: DataFrame containing the report data
+            execution_id: Unique execution identifier (UUID) from AllocationExecutionModel
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+            created_by: User who created/updated the report
+            updated_by: User who updated the report (defaults to created_by)
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+            if updated_by is None:
+                updated_by = created_by
+
+            # Convert DataFrame to JSON string
+            report_json = df.to_json(orient='records', date_format='iso')
+
+            # Check if report already exists for this execution_id and report_type
+            existing_report = session.query(Model).filter(
+                and_(
+                    Model.execution_id == execution_id,
+                    Model.ReportType == report_type
+                )
+            ).first()
+
+            if existing_report:
+                # Update existing report
+                existing_report.ReportData = report_json
+                existing_report.UpdatedBy = updated_by
+                existing_report.UpdatedDateTime = datetime.now()
+                logger.info(f"[DBManager] Updated allocation report: {report_type} for execution {execution_id}")
+            else:
+                # Insert new report
+                new_report = Model(
+                    execution_id=execution_id,
+                    Month=normalized_month,
+                    Year=year,
+                    ReportType=report_type,
+                    ReportData=report_json,
+                    CreatedBy=created_by,
+                    UpdatedBy=updated_by
+                )
+                session.add(new_report)
+                logger.info(f"[DBManager] Inserted new allocation report: {report_type} for execution {execution_id} ({normalized_month} {year})")
+
+            session.commit()
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[DBManager] Error saving allocation report: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_allocation_report(
+        self,
+        month: str,
+        year: int,
+        report_type: str
+    ) -> Optional[str]:
+        """
+        Retrieve allocation report as JSON string.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            JSON string of the report data, or None if not found
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+
+            report = session.query(Model).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year,
+                    Model.ReportType == report_type
+                )
+            ).first()
+
+            if report:
+                logger.info(f"[DBManager] Retrieved allocation report: {report_type} for {normalized_month} {year}")
+                return report.ReportData
+            else:
+                logger.info(f"[DBManager] No allocation report found: {report_type} for {normalized_month} {year}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error retrieving allocation report: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_allocation_report_as_dataframes(
+        self,
+        month: str,
+        year: int,
+        report_type: str
+    ) -> Optional[pd.DataFrame]:
+        """
+        Retrieve allocation report and convert to DataFrame.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            DataFrame containing the report data, or None if not found
+        """
+        try:
+            report_json = self.get_allocation_report(month, year, report_type)
+
+            if report_json:
+                # Convert JSON string back to DataFrame
+                import json
+                df = pd.DataFrame(json.loads(report_json))
+                logger.info(f"[DBManager] Converted allocation report to DataFrame: {report_type} ({len(df)} rows)")
+                return df
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error converting allocation report to DataFrame: {e}")
+            raise
+
+    def get_allocation_report_by_execution_id(
+        self,
+        execution_id: str,
+        report_type: str
+    ) -> Optional[str]:
+        """
+        Retrieve allocation report by execution_id as JSON string.
+
+        Args:
+            execution_id: Unique execution identifier (UUID)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            JSON string of the report data, or None if not found
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            report = session.query(Model).filter(
+                and_(
+                    Model.execution_id == execution_id,
+                    Model.ReportType == report_type
+                )
+            ).first()
+
+            if report:
+                logger.info(f"[DBManager] Retrieved allocation report by execution_id: {report_type} for {execution_id}")
+                return report.ReportData
+            else:
+                logger.info(f"[DBManager] No allocation report found: {report_type} for execution {execution_id}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error retrieving allocation report by execution_id: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_allocation_report_by_execution_id_as_dataframe(
+        self,
+        execution_id: str,
+        report_type: str
+    ) -> Optional[pd.DataFrame]:
+        """
+        Retrieve allocation report by execution_id and convert to DataFrame.
+
+        Args:
+            execution_id: Unique execution identifier (UUID)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            DataFrame containing the report data, or None if not found
+        """
+        try:
+            report_json = self.get_allocation_report_by_execution_id(execution_id, report_type)
+
+            if report_json:
+                # Convert JSON string back to DataFrame
+                import json
+                df = pd.DataFrame(json.loads(report_json))
+                logger.info(f"[DBManager] Converted allocation report to DataFrame: {report_type} ({len(df)} rows)")
+                return df
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error converting allocation report to DataFrame: {e}")
+            raise
+
+    def get_latest_execution_report(
+        self,
+        month: str,
+        year: int,
+        report_type: str
+    ) -> Optional[pd.DataFrame]:
+        """
+        Get latest execution's report for a given month/year (backward compatibility).
+
+        This method fetches the most recent execution for the specified month/year,
+        then retrieves the corresponding report.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            report_type: Type of report ('bucket_summary', 'bucket_after_allocation', 'roster_allotment')
+
+        Returns:
+            DataFrame containing the report data, or None if not found
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+
+            # Find latest report for this month/year/type by CreatedDateTime
+            report = session.query(Model).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year,
+                    Model.ReportType == report_type
+                )
+            ).order_by(Model.CreatedDateTime.desc()).first()
+
+            if report:
+                logger.info(f"[DBManager] Retrieved latest allocation report: {report_type} for {normalized_month} {year} (execution: {report.execution_id})")
+                # Convert JSON string back to DataFrame
+                import json
+                df = pd.DataFrame(json.loads(report.ReportData))
+                return df
+            else:
+                logger.info(f"[DBManager] No allocation report found: {report_type} for {normalized_month} {year}")
+                return None
+
+        except Exception as e:
+            logger.error(f"[DBManager] Error retrieving latest execution report: {e}")
+            raise
+        finally:
+            session.close()
+
+    def cleanup_old_reports(
+        self,
+        month: str,
+        year: int,
+        keep_last_n: int = 10
+    ):
+        """
+        Cleanup old allocation reports, keeping only the last N executions per month/year.
+
+        This implements the retention policy to prevent unbounded database growth.
+
+        Args:
+            month: Month name (e.g., 'January')
+            year: Year (e.g., 2025)
+            keep_last_n: Number of most recent executions to keep (default: 10)
+        """
+        session = self.SessionLocal()
+        Model = AllocationReportsModel
+
+        try:
+            normalized_month = normalize_month(month)
+
+            # Get all unique execution_ids for this month/year, ordered by creation time
+            executions = session.query(Model.execution_id, Model.CreatedDateTime).filter(
+                and_(
+                    Model.Month == normalized_month,
+                    Model.Year == year
+                )
+            ).distinct().order_by(Model.CreatedDateTime.desc()).all()
+
+            # If we have more than keep_last_n executions, delete the older ones
+            if len(executions) > keep_last_n:
+                # Get execution_ids to delete (all except the most recent keep_last_n)
+                executions_to_delete = [exec_tuple[0] for exec_tuple in executions[keep_last_n:]]
+
+                if executions_to_delete:
+                    # Delete all reports for these executions
+                    deleted_count = session.query(Model).filter(
+                        and_(
+                            Model.Month == normalized_month,
+                            Model.Year == year,
+                            Model.execution_id.in_(executions_to_delete)
+                        )
+                    ).delete(synchronize_session=False)
+
+                    session.commit()
+                    logger.info(f"[DBManager] Cleaned up {deleted_count} old reports for {normalized_month} {year} (kept last {keep_last_n} executions)")
+                else:
+                    logger.info(f"[DBManager] No old reports to cleanup for {normalized_month} {year}")
+            else:
+                logger.info(f"[DBManager] No cleanup needed for {normalized_month} {year} ({len(executions)} executions, keeping {keep_last_n})")
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[DBManager] Error cleaning up old reports: {e}")
+            raise
+        finally:
+            session.close()
 
     def get_forecast_months_list(self, month:str, year:int, filename:str=None) -> List[str]:
         if not (month and year):

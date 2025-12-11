@@ -1,17 +1,18 @@
-````markdown
 # Manager View API — Specifications (Filters & Data)
 
 **Base URL**: `/api/manager-view`
 **Auth**: none (add later if required)
 **Content-Type**: `application/json; charset=utf-8`
 **KPI**: **Derived client-side / by your Django service from the Data endpoint** (no separate KPI API).
+**Last Updated**: 2025-11-28
 
 ---
 
 ## 1) GET `/api/manager-view/filters`
 
 ### Purpose
-Provide dropdown options for **Report Month** and **Category** (top-level).
+Provide dropdown options for **Report Month** and **Category** /
+(top-level).
 
 ### Request
 - **Query params**: none
@@ -152,6 +153,114 @@ Return the **hierarchical dataset** for a selected month/category.
 
 ---
 
+## 3) GET `/api/manager-view/debug/categorization`
+
+### Purpose
+
+**QA/DEBUG ENDPOINT** for categorization diagnostics.
+
+Returns detailed diagnostics showing why a record matched or didn't match each category. Helps analysts quickly identify why records aren't classifying as expected.
+
+### Query Parameters
+
+| Name           | Type     | Required | Notes                           |
+| -------------- | -------- | -------- | ------------------------------- |
+| `report_month` | `YYYY-MM`| **Yes**  | Example: `2025-03`              |
+| `main_lob`     | `string` | No       | Main LOB value to test          |
+| `state`        | `string` | No       | State value to test             |
+| `case_type`    | `string` | No       | Case type value to test         |
+
+### Response — 200 OK
+
+```json
+{
+  "success": true,
+  "report_month": "2025-02",
+  "test_record": {
+    "main_lob": "Amisys Medicaid Domestic",
+    "state": "TX",
+    "case_type": "Claims Processing"
+  },
+  "diagnostics": [
+    {
+      "category_id": "amisys-onshore",
+      "category_name": "Amisys Onshore",
+      "category_path": "Amisys Onshore",
+      "is_match": true,
+      "matched_fields": [
+        {
+          "field": "main_lob",
+          "pattern": ".*amisys.*domestic.*",
+          "value": "Amisys Medicaid Domestic",
+          "matched": true
+        }
+      ],
+      "unmatched_fields": [],
+      "total_rules": 1,
+      "matched_rules": 1,
+      "unmatched_rules": 0
+    },
+    {
+      "category_id": "facets-onshore",
+      "category_name": "Facets Onshore",
+      "category_path": "Facets Onshore",
+      "is_match": false,
+      "matched_fields": [],
+      "unmatched_fields": [
+        {
+          "field": "main_lob",
+          "pattern": ".*facets.*",
+          "value": "Amisys Medicaid Domestic",
+          "matched": false
+        }
+      ],
+      "total_rules": 1,
+      "matched_rules": 0,
+      "unmatched_rules": 1
+    }
+  ],
+  "summary": {
+    "total_categories": 10,
+    "matched_categories": 2,
+    "unmatched_categories": 8
+  },
+  "timestamp": "2025-10-19T11:20:12.345678Z"
+}
+```
+
+### Use Cases
+
+- Verify why a record is/isn't appearing in a category
+- Troubleshoot categorization rules
+- QA category configuration changes
+- Debug missing or incorrectly categorized records
+
+### Errors
+
+* **400** Validation (bad month format)
+
+```json
+{
+  "success": false,
+  "error": "Invalid report_month (expected YYYY-MM).",
+  "status_code": 400,
+  "timestamp": "2025-10-19T11:20:12.345678Z"
+}
+```
+
+* **500** Internal error (unexpected)
+
+```json
+{
+  "success": false,
+  "error": "Internal server error",
+  "status_code": 500,
+  "timestamp": "2025-10-19T11:20:12.345678Z"
+}
+```
+
+---
+
 ## Data Contracts (Schema)
 
 ### Filter Option
@@ -249,5 +358,20 @@ Return the **hierarchical dataset** for a selected month/category.
 
 ---
 
-```
-```
+## Summary
+
+The Manager View API provides three main endpoints:
+
+1. **Filters** (`/api/manager-view/filters`) - Get dropdown options for report months and categories
+2. **Data** (`/api/manager-view/data`) - Get hierarchical category tree with metrics for selected month/category
+3. **Debug Categorization** (`/api/manager-view/debug/categorization`) - QA/Debug endpoint for troubleshooting categorization rules
+
+All responses follow a consistent format with `success`, `timestamp`, and error handling.
+
+### Implementation Details
+
+- **Caching**: In-memory TTL cache per process/worker (no external services)
+- **Hierarchical Structure**: Categories can have up to 5 levels of nesting
+- **Metrics**: All metrics (cf, hc, cap, gap) are integers, with gap calculated as `cap - cf`
+- **Month Format**: Months use YYYY-MM format for both input parameters and data keys
+- **Bottom-Up Aggregation**: Parent category metrics are calculated by summing children's metrics
