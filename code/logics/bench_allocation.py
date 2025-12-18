@@ -1632,7 +1632,7 @@ class BenchAllocator:
             report_row.UpdatedDateTime = datetime.now()
             report_row.UpdatedBy = 'bench_allocation'
 
-            session.add(report_row)
+            # Commit changes (no need for session.add() - object is already tracked)
             session.commit()
 
             logger.info(f"✓ Updated roster_allotment report in database for execution {self.execution_id}")
