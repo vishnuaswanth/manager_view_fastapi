@@ -1567,7 +1567,14 @@ class BenchAllocator:
                     vendor_allocations[vendor.cn] = []
                 vendor_allocations[vendor.cn].append((month_name, allocation_string))
 
+        if not vendor_allocations:
+            logger.info("No vendor allocations to update in roster_allotment report")
+            return
+
         # Update roster_allotment report in database
+        import pandas as pd
+        from datetime import datetime
+
         db_manager = self.core_utils.get_db_manager(
             AllocationReportsModel,
             limit=None,
@@ -1576,39 +1583,63 @@ class BenchAllocator:
         )
 
         with db_manager.SessionLocal() as session:
-            for cn, allocations in vendor_allocations.items():
-                # Fetch existing report row using SQLModel select syntax
-                statement = select(AllocationReportsModel).where(
-                    and_(
-                        AllocationReportsModel.cn == cn,
-                        AllocationReportsModel.report_type == 'roster_allotment',
-                        AllocationReportsModel.execution_id == self.execution_id
-                    )
+            # Fetch the SINGLE roster_allotment report for this execution (not per-vendor)
+            statement = select(AllocationReportsModel).where(
+                and_(
+                    AllocationReportsModel.execution_id == self.execution_id,
+                    AllocationReportsModel.ReportType == 'roster_allotment'  # Correct field name
                 )
-                report_row = session.exec(statement).first()
+            )
+            report_row = session.exec(statement).first()
 
-                if not report_row:
-                    logger.warning(f"Roster allotment report not found for CN {cn} in execution {self.execution_id}")
+            if not report_row:
+                logger.warning(f"Roster allotment report not found for execution {self.execution_id}")
+                return
+
+            # Parse JSON string to DataFrame
+            report_json = report_row.ReportData  # Correct attribute name
+            df = pd.read_json(report_json)
+
+            logger.info(f"Loaded roster_allotment DataFrame: {len(df)} vendors, {len(df.columns)} columns")
+
+            # Update all allocated vendors
+            updated_count = 0
+            for cn, allocations in vendor_allocations.items():
+                # Find vendor row(s) by CN
+                vendor_mask = df['CN'] == cn
+
+                if not vendor_mask.any():
+                    logger.warning(f"Vendor CN {cn} not found in roster_allotment report")
                     continue
 
-                # Parse existing report data
-                report_data = report_row.report_data or {}
-
-                # Update Status
-                report_data['Status'] = 'Allocated (Bench)'
+                # Update Status column
+                df.loc[vendor_mask, 'Status'] = 'Allocated (Bench)'
 
                 # Update month columns
                 for month_name, allocation_string in allocations:
-                    # Update month column (e.g., "April 2025")
-                    month_col = f"{month_name} {self.year}"
-                    report_data[month_col] = allocation_string
+                    # Month column format: "April 2025_LOB" (already includes year)
+                    month_col_lob = f"{month_name}_LOB"
 
-                # Save updated report
-                report_row.report_data = report_data
-                session.add(report_row)
+                    if month_col_lob in df.columns:
+                        df.loc[vendor_mask, month_col_lob] = allocation_string
+                        updated_count += 1
+                    else:
+                        logger.warning(f"Column {month_col_lob} not found in roster_allotment DataFrame")
 
+            logger.info(f"Updated roster_allotment for {len(vendor_allocations)} vendors ({updated_count} month allocations)")
+
+            # Convert DataFrame back to JSON string
+            updated_json = df.to_json(orient='records', date_format='iso')
+            report_row.ReportData = updated_json  # Correct attribute name
+
+            # Update metadata
+            report_row.UpdatedDateTime = datetime.now()
+            report_row.UpdatedBy = 'bench_allocation'
+
+            session.add(report_row)
             session.commit()
-            logger.info(f"Updated roster_allotment report for {len(vendor_allocations)} vendors")
+
+            logger.info(f"✓ Updated roster_allotment report in database for execution {self.execution_id}")
 
     def _update_bucket_after_allocation_report(self):
         """
