@@ -26,7 +26,6 @@ from code.logics.db import AllocationReportsModel, ForecastModel, MonthConfigura
 from code.logics.allocation import parse_main_lob, normalize_locality, Calculations
 from code.logics.allocation_validity import validate_allocation_is_current
 from code.logics.month_config_utils import get_specific_config
-from sqlmodel import select, and_
 
 logger = logging.getLogger(__name__)
 
@@ -1584,13 +1583,10 @@ class BenchAllocator:
 
         with db_manager.SessionLocal() as session:
             # Fetch the SINGLE roster_allotment report for this execution (not per-vendor)
-            statement = select(AllocationReportsModel).where(
-                and_(
-                    AllocationReportsModel.execution_id == self.execution_id,
-                    AllocationReportsModel.ReportType == 'roster_allotment'  # Correct field name
-                )
-            )
-            report_row = session.exec(statement).first()
+            report_row = session.query(AllocationReportsModel).filter(
+                AllocationReportsModel.execution_id == self.execution_id,
+                AllocationReportsModel.ReportType == 'roster_allotment'
+            ).first()
 
             if not report_row:
                 logger.warning(f"Roster allotment report not found for execution {self.execution_id}")
