@@ -25,6 +25,8 @@ from code.logics.core_utils import CoreUtils
 from code.logics.db import AllocationReportsModel, ForecastModel, MonthConfigurationModel
 from code.logics.allocation import parse_main_lob, normalize_locality, Calculations
 from code.logics.allocation_validity import validate_allocation_is_current
+from code.logics.month_config_utils import get_specific_config
+from sqlmodel import select, and_
 
 logger = logging.getLogger(__name__)
 
@@ -1468,9 +1470,11 @@ class BenchAllocator:
         forecast_row: ForecastRowDict,
         fte_count: int
     ) -> int:
-        """Calculate capacity for given FTE count using month configuration."""
-        from code.logics.allocation import Calculations
+        """
+        Calculate capacity for given FTE count using month configuration.
 
+        Formula: capacity = fte_count × target_cph × work_hours × occupancy × (1 - shrinkage) × working_days
+        """
         # Get month config
         parsed = parse_main_lob(forecast_row.main_lob)
         locality = normalize_locality(parsed['locality'])
@@ -1481,11 +1485,18 @@ class BenchAllocator:
             locality
         )
 
-        return Calculations.calculate_capacity_from_fte(
-            fte_count,
-            config,
+        # Calculate capacity using month-specific configuration
+        # Formula: Capacity = FTE × WorkingDays × WorkHours × Occupancy × (1 - Shrinkage) × TargetCPH
+        capacity = (
+            fte_count *
+            config['working_days'] *
+            config['work_hours'] *
+            config['occupancy'] *
+            (1 - config['shrinkage']) *
             forecast_row.target_cph
         )
+
+        return int(capacity)
 
     def update_reports(self):
         """
