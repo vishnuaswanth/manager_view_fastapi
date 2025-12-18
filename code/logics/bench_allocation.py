@@ -150,6 +150,11 @@ class ForecastRowDict:
     capacity: int
     capacity_original: int
 
+    # Pre-parsed normalized fields (parsed once during normalization to avoid redundant parse_main_lob calls)
+    platform_norm: str = ''    # Normalized platform: "AMISYS", "FACETS", etc.
+    locality_norm: str = ''    # Normalized locality: "Domestic", "Global"
+    market: str = ''           # Market/LOB name: "Medicaid", "Medicare", "OIC Volumes", etc.
+
 
 @dataclass(frozen=True)
 class AllocationData:
@@ -464,6 +469,9 @@ def _dataframe_row_to_forecast_dict(row: pd.Series) -> ForecastRowDict:
             - fte_avail_original: int - Original FTE available
             - capacity: int - Calculated capacity (updated during allocation)
             - capacity_original: int - Original capacity
+            - platform_norm: str - Pre-parsed platform ("AMISYS", "FACETS")
+            - locality_norm: str - Pre-parsed locality ("Domestic", "Global")
+            - market: str - Pre-parsed market/LOB name
 
     Returns:
         ForecastRowDict dataclass instance
@@ -482,7 +490,11 @@ def _dataframe_row_to_forecast_dict(row: pd.Series) -> ForecastRowDict:
         fte_avail=row['fte_avail'],
         fte_avail_original=row['fte_avail_original'],
         capacity=row['capacity'],
-        capacity_original=row['capacity_original']
+        capacity_original=row['capacity_original'],
+        # Pre-parsed normalized fields
+        platform_norm=row['platform_norm'],
+        locality_norm=row['locality_norm'],
+        market=row['market']
     )
 
 
@@ -546,6 +558,23 @@ def normalize_forecast_data(
     # Unnormalize to month-level rows
     rows = []
     for record in forecast_records:
+        # Parse common fields ONCE per record (outside month loop for 6x performance gain)
+        forecast_id = record.id
+        main_lob = record.Centene_Capacity_Plan_Main_LOB
+        state = record.Centene_Capacity_Plan_State
+        case_type = record.Centene_Capacity_Plan_Case_Type
+        target_cph = record.Centene_Capacity_Plan_Target_CPH
+
+        # Parse main_lob ONCE per record (not 6 times per month)
+        parsed = parse_main_lob(main_lob)
+
+        # Extract normalized fields ONCE
+        platform_raw = parsed.get('platform', '')
+        platform_norm = platform_raw.strip().split()[0].upper() if platform_raw else ''
+        locality_norm = normalize_locality(parsed.get('locality', ''))
+        market = parsed.get('market', '')
+
+        # Loop only for month-specific fields (6 iterations per record)
         for month_idx in range(1, 7):  # Month1 through Month6
             # Get actual month name and year from DB mappings
             month_data = month_mappings[month_idx]
@@ -553,11 +582,17 @@ def normalize_forecast_data(
             actual_year = month_data.year
 
             row = {
-                'forecast_id': record.id,
-                'main_lob': record.Centene_Capacity_Plan_Main_LOB,
-                'state': record.Centene_Capacity_Plan_State,
-                'case_type': record.Centene_Capacity_Plan_Case_Type,
-                'target_cph': record.Centene_Capacity_Plan_Target_CPH,
+                # Common fields (reused from variables above - no redundant parsing)
+                'forecast_id': forecast_id,
+                'main_lob': main_lob,
+                'state': state,
+                'case_type': case_type,
+                'target_cph': target_cph,
+                'platform_norm': platform_norm,
+                'locality_norm': locality_norm,
+                'market': market,
+
+                # Month-specific fields (vary per month)
                 'month_name': actual_month_name,
                 'month_year': actual_year,
                 'month_index': month_idx,
@@ -618,20 +653,6 @@ def get_year_for_month(data_month: str, data_year: int, month_index: int) -> Mon
         month=target_month_name,
         year=target_year
     )
-
-
-def normalize_platform(main_lob: str) -> str:
-    """
-    Normalize platform from Main LOB.
-
-    Reuses parse_main_lob from allocation.py and extracts first word.
-    """
-    parsed = parse_main_lob(main_lob)
-    platform = parsed.get('platform', '')
-    # Extract first word and uppercase
-    if platform:
-        return platform.strip().split()[0].upper()
-    return ''
 
 
 def normalize_worktype(case_type: str) -> str:
@@ -784,8 +805,9 @@ def group_into_buckets(
 
     # Group forecast rows and match vendors
     for _, row in forecast_df.iterrows():
-        platform_norm = normalize_platform(row['main_lob'])
-        location_norm = normalize_locality(parse_main_lob(row['main_lob'])['locality'])
+        # Use pre-parsed fields for performance
+        platform_norm = row['platform_norm']
+        location_norm = row['locality_norm']
         month_name = row['month_name']
         worktype_norm = normalize_worktype(row['case_type'])
 
@@ -1274,10 +1296,10 @@ class BenchAllocator:
 
         # For each worktype in the vendor skillset
         for worktype in skillset:
-            # Base filtering conditions
+            # Base filtering conditions (using pre-parsed fields for performance)
             base_filter = (
-                (self.forecast_df['main_lob'].apply(normalize_platform) == platform) &
-                (self.forecast_df['main_lob'].apply(lambda x: normalize_locality(parse_main_lob(x)['locality'])) == location) &
+                (self.forecast_df['platform_norm'] == platform) &
+                (self.forecast_df['locality_norm'] == location) &
                 (self.forecast_df['month_name'] == month_name) &
                 (self.forecast_df['case_type'].apply(normalize_worktype) == worktype)
             )
@@ -1475,14 +1497,11 @@ class BenchAllocator:
 
         Formula: capacity = fte_count × target_cph × work_hours × occupancy × (1 - shrinkage) × working_days
         """
-        # Get month config
-        parsed = parse_main_lob(forecast_row.main_lob)
-        locality = normalize_locality(parsed['locality'])
-
+        # Get month config using pre-parsed locality
         config = get_specific_config(
             forecast_row.month_name,
             forecast_row.month_year,
-            locality
+            forecast_row.locality_norm  # Use pre-parsed field
         )
 
         # Calculate capacity using month-specific configuration
@@ -1533,9 +1552,8 @@ class BenchAllocator:
             forecast_row = change_data['forecast_row']
             vendors = change_data['vendors']
 
-            # Parse LOB details
-            parsed = parse_main_lob(forecast_row.main_lob)
-            lob_name = parsed.get('lob_name', '')
+            # Use pre-parsed fields
+            lob_name = forecast_row.market  # Use pre-parsed market field (was incorrectly looking for 'lob_name')
             state = forecast_row.state
             case_type = forecast_row.case_type
             month_name = forecast_row.month_name
@@ -1550,40 +1568,47 @@ class BenchAllocator:
                 vendor_allocations[vendor.cn].append((month_name, allocation_string))
 
         # Update roster_allotment report in database
-        for cn, allocations in vendor_allocations.items():
-            # Fetch existing report row
-            report_row = self.core_utils.db.exec(
-                select(AllocationReportsModel).where(
+        db_manager = self.core_utils.get_db_manager(
+            AllocationReportsModel,
+            limit=None,
+            skip=0,
+            select_columns=None
+        )
+
+        with db_manager.SessionLocal() as session:
+            for cn, allocations in vendor_allocations.items():
+                # Fetch existing report row using SQLModel select syntax
+                statement = select(AllocationReportsModel).where(
                     and_(
                         AllocationReportsModel.cn == cn,
                         AllocationReportsModel.report_type == 'roster_allotment',
                         AllocationReportsModel.execution_id == self.execution_id
                     )
                 )
-            ).first()
+                report_row = session.exec(statement).first()
 
-            if not report_row:
-                logger.warning(f"Roster allotment report not found for CN {cn} in execution {self.execution_id}")
-                continue
+                if not report_row:
+                    logger.warning(f"Roster allotment report not found for CN {cn} in execution {self.execution_id}")
+                    continue
 
-            # Parse existing report data
-            report_data = report_row.report_data or {}
+                # Parse existing report data
+                report_data = report_row.report_data or {}
 
-            # Update Status
-            report_data['Status'] = 'Allocated (Bench)'
+                # Update Status
+                report_data['Status'] = 'Allocated (Bench)'
 
-            # Update month columns
-            for month_name, allocation_string in allocations:
-                # Update month column (e.g., "April 2025")
-                month_col = f"{month_name} {self.year}"
-                report_data[month_col] = allocation_string
+                # Update month columns
+                for month_name, allocation_string in allocations:
+                    # Update month column (e.g., "April 2025")
+                    month_col = f"{month_name} {self.year}"
+                    report_data[month_col] = allocation_string
 
-            # Save updated report
-            report_row.report_data = report_data
-            self.core_utils.db.add(report_row)
+                # Save updated report
+                report_row.report_data = report_data
+                session.add(report_row)
 
-        self.core_utils.db.commit()
-        logger.info(f"Updated roster_allotment report for {len(vendor_allocations)} vendors")
+            session.commit()
+            logger.info(f"Updated roster_allotment report for {len(vendor_allocations)} vendors")
 
     def _update_bucket_after_allocation_report(self):
         """
@@ -1596,18 +1621,26 @@ class BenchAllocator:
         # Generate bucket after allocation data
         bucket_data = self._generate_buckets_after_allocation(consolidated)
 
-        # Store in AllocationReportsModel
-        for bucket_row in bucket_data:
-            report_row = AllocationReportsModel(
-                execution_id=self.execution_id,
-                report_type='bucket_after_allocation',
-                cn=None,  # Not vendor-specific
-                report_data=bucket_row
-            )
-            self.core_utils.db.add(report_row)
+        # Store in AllocationReportsModel using proper session management
+        db_manager = self.core_utils.get_db_manager(
+            AllocationReportsModel,
+            limit=None,
+            skip=0,
+            select_columns=None
+        )
 
-        self.core_utils.db.commit()
-        logger.info(f"Created bucket_after_allocation report with {len(bucket_data)} rows")
+        with db_manager.SessionLocal() as session:
+            for bucket_row in bucket_data:
+                report_row = AllocationReportsModel(
+                    execution_id=self.execution_id,
+                    report_type='bucket_after_allocation',
+                    cn=None,  # Not vendor-specific
+                    report_data=bucket_row
+                )
+                session.add(report_row)
+
+            session.commit()
+            logger.info(f"Created bucket_after_allocation report with {len(bucket_data)} rows")
 
     def _generate_buckets_after_allocation(self, consolidated: Dict) -> List[Dict]:
         """
