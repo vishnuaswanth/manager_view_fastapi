@@ -75,20 +75,6 @@ input_files = {
 output_file = os.path.join(curpth, "result.xlsx")
 
 
-
-# Load variables and months
-req_vars_df = pd.read_excel(input_files['target'], sheet_name="Sheet1")
-# req_months_df = pd.read_excel(input_files['target'], sheet_name="Sheet2")
-occupancy = req_vars_df['Occupancy'].iloc[0]
-shrinkage = req_vars_df['Shrinkage'].iloc[0]
-workhours = req_vars_df['Work hours'].iloc[0]
-# month_headers = req_months_df['Months'].tolist()
-month_with_days = dict(zip(req_vars_df['months'], req_vars_df['No.of days occupancy']))
-
-# Legacy code - no longer needed with ResourceAllocator
-# combination_list = [eval(x) for x in combinations_df['combination'] if 'nan' not in x]
-# state_with_worktype_volume_dict = {}
-
 # Helper functions
 def get_year_for_month(data_month: str, data_year: int, current_month: str) -> int:
     """
@@ -156,15 +142,8 @@ def get_value(row, month, filetype, df:pd.DataFrame=None):
     file_name = row[('Centene Capacity plan', 'Main LOB')]
     state = row[('Centene Capacity plan', 'State')]
     work_type = row[('Centene Capacity plan', 'Case type')]
-    # file_paths = {
-    #     'nonmmp': os.path.join(curpth, "data", 'constants',"medicare_medicaid_nonmmp", f"{file_name}.xlsx"),
-    #     'mmp': os.path.join(curpth, "data", 'constants',"medicare_medicaid_mmp", f"{file_name}.xlsx"),
-    #     'summary': os.path.join(curpth, "data", 'constants',"medicare_medicaid_summary", f"{file_name}-summary.xlsx")
-    # }
     try:
         if filetype == 'medicare_medicaid_nonmmp':
-            # df = pd.read_excel(file_paths['nonmmp'], header=[0, 1, 2])
-            # df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
             filtered_df = df[(df[('', '', 'State')] == state) & (df[('', '', 'Month')] == month)]
             if not filtered_df.empty:
                 for col in filtered_df.columns:
@@ -172,7 +151,6 @@ def get_value(row, month, filetype, df:pd.DataFrame=None):
                         return filtered_df[col].values[0]
             return 0
         elif filetype == 'medicare_medicaid_mmp':
-            # df = pd.read_excel(file_paths['mmp'], header=[0, 1])
             filtered_df = df[(df[('State', 'State')] == state) & (df[('Month', 'Month')] == month)]
             if not filtered_df.empty:
                 for col in filtered_df.columns:
@@ -180,8 +158,6 @@ def get_value(row, month, filetype, df:pd.DataFrame=None):
                         return filtered_df[col].values[0]
             return 0
         elif filetype == 'medicare_medicaid_summary':
-            # df = pd.read_excel(file_paths['summary'], header=[0, 1, 2, 3])
-            # df.columns = df.columns.map(lambda x: tuple(datetime.strptime(i, "%Y-%m-%d %H:%M:%S").strftime('%B') if ":" in i and "unnamed" not in i.lower() else i for i in x))
             filtered_df = df[df[(file_name, "Vendor Eligible Forecast (WFM)", "Work Type", "")] == work_type]
             if not filtered_df.empty:
                 return filtered_df[(file_name, "Vendor Eligible Forecast (WFM)", month, "")].values[0]
@@ -1613,7 +1589,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         # Filter to eligible vendors only (Production/Ramp, Claims Analyst)
         logging.info(f"Raw vendor data: {vendor_df_raw.shape}")
         vendor_df = vendor_df_raw[
-            (vendor_df_raw['PartofProduction'].isin(['Production'])) &
+            (vendor_df_raw['PartofProduction'].isin(['Production', 'Ramp'])) &
             (vendor_df_raw['BeelineTitle'] == 'Claims Analyst')
         ].copy()
         logging.info(f"Filtered vendor data: {vendor_df.shape} (eligible vendors only)")

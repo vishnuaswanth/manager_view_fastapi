@@ -80,18 +80,18 @@ def test_bench_allocation_export(month="March", year=2025):
     core_utils = CoreUtils(DATABASE_URL)
 
     # 1. Run allocation logic
-    # This reads from DB but returns a result dict (doesn't write to DB)
+    # This reads from DB but returns a result dataclass (doesn't write to DB)
     result = allocate_bench_for_month(month, year, core_utils)
 
-    if not result['success']:
-        logger.error(f"Allocation failed: {result.get('error')}")
+    if not result.success:
+        logger.error(f"Allocation failed: {result.error}")
         return
 
     logger.info("Allocation logic completed successfully.")
 
     # 2. Prepare data for 'modified forecast' Excel
-    # The result['allocations'] is now a consolidated list of dicts.
-    # Each dict has 'forecast_row' (with updated values), 'vendors', etc.
+    # The result.allocations is now a consolidated list of AllocationRecord dataclasses.
+    # Each has forecast_row (ForecastRowData), vendors (List[VendorAllocation]), etc.
 
     modified_rows = []
     changes_detail = []
@@ -100,9 +100,9 @@ def test_bench_allocation_export(month="March", year=2025):
     # Track unique forecast IDs to avoid duplicates
     processed_forecast_ids = set()
 
-    for alloc in result['allocations']:
-        row = alloc['forecast_row']
-        forecast_id = row['forecast_id']
+    for alloc in result.allocations:
+        row = alloc.forecast_row
+        forecast_id = row.forecast_id
 
         # Only process each forecast_id once (avoid duplicate rows)
         if forecast_id in processed_forecast_ids:
@@ -120,7 +120,7 @@ def test_bench_allocation_export(month="March", year=2025):
                 continue
 
             # Get the month index for this allocation
-            m_idx = row['month_index']
+            m_idx = row.month_index
 
             # Build modified row with all 6 months of data
             modified_row = {
@@ -170,45 +170,45 @@ def test_bench_allocation_export(month="March", year=2025):
             }
 
             # Update the specific allocated month with modified values
-            modified_row[f'FTE Avail Month{m_idx}'] = row['fte_avail']
-            modified_row[f'Capacity Month{m_idx}'] = row['capacity']
+            modified_row[f'FTE Avail Month{m_idx}'] = row.fte_avail
+            modified_row[f'Capacity Month{m_idx}'] = row.capacity
 
             modified_rows.append(modified_row)
 
-        capacity_before = row.get('capacity_original', row['capacity'])
-        capacity_change = alloc.get('capacity_change', 0)
+        capacity_before = row.capacity_original
+        capacity_change = alloc.capacity_change
         capacity_pct_change = (capacity_change / capacity_before) if capacity_before else 0
 
         # Structure for Changes Detail Sheet
         change = {
-            'main_lob': row['main_lob'],
-            'state': row['state'],
-            'case_type': row['case_type'],
-            'month': row['month_name'],
-            'fte_required': row['fte_required'],
-            'fte_avail_before': row['fte_avail_original'],
-            'fte_avail_after': row['fte_avail'],
-            'fte_change': alloc['fte_change'],
-            'allocation_type': f"Gap: {alloc['gap_fill_count']}, Excess: {alloc['excess_distribution_count']}",
-            'vendors_allocated': len(alloc['vendors']),
+            'main_lob': row.main_lob,
+            'state': row.state,
+            'case_type': row.case_type,
+            'month': row.month_name,
+            'fte_required': row.fte_required,
+            'fte_avail_before': row.fte_avail_original,
+            'fte_avail_after': row.fte_avail,
+            'fte_change': alloc.fte_change,
+            'allocation_type': f"Gap: {alloc.gap_fill_count}, Excess: {alloc.excess_distribution_count}",
+            'vendors_allocated': len(alloc.vendors),
             'capacity_before': capacity_before,
-            'capacity_after': row['capacity'],
+            'capacity_after': row.capacity,
             'capacity_change': capacity_change,
             'capacity_pct_change': capacity_pct_change
         }
         changes_detail.append(change)
 
         # Structure for Vendor Assignments Sheet
-        for vendor in alloc['vendors']:
+        for vendor in alloc.vendors:
             assignment = {
-                'vendor_name': f"{vendor.get('first_name')} {vendor.get('last_name')}",
-                'vendor_cn': vendor.get('cn'),
-                'vendor_skills': vendor.get('skills'),
-                'vendor_states': ", ".join(vendor.get('state_list', [])),
-                'allocated_to_lob': row['main_lob'],
-                'allocated_to_state': row['state'],
-                'allocated_to_worktype': row['case_type'],
-                'allocation_month': row['month_name'],
+                'vendor_name': f"{vendor.first_name} {vendor.last_name}",
+                'vendor_cn': vendor.cn,
+                'vendor_skills': vendor.skills,
+                'vendor_states': ", ".join(vendor.state_list),
+                'allocated_to_lob': row.main_lob,
+                'allocated_to_state': row.state,
+                'allocated_to_worktype': row.case_type,
+                'allocation_month': row.month_name,
                 'allocation_type': "Bench"
             }
             vendor_assignments.append(assignment)
@@ -220,10 +220,10 @@ def test_bench_allocation_export(month="March", year=2025):
     summary = {
         'month': month,
         'year': year,
-        'total_bench_allocated': result['total_bench_allocated'],
-        'gaps_filled': result['gaps_filled'],
-        'excess_distributed': result['excess_distributed'],
-        'rows_modified': result['rows_modified'],
+        'total_bench_allocated': result.total_bench_allocated,
+        'gaps_filled': result.gaps_filled,
+        'excess_distributed': result.excess_distributed,
+        'rows_modified': result.rows_modified,
         'validation': {'valid': True} # Assuming valid since it ran
     }
 
