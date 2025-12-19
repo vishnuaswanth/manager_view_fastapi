@@ -239,28 +239,80 @@ def parse_vendor_state_list(state_str: str, valid_states: set) -> List[str]:
     return unique_states
 
 
+class VendorAvailabilityFilter:
+    """
+    Helper class to filter vendors based on availability across forecast months.
+
+    Stores month names as instance attribute for better performance when
+    applying filter to large DataFrames (avoids parameter passing overhead).
+    """
+
+    def __init__(self, forecast_months: List[str]):
+        """
+        Initialize filter with forecast month names.
+
+        Args:
+            forecast_months: List of 6 month names from ForecastMonthsModel
+        """
+        self.forecast_months = forecast_months
+
+    def is_vendor_available(self, row: pd.Series) -> bool:
+        """
+        Check if vendor is unallocated in ANY month.
+
+        Logic:
+        1. If Status == 'Not Allocated' → return True
+        2. Else check each {month}_LOB column → return True if ANY is 'Not Allocated'
+        3. Else return False
+
+        Args:
+            row: DataFrame row (vendor record)
+
+        Returns:
+            True if vendor should be included for bench allocation
+        """
+        # Completely unallocated vendors
+        if row.get('Status') == 'Not Allocated':
+            return True
+
+        # Check each month's LOB column
+        for month_name in self.forecast_months:
+            lob_col = f"{month_name}_LOB"
+            if lob_col in row.index and row.get(lob_col) == 'Not Allocated':
+                return True
+
+        return False
+
+
 def get_unallocated_vendors_with_states(
     execution_id: str,
     month: str,
     year: int,
-    core_utils: CoreUtils
+    core_utils: CoreUtils,
+    forecast_months: Optional[List[str]] = None
 ) -> Tuple[List[VendorData], set[str]]:
     """
-    Get unallocated vendors from roster_allotment report with StateList parsing.
+    Get vendors unallocated for a SPECIFIC MONTH from roster_allotment report.
+
+    This function filters vendors based on per-month allocation status, NOT the global
+    Status column. A vendor with Status="Allocated" (allocated in ANY month) may still
+    be returned if they are NOT allocated in the specific month being queried.
 
     Args:
         execution_id: The execution UUID from AllocationExecutionModel
-        month: Month name (e.g., "January") - for fallback/validation
-        year: Year (e.g., 2025) - for fallback/validation
+        month: Month name (e.g., "January") - used to check {month} {year}_LOB column
+        year: Year (e.g., 2025) - used to check {month} {year}_LOB column
         core_utils: CoreUtils instance for database access
+        forecast_months: Optional pre-loaded list of 6 month names from ForecastMonthsModel.
+                        If provided, skips database queries for AllocationExecutionModel and ForecastMonthsModel.
 
     Returns:
         Tuple of (vendors_list, valid_states_set)
-        - vendors_list: List of VendorData dataclass instances with state_list field
+        - vendors_list: List of VendorData instances unallocated for this specific month
         - valid_states_set: Set of valid states from forecast data
 
     Raises:
-        ValueError: If roster_allotment report not found
+        ValueError: If roster_allotment report not found or month column missing
     """
     import json
 
@@ -287,12 +339,65 @@ def get_unallocated_vendors_with_states(
     except Exception as e:
         raise ValueError(f"Error reading roster_allotment report: {e}")
 
-    # Filter to unallocated vendors only
-    unallocated_df = report_df[report_df['Status'] == 'Not Allocated'].copy()
+    # Get the 6 forecast month names from ForecastMonthsModel (or use pre-loaded data)
+    if forecast_months is None:
+        # Fallback: Query database (for backward compatibility)
+        from code.logics.db import ForecastMonthsModel, AllocationExecutionModel
+
+        exec_db = core_utils.get_db_manager(AllocationExecutionModel, limit=None, skip=0, select_columns=None)
+        with exec_db.SessionLocal() as exec_session:
+            execution = exec_session.query(AllocationExecutionModel).filter(
+                AllocationExecutionModel.execution_id == execution_id
+            ).first()
+
+            if not execution:
+                raise ValueError(f"Execution {execution_id} not found")
+
+            uploaded_file = execution.UploadedFile
+
+        month_db = core_utils.get_db_manager(ForecastMonthsModel, limit=None, skip=0, select_columns=None)
+        with month_db.SessionLocal() as month_session:
+            month_record = month_session.query(ForecastMonthsModel).filter(
+                ForecastMonthsModel.UploadedFile == uploaded_file
+            ).first()
+
+            if not month_record:
+                raise ValueError(f"Month mappings not found for file: {uploaded_file}")
+
+            forecast_months = [
+                month_record.Month1,
+                month_record.Month2,
+                month_record.Month3,
+                month_record.Month4,
+                month_record.Month5,
+                month_record.Month6
+            ]
+
+        logger.info(f"Queried forecast months from database: {forecast_months}")
+    else:
+        logger.info(f"Using pre-loaded forecast months: {forecast_months}")
+
+    logger.info(f"Checking vendor availability across months: {forecast_months}")
+
+    # Create filter instance with forecast months (better performance)
+    vendor_filter = VendorAvailabilityFilter(forecast_months)
+
+    # Apply filter to DataFrame - checks ALL months for availability
+    unallocated_mask = report_df.apply(vendor_filter.is_vendor_available, axis=1)
+
+    unallocated_df = report_df[unallocated_mask].copy()
 
     if unallocated_df.empty:
-        logger.info(f"No unallocated vendors found for {month} {year}")
+        logger.info(f"No vendors available for bench allocation")
         return [], set()
+
+    # Log breakdown
+    count_never_allocated = len(unallocated_df[unallocated_df['Status'] == 'Not Allocated'])
+    count_partially_allocated = len(unallocated_df[unallocated_df['Status'] == 'Allocated'])
+
+    logger.info(f"Found {len(unallocated_df)} vendors with availability:")
+    logger.info(f"  - Never allocated: {count_never_allocated}")
+    logger.info(f"  - Partially allocated: {count_partially_allocated}")
 
     # Get valid states from forecast data for state parsing
     forecast_db = core_utils.get_db_manager(ForecastModel, limit=None, skip=0, select_columns=None)
@@ -328,8 +433,6 @@ def get_unallocated_vendors_with_states(
         )
         vendors.append(vendor)
 
-    logger.info(f"Found {len(vendors)} unallocated vendors for {month} {year}")
-
     return vendors, valid_states
 
 
@@ -337,7 +440,8 @@ def get_month_mappings_from_db(
     core_utils: CoreUtils,
     uploaded_file: str,
     report_month: str,
-    report_year: int
+    report_year: int,
+    months_record = None
 ) -> Dict[int, MonthData]:
     """
     Get month mappings from ForecastMonthsModel with correct year calculation.
@@ -368,6 +472,8 @@ def get_month_mappings_from_db(
         uploaded_file: The UploadedFile name from ForecastModel
         report_month: Report month name (e.g., "March")
         report_year: Report year (e.g., 2025)
+        months_record: Optional pre-loaded ForecastMonthsModel record.
+                      If provided, skips database query.
 
     Returns:
         Dict mapping month_index (1-6) to MonthData(month=name, year=year)
@@ -378,15 +484,22 @@ def get_month_mappings_from_db(
     from code.logics.db import ForecastMonthsModel
     from code.logics.month_config_utils import get_specific_config
 
-    db_manager = core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
+    # Use pre-loaded record if provided, otherwise query database
+    if months_record is None:
+        # Fallback: Query database (for backward compatibility)
+        db_manager = core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
 
-    with db_manager.SessionLocal() as session:
-        months_record = session.query(ForecastMonthsModel).filter(
-            ForecastMonthsModel.UploadedFile == uploaded_file
-        ).first()
+        with db_manager.SessionLocal() as session:
+            months_record = session.query(ForecastMonthsModel).filter(
+                ForecastMonthsModel.UploadedFile == uploaded_file
+            ).first()
 
-        if not months_record:
-            raise ValueError(f"No month mappings found for file: {uploaded_file}")
+            if not months_record:
+                raise ValueError(f"No month mappings found for file: {uploaded_file}")
+
+        logger.debug(f"Queried ForecastMonthsModel from database for file: {uploaded_file}")
+    else:
+        logger.debug(f"Using pre-loaded ForecastMonthsModel record for file: {uploaded_file}")
 
     # Create mapping from month name to month number (1-12)
     month_names = list(cal_month_name)[1:]  # ['January', 'February', ..., 'December']
@@ -500,7 +613,9 @@ def _dataframe_row_to_forecast_dict(row: pd.Series) -> ForecastRowDict:
 def normalize_forecast_data(
     month: str,
     year: int,
-    core_utils: CoreUtils
+    core_utils: CoreUtils,
+    uploaded_file: Optional[str] = None,
+    months_record = None
 ) -> pd.DataFrame:
     """
     Read ForecastModel and normalize Month1-Month6 columns to separate rows.
@@ -514,6 +629,10 @@ def normalize_forecast_data(
         month: Month name (e.g., "January")
         year: Year (e.g., 2025)
         core_utils: CoreUtils instance for database access
+        uploaded_file: Optional pre-loaded uploaded file name.
+                      If provided along with months_record, skips extraction from forecast_records.
+        months_record: Optional pre-loaded ForecastMonthsModel record.
+                      If provided along with uploaded_file, skips database query.
 
     Returns:
         DataFrame with columns (can be converted to ForecastRowDict using _dataframe_row_to_forecast_dict):
@@ -546,13 +665,34 @@ def normalize_forecast_data(
         if not forecast_records:
             raise ValueError(f"No forecast data found for {month} {year}")
 
-    # Get month mappings from ForecastMonthsModel (future-proof!)
-    if forecast_records:
-        uploaded_file = forecast_records[0].UploadedFile
-        month_mappings = get_month_mappings_from_db(core_utils, uploaded_file, month, year)
+    # Get month mappings from ForecastMonthsModel (use pre-loaded data if available)
+    if uploaded_file is None or months_record is None:
+        # Fallback: Extract uploaded_file from forecast_records
+        if forecast_records:
+            uploaded_file = forecast_records[0].UploadedFile
+            logger.debug(f"Extracted uploaded_file from forecast_records: {uploaded_file}")
+        else:
+            raise ValueError(f"No forecast records found for {month} {year}")
+
+        # Query month mappings (months_record will be None here)
+        month_mappings = get_month_mappings_from_db(
+            core_utils,
+            uploaded_file,
+            month,
+            year,
+            months_record=None  # Will query database
+        )
         logger.debug(f"Using ForecastMonthsModel month mappings for file: {uploaded_file}")
     else:
-        raise ValueError(f"No forecast records found for {month} {year}")
+        # Use pre-loaded data (skip database query)
+        month_mappings = get_month_mappings_from_db(
+            core_utils,
+            uploaded_file,
+            month,
+            year,
+            months_record=months_record  # Use pre-loaded record
+        )
+        logger.debug(f"Using pre-loaded ForecastMonthsModel record for file: {uploaded_file}")
 
     # Unnormalize to month-level rows
     rows = []
@@ -1143,6 +1283,11 @@ class BenchAllocator:
         self.year = year
         self.core_utils = core_utils
 
+        # Store uploaded file and month data (queried once, reused everywhere)
+        self.uploaded_file: str = None
+        self.forecast_months_record = None  # Full ForecastMonthsModel record
+        self.forecast_months: List[str] = []  # Convenience list [Month1, ..., Month6]
+
         # Initialize data structures
         self.vendors: List[VendorData] = []
         self.valid_states: set = set()
@@ -1167,6 +1312,7 @@ class BenchAllocator:
 
         # Initialize
         logger.info(f"Initializing BenchAllocator for {month} {year} (execution: {execution_id})")
+        self._load_forecast_months_data()  # Load once first
         self._load_unallocated_vendors()
         self._load_and_normalize_forecast_data()
         self._build_worktype_vocabulary()
@@ -1177,13 +1323,79 @@ class BenchAllocator:
         logger.info(f"  - Buckets: {len(self.buckets)}")
         logger.info(f"  - Forecast rows: {len(self.forecast_df)}")
 
+    def _load_forecast_months_data(self):
+        """
+        Load ForecastMonthsModel data once and store in instance.
+
+        Queries:
+        1. AllocationExecutionModel to get uploaded_file
+        2. ForecastMonthsModel to get month mappings
+
+        Stores in:
+        - self.uploaded_file
+        - self.forecast_months_record (full record)
+        - self.forecast_months (list of 6 month names)
+        """
+        from code.logics.db import AllocationExecutionModel, ForecastMonthsModel
+
+        # Query 1: Get uploaded_file from execution
+        exec_db = self.core_utils.get_db_manager(
+            AllocationExecutionModel,
+            limit=None,
+            skip=0,
+            select_columns=None
+        )
+
+        with exec_db.SessionLocal() as session:
+            execution = session.query(AllocationExecutionModel).filter(
+                AllocationExecutionModel.execution_id == self.execution_id
+            ).first()
+
+            if not execution:
+                raise ValueError(f"Execution {self.execution_id} not found")
+
+            self.uploaded_file = execution.UploadedFile
+
+        # Query 2: Get ForecastMonthsModel record
+        month_db = self.core_utils.get_db_manager(
+            ForecastMonthsModel,
+            limit=None,
+            skip=0,
+            select_columns=None
+        )
+
+        with month_db.SessionLocal() as session:
+            month_record = session.query(ForecastMonthsModel).filter(
+                ForecastMonthsModel.UploadedFile == self.uploaded_file
+            ).first()
+
+            if not month_record:
+                raise ValueError(f"Month mappings not found for file: {self.uploaded_file}")
+
+            # Store full record for get_month_mappings_from_db
+            self.forecast_months_record = month_record
+
+            # Extract month list for get_unallocated_vendors_with_states
+            self.forecast_months = [
+                month_record.Month1,
+                month_record.Month2,
+                month_record.Month3,
+                month_record.Month4,
+                month_record.Month5,
+                month_record.Month6
+            ]
+
+        logger.info(f"✓ Loaded forecast months data for file: {self.uploaded_file}")
+        logger.info(f"  Months: {self.forecast_months}")
+
     def _load_unallocated_vendors(self):
         """Load unallocated vendors from roster_allotment report."""
         self.vendors, self.valid_states = get_unallocated_vendors_with_states(
             self.execution_id,
             self.month,
             self.year,
-            self.core_utils
+            self.core_utils,
+            forecast_months=self.forecast_months
         )
         logger.info(f"Loaded {len(self.vendors)} unallocated vendors")
         logger.info(f"Valid states: {sorted(self.valid_states)}")
@@ -1193,7 +1405,9 @@ class BenchAllocator:
         self.forecast_df = normalize_forecast_data(
             self.month,
             self.year,
-            self.core_utils
+            self.core_utils,
+            uploaded_file=self.uploaded_file,
+            months_record=self.forecast_months_record
         )
         logger.info(f"Loaded {len(self.forecast_df)} normalized forecast rows")
 
