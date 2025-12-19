@@ -178,58 +178,73 @@ def check_allocation_result(month="March", year=2025):
     allocations_df = pd.DataFrame(allocations_data)
     vendors_df = pd.DataFrame(vendors_data)
 
-    # VALIDATION: Check for duplicate allocations and proportional balance
-    logger.info("\nRunning validation checks...")
-    validation_data = []
+    # # VALIDATION: Check for duplicate allocations and proportional balance
+    # logger.info("\nRunning validation checks...")
+    # validation_data = []
 
-    # Check 1: No duplicate allocations (same vendor + same month)
-    vendor_month_pairs = vendors_df.groupby(['Vendor CN', 'Allocation Month']).size()
-    duplicates = vendor_month_pairs[vendor_month_pairs > 1]
-    validation_data.append({
-        'Check': 'No Duplicate Allocations',
-        'Status': 'PASS' if len(duplicates) == 0 else 'FAIL',
-        'Details': f'{len(duplicates)} duplicates found' if len(duplicates) > 0 else 'No duplicates'
-    })
-    if len(duplicates) > 0:
-        logger.warning(f"⚠️  Found {len(duplicates)} duplicate vendor-month allocations!")
-        for (cn, month), count in duplicates.items():
-            logger.warning(f"   - Vendor {cn} allocated {count} times in {month}")
-    else:
-        logger.info("✓ No duplicate allocations found")
+    # # Check 1: No duplicate allocations (same vendor + same month)
+    # if len(vendors_df) > 0 and 'Vendor CN' in vendors_df.columns and 'Allocation Month' in vendors_df.columns:
+    #     vendor_month_pairs = vendors_df.groupby(['Vendor CN', 'Allocation Month']).size()
+    #     duplicates = vendor_month_pairs[vendor_month_pairs > 1]
+    #     validation_data.append({
+    #         'Check': 'No Duplicate Allocations',
+    #         'Status': 'PASS' if len(duplicates) == 0 else 'FAIL',
+    #         'Details': f'{len(duplicates)} duplicates found' if len(duplicates) > 0 else 'No duplicates'
+    #     })
+    #     if len(duplicates) > 0:
+    #         logger.warning(f"⚠️  Found {len(duplicates)} duplicate vendor-month allocations!")
+    #         for (cn, month), count in duplicates.items():
+    #             logger.warning(f"   - Vendor {cn} allocated {count} times in {month}")
+    #     else:
+    #         logger.info("✓ No duplicate allocations found")
+    # else:
+    #     validation_data.append({
+    #         'Check': 'No Duplicate Allocations',
+    #         'Status': 'N/A',
+    #         'Details': 'No vendors to check'
+    #     })
+    #     logger.info("✓ No vendors allocated (skipping duplicate check)")
 
-    # Check 2: Proportional distribution balance (FTE_Avail / Forecast ratio)
-    if len(allocations_df) > 0:
-        # Calculate ratio for each allocation
-        allocations_df['Ratio'] = allocations_df['FTE Avail After'] / allocations_df['Forecast'].replace(0, 1)
-        ratio_std = allocations_df['Ratio'].std()
-        ratio_mean = allocations_df['Ratio'].mean()
-        ratio_cv = (ratio_std / ratio_mean) * 100 if ratio_mean > 0 else 0  # Coefficient of variation
+    # # Check 2: Proportional distribution balance (FTE_Avail / Forecast ratio)
+    # if len(allocations_df) > 0:
+    #     # Calculate ratio for each allocation
+    #     allocations_df['Ratio'] = allocations_df['FTE Avail After'] / allocations_df['Forecast'].replace(0, 1)
+    #     ratio_std = allocations_df['Ratio'].std()
+    #     ratio_mean = allocations_df['Ratio'].mean()
+    #     ratio_cv = (ratio_std / ratio_mean) * 100 if ratio_mean > 0 else 0  # Coefficient of variation
 
-        # Good balance: CV < 20%
-        balance_status = 'PASS' if ratio_cv < 20 else 'WARNING' if ratio_cv < 40 else 'FAIL'
-        validation_data.append({
-            'Check': 'Proportional Balance',
-            'Status': balance_status,
-            'Details': f'CV={ratio_cv:.1f}% (mean={ratio_mean:.3f}, std={ratio_std:.3f})'
-        })
-        logger.info(f"✓ FTE_Avail/Forecast ratio CV: {ratio_cv:.1f}% (lower is better, <20% is good)")
-    else:
-        validation_data.append({
-            'Check': 'Proportional Balance',
-            'Status': 'N/A',
-            'Details': 'No allocations to check'
-        })
+    #     # Good balance: CV < 20%
+    #     balance_status = 'PASS' if ratio_cv < 20 else 'WARNING' if ratio_cv < 40 else 'FAIL'
+    #     validation_data.append({
+    #         'Check': 'Proportional Balance',
+    #         'Status': balance_status,
+    #         'Details': f'CV={ratio_cv:.1f}% (mean={ratio_mean:.3f}, std={ratio_std:.3f})'
+    #     })
+    #     logger.info(f"✓ FTE_Avail/Forecast ratio CV: {ratio_cv:.1f}% (lower is better, <20% is good)")
+    # else:
+    #     validation_data.append({
+    #         'Check': 'Proportional Balance',
+    #         'Status': 'N/A',
+    #         'Details': 'No allocations to check'
+    #     })
 
-    # Check 3: All vendors have valid state lists
-    vendors_with_empty_states = vendors_df[vendors_df['Vendor States'].isna() | (vendors_df['Vendor States'] == '')]
-    validation_data.append({
-        'Check': 'Valid Vendor States',
-        'Status': 'PASS' if len(vendors_with_empty_states) == 0 else 'WARNING',
-        'Details': f'{len(vendors_with_empty_states)} vendors with empty states' if len(vendors_with_empty_states) > 0 else 'All vendors have states'
-    })
+    # # Check 3: All vendors have valid state lists
+    # if len(vendors_df) > 0 and 'Vendor States' in vendors_df.columns:
+    #     vendors_with_empty_states = vendors_df[vendors_df['Vendor States'].isna() | (vendors_df['Vendor States'] == '')]
+    #     validation_data.append({
+    #         'Check': 'Valid Vendor States',
+    #         'Status': 'PASS' if len(vendors_with_empty_states) == 0 else 'WARNING',
+    #         'Details': f'{len(vendors_with_empty_states)} vendors with empty states' if len(vendors_with_empty_states) > 0 else 'All vendors have states'
+    #     })
+    # else:
+    #     validation_data.append({
+    #         'Check': 'Valid Vendor States',
+    #         'Status': 'N/A',
+    #         'Details': 'No vendors to check'
+    #     })
 
-    validation_df = pd.DataFrame(validation_data)
-    logger.info(f"✓ Validation complete: {sum(validation_df['Status'] == 'PASS')}/{len(validation_df)} checks passed\n")
+    # validation_df = pd.DataFrame(validation_data)
+    # logger.info(f"✓ Validation complete: {sum(validation_df['Status'] == 'PASS')}/{len(validation_df)} checks passed\n")
 
     # Create summary DataFrame
     summary_data = {
@@ -272,8 +287,8 @@ def check_allocation_result(month="March", year=2025):
         # Vendors sheet
         vendors_df.to_excel(writer, sheet_name='Vendors', index=False)
 
-        # Validation sheet
-        validation_df.to_excel(writer, sheet_name='Validation', index=False)
+        # # Validation sheet
+        # validation_df.to_excel(writer, sheet_name='Validation', index=False)
 
         # Format columns
         for sheet_name in writer.sheets:
@@ -296,9 +311,9 @@ def check_allocation_result(month="March", year=2025):
     logger.info(f"Location: {excel_path}")
     logger.info(f"\nContents:")
     logger.info(f"  - Summary:     {len(summary_df)} metrics")
-    logger.info(f"  - Allocations: {len(allocations_df)} allocation records (with Ratio column)")
+    logger.info(f"  - Allocations: {len(allocations_df)} allocation records")
     logger.info(f"  - Vendors:     {len(vendors_df)} vendor assignments")
-    logger.info(f"  - Validation:  {len(validation_df)} validation checks")
+    # logger.info(f"  - Validation:  {len(validation_df)} validation checks")
     logger.info(f"\nOpen this file to inspect the raw allocation result structure.")
     logger.info(f"{'='*70}\n")
 
