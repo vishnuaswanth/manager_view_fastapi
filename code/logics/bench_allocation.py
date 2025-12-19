@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class VendorAllocation:
-    """Single vendor allocation details"""
+    """Single vendor allocation details with month-specific metadata"""
     first_name: str
     last_name: str
     cn: str
@@ -47,6 +47,26 @@ class VendorAllocation:
     original_state: str
     allocated: bool
     part_of_production: str = ''  # Default empty string for backward compatibility
+
+    # Month-specific fields (NEW - for month-segregated allocation)
+    month_name: str = ''  # e.g., "May"
+    month_year: int = 0   # e.g., 2025
+    month_index: int = 0  # 1-6 (which MonthX column this represents)
+
+    # Normalized fields for bucketing (previously in VendorData)
+    platform_norm: Optional[str] = None
+    location_norm: Optional[str] = None
+    skillset: Optional[frozenset[str]] = None
+
+    def __hash__(self):
+        """Hash based on CN for use in sets/dicts"""
+        return hash(self.cn)
+
+    def __eq__(self, other):
+        """Equality based on CN"""
+        if not isinstance(other, VendorAllocation):
+            return False
+        return self.cn == other.cn
 
 
 @dataclass
@@ -104,31 +124,7 @@ class MonthData:
     year: int
 
 
-@dataclass
-class VendorData:
-    """Vendor data with normalization fields"""
-    first_name: str
-    last_name: str
-    cn: str
-    platform: str
-    location: str
-    skills: str
-    state_list: List[str]
-    original_state: str
-    allocated: bool
-    part_of_production: str = ''  # Part of production indicator for future scenarios
-    # Normalized fields (added during bucketing)
-    platform_norm: Optional[str] = None
-    location_norm: Optional[str] = None
-    skillset: Optional[frozenset[str]] = None
-
-    def __hash__(self):
-        return hash(self.cn)
-
-    def __eq__(self, other):
-        if not isinstance(other, VendorData):
-            return False
-        return self.cn == other.cn
+# VendorData dataclass removed - replaced by VendorAllocation throughout
 
 
 @dataclass
@@ -159,7 +155,7 @@ class ForecastRowDict:
 class AllocationData:
     """Single allocation record (immutable)"""
     forecast_row: ForecastRowDict
-    vendor: VendorData
+    vendor: VendorAllocation  # Changed from VendorData
     fte_allocated: int
     allocation_type: str  # 'gap_fill' or 'excess_distribution'
 
@@ -167,7 +163,7 @@ class AllocationData:
 @dataclass
 class BucketData:
     """Bucket data structure (mutable for algorithm efficiency)"""
-    vendors: List[VendorData]
+    vendors: List[VendorAllocation]  # Changed from VendorData
     forecast_rows: List[ForecastRowDict]
 
 
@@ -290,35 +286,36 @@ def get_unallocated_vendors_with_states(
     year: int,
     core_utils: CoreUtils,
     forecast_months: Optional[List[str]] = None
-) -> Tuple[List[VendorData], set[str]]:
+) -> Tuple[Dict[Tuple[str, int], List[VendorAllocation]], set[str]]:
     """
-    Get vendors unallocated for a SPECIFIC MONTH from roster_allotment report.
+    Get vendors unallocated per month, segregated by month into a dictionary.
 
-    This function filters vendors based on per-month allocation status, NOT the global
-    Status column. A vendor with Status="Allocated" (allocated in ANY month) may still
-    be returned if they are NOT allocated in the specific month being queried.
+    CRITICAL CHANGE: Returns month-segregated dictionary instead of flat list.
+    Vendors are grouped by (month_name, month_year) with separate VendorAllocation
+    instances for each month they're unallocated.
 
     Args:
         execution_id: The execution UUID from AllocationExecutionModel
-        month: Month name (e.g., "January") - used to check {month} {year}_LOB column
-        year: Year (e.g., 2025) - used to check {month} {year}_LOB column
+        month: Report month name (e.g., "March") - used for month mappings
+        year: Report year (e.g., 2025) - used for month mappings
         core_utils: CoreUtils instance for database access
         forecast_months: Optional pre-loaded list of 6 month names from ForecastMonthsModel.
-                        If provided, skips database queries for AllocationExecutionModel and ForecastMonthsModel.
+                        If provided, skips some database queries.
 
     Returns:
-        Tuple of (vendors_list, valid_states_set)
-        - vendors_list: List of VendorData instances unallocated for this specific month
+        Tuple of (vendor_dict, valid_states_set)
+        - vendor_dict: Dict mapping (month_name, month_year) → List[VendorAllocation]
         - valid_states_set: Set of valid states from forecast data
 
     Raises:
-        ValueError: If roster_allotment report not found or month column missing
+        ValueError: If roster_allotment report not found or month mappings missing
     """
     import json
+    from code.logics.db import ForecastMonthsModel, AllocationExecutionModel
 
     db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=None, skip=0, select_columns=None)
 
-    # Get roster_allotment report using execution_id
+    # Step 1: Load roster_allotment report DataFrame
     try:
         with db_manager.SessionLocal() as session:
             report = session.query(AllocationReportsModel).filter(
@@ -339,67 +336,29 @@ def get_unallocated_vendors_with_states(
     except Exception as e:
         raise ValueError(f"Error reading roster_allotment report: {e}")
 
-    # Get the 6 forecast month names from ForecastMonthsModel (or use pre-loaded data)
-    if forecast_months is None:
-        # Fallback: Query database (for backward compatibility)
-        from code.logics.db import ForecastMonthsModel, AllocationExecutionModel
+    # Step 2: Get uploaded_file from execution (needed for month mappings)
+    exec_db = core_utils.get_db_manager(AllocationExecutionModel, limit=None, skip=0, select_columns=None)
+    with exec_db.SessionLocal() as exec_session:
+        execution = exec_session.query(AllocationExecutionModel).filter(
+            AllocationExecutionModel.execution_id == execution_id
+        ).first()
 
-        exec_db = core_utils.get_db_manager(AllocationExecutionModel, limit=None, skip=0, select_columns=None)
-        with exec_db.SessionLocal() as exec_session:
-            execution = exec_session.query(AllocationExecutionModel).filter(
-                AllocationExecutionModel.execution_id == execution_id
-            ).first()
+        if not execution:
+            raise ValueError(f"Execution {execution_id} not found")
 
-            if not execution:
-                raise ValueError(f"Execution {execution_id} not found")
+        uploaded_file = execution.ForecastFilename
 
-            uploaded_file = execution.UploadedFile
+    # Step 3: Get month mappings using helper function
+    month_mappings = get_month_mappings_from_db(
+        core_utils=core_utils,
+        uploaded_file=uploaded_file,
+        report_month=month,
+        report_year=year,
+        months_record=None  # Will query database
+    )
+    logger.info(f"Using month mappings: {[(i, f'{m.month} {m.year}') for i, m in month_mappings.items()]}")
 
-        month_db = core_utils.get_db_manager(ForecastMonthsModel, limit=None, skip=0, select_columns=None)
-        with month_db.SessionLocal() as month_session:
-            month_record = month_session.query(ForecastMonthsModel).filter(
-                ForecastMonthsModel.UploadedFile == uploaded_file
-            ).first()
-
-            if not month_record:
-                raise ValueError(f"Month mappings not found for file: {uploaded_file}")
-
-            forecast_months = [
-                month_record.Month1,
-                month_record.Month2,
-                month_record.Month3,
-                month_record.Month4,
-                month_record.Month5,
-                month_record.Month6
-            ]
-
-        logger.info(f"Queried forecast months from database: {forecast_months}")
-    else:
-        logger.info(f"Using pre-loaded forecast months: {forecast_months}")
-
-    logger.info(f"Checking vendor availability across months: {forecast_months}")
-
-    # Create filter instance with forecast months (better performance)
-    vendor_filter = VendorAvailabilityFilter(forecast_months)
-
-    # Apply filter to DataFrame - checks ALL months for availability
-    unallocated_mask = report_df.apply(vendor_filter.is_vendor_available, axis=1)
-
-    unallocated_df = report_df[unallocated_mask].copy()
-
-    if unallocated_df.empty:
-        logger.info(f"No vendors available for bench allocation")
-        return [], set()
-
-    # Log breakdown
-    count_never_allocated = len(unallocated_df[unallocated_df['Status'] == 'Not Allocated'])
-    count_partially_allocated = len(unallocated_df[unallocated_df['Status'] == 'Allocated'])
-
-    logger.info(f"Found {len(unallocated_df)} vendors with availability:")
-    logger.info(f"  - Never allocated: {count_never_allocated}")
-    logger.info(f"  - Partially allocated: {count_partially_allocated}")
-
-    # Get valid states from forecast data for state parsing
+    # Step 4: Get valid states from forecast data for state parsing
     forecast_db = core_utils.get_db_manager(ForecastModel, limit=None, skip=0, select_columns=None)
     with forecast_db.SessionLocal() as session:
         forecast_records = session.query(ForecastModel).filter(
@@ -414,26 +373,100 @@ def get_unallocated_vendors_with_states(
             str(row.Centene_Capacity_Plan_State).lower() not in {'nan', 'none', ''}
         }
 
-    # Parse StateList for each vendor
-    vendors = []
-    for _, row in unallocated_df.iterrows():
-        state_list = parse_vendor_state_list(row.get('State', ''), valid_states)
+    # Step 5: Create month-segregated vendor dictionary
+    vendor_dict = {}  # {(month_name, month_year): [VendorAllocation, ...]}
 
-        vendor = VendorData(
-            first_name=row.get('FirstName', ''),
-            last_name=row.get('LastName', ''),
-            cn=row.get('CN', ''),
-            platform=row.get('PrimaryPlatform', ''),
-            location=row.get('Location', ''),
-            skills=row.get('NewWorkType', ''),
-            state_list=state_list,
-            original_state=row.get('State', ''),
-            allocated=False,
-            part_of_production=row.get('PartOfProduction', '')  # Read from roster data
-        )
-        vendors.append(vendor)
+    for _, row in report_df.iterrows():
+        # Parse base vendor fields (once per vendor)
+        vendor_cn = row.get('CN', '')
+        first_name = row.get('FirstName', '')
+        last_name = row.get('LastName', '')
+        platform = row.get('PrimaryPlatform', '')
+        location = row.get('Location', '')
+        skills = row.get('NewWorkType', '')
+        original_state = row.get('State', '')
+        part_of_production = row.get('PartOfProduction', '')
 
-    return vendors, valid_states
+        # Parse state list (once per vendor)
+        state_list = parse_vendor_state_list(original_state, valid_states)
+
+        # Check Status column - if 'Not Allocated', add to ALL months
+        status = row.get('Status', '')
+
+        if status == 'Not Allocated':
+            # Vendor never allocated - add to ALL 6 months
+            for month_idx in range(1, 7):
+                month_data = month_mappings[month_idx]
+                month_key = (month_data.month, month_data.year)
+
+                if month_key not in vendor_dict:
+                    vendor_dict[month_key] = []
+
+                vendor_dict[month_key].append(VendorAllocation(
+                    first_name=first_name,
+                    last_name=last_name,
+                    cn=vendor_cn,
+                    platform=platform,
+                    location=location,
+                    skills=skills,
+                    state_list=state_list,
+                    original_state=original_state,
+                    allocated=False,
+                    part_of_production=part_of_production,
+                    # NEW: Month-specific fields
+                    month_name=month_data.month,
+                    month_year=month_data.year,
+                    month_index=month_idx
+                ))
+        else:
+            # Status is 'Allocated' - check individual month columns
+            for month_idx in range(1, 7):
+                month_data = month_mappings[month_idx]
+                month_key = (month_data.month, month_data.year)
+
+                # Check {month}_LOB column
+                lob_col = f"{month_data.month}_LOB"
+
+                # Only add if column exists AND value is 'Not Allocated'
+                if lob_col in row.index and row.get(lob_col) == 'Not Allocated':
+                    if month_key not in vendor_dict:
+                        vendor_dict[month_key] = []
+
+                    vendor_dict[month_key].append(VendorAllocation(
+                        first_name=first_name,
+                        last_name=last_name,
+                        cn=vendor_cn,
+                        platform=platform,
+                        location=location,
+                        skills=skills,
+                        state_list=state_list,
+                        original_state=original_state,
+                        allocated=False,
+                        part_of_production=part_of_production,
+                        # NEW: Month-specific fields
+                        month_name=month_data.month,
+                        month_year=month_data.year,
+                        month_index=month_idx
+                    ))
+
+    # Log statistics
+    if vendor_dict:
+        total_instances = sum(len(v_list) for v_list in vendor_dict.values())
+        unique_cns = set()
+        for v_list in vendor_dict.values():
+            for vendor in v_list:
+                unique_cns.add(vendor.cn)
+
+        logger.info(f"Created month-segregated vendor dictionary:")
+        logger.info(f"  - Unique vendors: {len(unique_cns)}")
+        logger.info(f"  - Total vendor instances: {total_instances}")
+        logger.info(f"  - Months with vendors: {len(vendor_dict)}")
+        for month_key, v_list in sorted(vendor_dict.items()):
+            logger.info(f"    {month_key[0]} {month_key[1]}: {len(v_list)} vendors")
+    else:
+        logger.info(f"No vendors available for bench allocation")
+
+    return vendor_dict, valid_states
 
 
 def get_month_mappings_from_db(
@@ -898,7 +931,7 @@ def parse_vendor_skills(newworktype_str: str, worktype_vocab: List[str]) -> froz
 
 
 def group_into_buckets(
-    vendors: List[VendorData],
+    vendors: List[VendorAllocation],  # Changed from VendorData
     forecast_df: pd.DataFrame,
     worktype_vocab: List[str]
 ) -> Dict[BucketKey, BucketData]:
@@ -1012,7 +1045,7 @@ def is_state_compatible(demand_state: str, vendor_state_list: List[str]) -> bool
 
 
 def fill_gaps(
-    vendors: List[VendorData],
+    vendors: List[VendorAllocation],  # Changed from VendorData
     forecast_rows: List[ForecastRowDict],
     month_name: str,
     allocated_vendors: Dict[Tuple[str, str], int]
@@ -1095,7 +1128,7 @@ def fill_gaps(
 
 
 def distribute_proportionally(
-    vendors: List[VendorData],
+    vendors: List[VendorAllocation],  # Changed from VendorData
     forecast_rows: List[ForecastRowDict],
     month_name: str,
     allocated_vendors: Dict[Tuple[str, str], int]
@@ -1289,14 +1322,14 @@ class BenchAllocator:
         self.forecast_months: List[str] = []  # Convenience list [Month1, ..., Month6]
 
         # Initialize data structures
-        self.vendors: List[VendorData] = []
+        self.vendors: Dict[Tuple[str, int], List[VendorAllocation]] = {}  # Month-segregated vendor dictionary
         self.valid_states: set = set()
         self.forecast_df: pd.DataFrame = None
         self.worktype_vocab: List[str] = []
 
         # Buckets keyed by (platform, location, month, VENDOR_SKILLSET)
         # SIMPLIFIED: Only stores vendor lists (no forecast data)
-        self.buckets: Dict[BucketKey, List[VendorData]] = {}
+        self.buckets: Dict[BucketKey, List[VendorAllocation]] = {}
 
         # Track all allocations (unconsolidated)
         self.allocation_history: List[AllocationData] = []
@@ -1354,7 +1387,7 @@ class BenchAllocator:
             if not execution:
                 raise ValueError(f"Execution {self.execution_id} not found")
 
-            self.uploaded_file = execution.UploadedFile
+            self.uploaded_file = execution.ForecastFilename
 
         # Query 2: Get ForecastMonthsModel record
         month_db = self.core_utils.get_db_manager(
@@ -1389,7 +1422,7 @@ class BenchAllocator:
         logger.info(f"  Months: {self.forecast_months}")
 
     def _load_unallocated_vendors(self):
-        """Load unallocated vendors from roster_allotment report."""
+        """Load unallocated vendors from roster_allotment report as month-segregated dictionary."""
         self.vendors, self.valid_states = get_unallocated_vendors_with_states(
             self.execution_id,
             self.month,
@@ -1397,8 +1430,21 @@ class BenchAllocator:
             self.core_utils,
             forecast_months=self.forecast_months
         )
-        logger.info(f"Loaded {len(self.vendors)} unallocated vendors")
-        logger.info(f"Valid states: {sorted(self.valid_states)}")
+
+        # Log dictionary statistics
+        if self.vendors:
+            total_vendor_instances = sum(len(v_list) for v_list in self.vendors.values())
+            unique_cns = set()
+            for v_list in self.vendors.values():
+                for vendor in v_list:
+                    unique_cns.add(vendor.cn)
+
+            logger.info(f"Loaded {len(unique_cns)} unique vendors across {len(self.vendors)} months")
+            logger.info(f"Total vendor instances: {total_vendor_instances}")
+            logger.info(f"Valid states: {sorted(self.valid_states)}")
+        else:
+            logger.info(f"No unallocated vendors found")
+            logger.info(f"Valid states: {sorted(self.valid_states)}")
 
     def _load_and_normalize_forecast_data(self):
         """Load ForecastModel and normalize Month1-Month6 to individual rows."""
@@ -1421,63 +1467,66 @@ class BenchAllocator:
         """
         Group vendors by (platform, location, month, state_set, skillset).
 
+        CRITICAL FIX: Uses month-segregated vendor dictionary where vendors only appear
+        in months where they're actually unallocated. Creates buckets ONLY for months
+        where vendors are available (no wasted iterations).
+
         State-based bucketing with empty set handling:
         - Vendors with US state codes → state_set = frozenset({'FL', 'GA', ...})
         - Vendors with N/A only → state_set = frozenset() (empty)
-
-        SIMPLIFIED: Only vendors, no forecast data pre-population.
-        Forecast data will be filtered on-demand during allocation with state filtering.
         """
         buckets = {}
 
-        logger.info(f"Parsing skills for {len(self.vendors)} vendors...")
+        logger.info(f"Creating buckets from month-segregated vendor dictionary...")
 
-        # Get unique months from forecast (for bucket creation)
-        unique_months = self.forecast_df['month_name'].unique()
+        # Iterate through month-segregated vendor dictionary
+        # Only creates buckets for months where vendors are actually available
+        for (month_name, month_year), vendor_list in self.vendors.items():
+            logger.info(f"Processing {len(vendor_list)} vendors for {month_name} {month_year}...")
 
-        # Parse vendor skills and create buckets
-        for vendor in self.vendors:
-            # Normalize platform/location
-            platform_norm = vendor.platform.strip().split()[0].upper() if vendor.platform else ''
-            location_norm = normalize_locality(vendor.location)
+            for vendor in vendor_list:
+                # Normalize platform/location
+                platform_norm = vendor.platform.strip().split()[0].upper() if vendor.platform else ''
+                location_norm = normalize_locality(vendor.location)
 
-            # Parse vendor's full skillset
-            skillset = parse_vendor_skills(vendor.skills, self.worktype_vocab)
+                # Parse vendor's full skillset
+                skillset = parse_vendor_skills(vendor.skills, self.worktype_vocab)
 
-            if not skillset:
-                logger.debug(f"Skipping vendor {vendor.cn} - no recognized skills")
-                continue
+                if not skillset:
+                    logger.debug(f"Skipping vendor {vendor.cn} - no recognized skills")
+                    continue
 
-            # Extract vendor's state_set (excluding N/A for specific states)
-            # If vendor has only N/A, state_set will be empty frozenset()
-            vendor_state_set = frozenset(
-                state for state in vendor.state_list
-                if state != 'N/A'
-            )
-            # If all states were N/A, state_set remains empty
-            if not vendor_state_set:
-                vendor_state_set = frozenset()
+                # Extract vendor's state_set (excluding N/A for specific states)
+                vendor_state_set = frozenset(
+                    state for state in vendor.state_list
+                    if state != 'N/A'
+                )
+                if not vendor_state_set:
+                    vendor_state_set = frozenset()  # Empty set for N/A-only vendors
 
-            # Store normalized fields in vendor
-            vendor.platform_norm = platform_norm
-            vendor.location_norm = location_norm
-            vendor.skillset = skillset
+                # Store normalized fields in vendor (mutate in place)
+                vendor.platform_norm = platform_norm
+                vendor.location_norm = location_norm
+                vendor.skillset = skillset
 
-            # Create bucket for each month
-            for month_name in unique_months:
-                bucket_key = (platform_norm, location_norm, month_name, vendor_state_set, skillset)
+                # Create bucket key for THIS specific month ONLY
+                # Uses vendor.month_name (not iterating all unique_months)
+                bucket_key = (platform_norm, location_norm, vendor.month_name, vendor_state_set, skillset)
 
                 if bucket_key not in buckets:
-                    buckets[bucket_key] = []  # Just list of vendors
+                    buckets[bucket_key] = []
 
-                # Add vendor to bucket (avoid duplicates)
+                # Add vendor to bucket (avoid duplicates by CN)
                 if vendor not in buckets[bucket_key]:
                     buckets[bucket_key].append(vendor)
 
         self.buckets = buckets
 
-        logger.info(f"✓ Initialized {len(self.buckets)} buckets (vendors only, no forecast rows)")
-        logger.info(f"  - Total vendors grouped: {sum(len(v) for v in buckets.values())}")
+        logger.info(f"✓ Initialized {len(self.buckets)} buckets (month-specific only)")
+
+        # Log vendor distribution for debugging
+        total_vendor_instances = sum(len(v_list) for v_list in buckets.values())
+        logger.info(f"  Total vendor instances in buckets: {total_vendor_instances}")
 
     def _filter_forecast_for_bucket(
         self,
@@ -2131,21 +2180,8 @@ def allocate_bench_for_month(
                 capacity_original=forecast_row.capacity_original
             )
 
-            # Convert VendorData to VendorAllocation for response
-            vendor_allocations = [
-                VendorAllocation(
-                    first_name=v.first_name,
-                    last_name=v.last_name,
-                    cn=v.cn,
-                    platform=v.platform,
-                    location=v.location,
-                    skills=v.skills,
-                    state_list=v.state_list,
-                    original_state=v.state,
-                    allocated=v.allocated
-                )
-                for v in vendors
-            ]
+            # Vendors are already VendorAllocation instances - no conversion needed
+            vendor_allocations = vendors
 
             allocation_record = AllocationRecord(
                 forecast_row=forecast_row_data,
