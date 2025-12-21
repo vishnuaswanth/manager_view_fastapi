@@ -1347,6 +1347,10 @@ class BenchAllocator:
         self._consolidated_cache: Optional[Dict[Tuple[int, int], Dict]] = None
         self._cache_valid: bool = False
 
+        # Month configuration cache - stores month configs to minimize DB calls
+        # Key: (month_name, year, locality) → config dict
+        self._month_config_cache: Dict[Tuple[str, int, str], Dict] = {}
+
         # Initialize
         logger.info(f"Initializing BenchAllocator for {month} {year} (execution: {execution_id})")
         self._load_forecast_months_data()  # Load once first
@@ -1733,17 +1737,24 @@ class BenchAllocator:
             else:
                 consolidated[key]['excess_count'] += 1
 
-        # PHASE 2: Compute totals vectorized (once per forecast)
+        # PHASE 2: Compute totals and update forecast row capacity based on new FTE
         for key, data in consolidated.items():
             total_vendors = len(data['vendors'])
 
             # Total FTE change = count of vendors (each vendor = 1 FTE)
             data['total_fte_change'] = total_vendors
 
-            # Calculate capacity ONCE for all vendors
+            # Calculate capacity change for the added vendors
             data['total_capacity_change'] = self._calculate_capacity_for_fte(
                 data['forecast_row'],
-                total_vendors  # All vendors at once
+                total_vendors  # All changed vendors at once
+            )
+
+            # CRITICAL UPDATE: Recalculate total capacity based on updated FTE_Avail
+            # This ensures forecast_row.capacity reflects the TOTAL capacity with new FTE
+            data['forecast_row'].capacity = self._calculate_capacity_for_fte(
+                data['forecast_row'],
+                data['forecast_row'].fte_avail  # Use current FTE_Avail (already updated during allocation)
             )
 
         # Cache the result for subsequent calls
@@ -1751,6 +1762,7 @@ class BenchAllocator:
         self._cache_valid = True
 
         logger.info(f"✓ Consolidated {len(self.allocation_history)} allocations into {len(consolidated)} unique forecast rows (cached)")
+        logger.debug(f"Month config cache size: {len(self._month_config_cache)} entries")
 
         return consolidated
 
@@ -1762,23 +1774,33 @@ class BenchAllocator:
         """
         Calculate capacity for given FTE count using month configuration.
 
-        Formula: capacity = fte_count × target_cph × work_hours × occupancy × (1 - shrinkage) × working_days
+        Formula: capacity = fte_count × target_cph × work_hours × (1 - shrinkage) × working_days
+
+        Uses cached month configurations to minimize database calls.
         """
-        # Get month config using pre-parsed locality
-        # TODO cache this for performance if needed
-        config = get_specific_config(
-            forecast_row.month_name,
-            forecast_row.month_year,
-            forecast_row.locality_norm  # Use pre-parsed field
-        )
+        # Create cache key (month_name, year, locality)
+        cache_key = (forecast_row.month_name, forecast_row.month_year, forecast_row.locality_norm)
+
+        # Check cache first
+        if cache_key not in self._month_config_cache:
+            # Cache miss - fetch from database
+            config = get_specific_config(
+                forecast_row.month_name,
+                forecast_row.month_year,
+                forecast_row.locality_norm
+            )
+            self._month_config_cache[cache_key] = config
+            logger.debug(f"Cached month config for {cache_key}")
+        else:
+            # Cache hit
+            config = self._month_config_cache[cache_key]
 
         # Calculate capacity using month-specific configuration
-        # Formula: Capacity = FTE × WorkingDays × WorkHours × Occupancy × (1 - Shrinkage) × TargetCPH
+        # Formula: Capacity = FTE × WorkingDays × WorkHours × (1 - Shrinkage) × TargetCPH
         capacity = (
             fte_count *
             config['working_days'] *
             config['work_hours'] *
-            config['occupancy'] *
             (1 - config['shrinkage']) *
             forecast_row.target_cph
         )
@@ -2050,7 +2072,7 @@ class BenchAllocator:
             output_path: Path where the Excel file will be saved.
         """
         consolidated = self.consolidate_changes()
-        
+
         if not consolidated:
             logger.info(f"No consolidated changes to export to {output_path}")
             # Create an empty Excel file with headers if no data
@@ -2289,6 +2311,8 @@ def allocate_bench_for_month(
 
         # Step 4: Consolidate changes
         consolidated = allocator.consolidate_changes()
+        output_path = os.path.join(BASE_DIR, "logics", "consolidated_data.xlsx")
+        allocator.export_consolidated_allocations_to_excel(output_path)
 
         # Step 5: Update reports
         allocator.update_reports()
