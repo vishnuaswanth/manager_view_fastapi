@@ -2032,6 +2032,73 @@ class BenchAllocator:
 
         logger.info(f"Exported {len(bucket_rows)} buckets to {output_path}")
 
+    def export_consolidated_allocations_to_excel(self, output_path: str):
+        """
+        Export consolidated allocation changes to an Excel file.
+
+        Each row in the Excel file represents a unique forecast row that was modified
+        by the bench allocation process.
+
+        Columns include:
+        - Forecast ID, Main LOB, State, Case Type, Month, Year
+        - FTE Required, FTE Avail (Original), FTE Avail (After Bench Alloc)
+        - Capacity (Original), Capacity (After Bench Alloc)
+        - Gap Fill Count, Excess Allocation Count, Total FTE Change,
+        - Total Capacity Change, Allocated Vendors (CNs)
+
+        Args:
+            output_path: Path where the Excel file will be saved.
+        """
+        consolidated = self.consolidate_changes()
+        
+        if not consolidated:
+            logger.info(f"No consolidated changes to export to {output_path}")
+            # Create an empty Excel file with headers if no data
+            columns = [
+                'Forecast ID', 'Main LOB', 'State', 'Case Type', 'Month', 'Year',
+                'FTE Required', 'FTE Avail (Original)', 'FTE Avail (After Bench Alloc)',
+                'Capacity (Original)', 'Capacity (After Bench Alloc)',
+                'Gap Fill Count', 'Excess Allocation Count', 'Total FTE Change',
+                'Total Capacity Change', 'Allocated Vendors (CNs)'
+            ]
+            pd.DataFrame(columns=columns).to_excel(output_path, index=False, sheet_name='Consolidated_Allocations')
+            return
+
+        export_data = []
+        for (forecast_id, month_index), change_data in consolidated.items():
+            forecast_row = change_data['forecast_row']
+            vendors = change_data['vendors']
+
+            export_data.append({
+                'Forecast ID': forecast_row.forecast_id,
+                'Main LOB': forecast_row.main_lob,
+                'State': forecast_row.state,
+                'Case Type': forecast_row.case_type,
+                'Month': forecast_row.month_name,
+                'Year': forecast_row.month_year,
+                'FTE Required': forecast_row.fte_required,
+                'FTE Avail (Original)': forecast_row.fte_avail_original,
+                'FTE Avail (After Bench Alloc)': forecast_row.fte_avail,
+                'Capacity (Original)': forecast_row.capacity_original,
+                'Capacity (After Bench Alloc)': forecast_row.capacity,
+                'Gap Fill Count': change_data['gap_fill_count'],
+                'Excess Allocation Count': change_data['excess_count'],
+                'Total FTE Change': change_data['total_fte_change'],
+                'Total Capacity Change': change_data['total_capacity_change'],
+                'Allocated Vendors (CNs)': ', '.join([v.cn for v in vendors])
+            })
+
+        df = pd.DataFrame(export_data)
+
+        # Sort for readability
+        df = df.sort_values([
+            'Main LOB', 'State', 'Case Type', 'Year', 'Month'
+        ], ignore_index=True)
+
+        df.to_excel(output_path, index=False, sheet_name='Consolidated_Allocations')
+
+        logger.info(f"Exported {len(export_data)} consolidated allocations to {output_path}")
+
     def export_to_excel(self, output_path: str):
         """
         Export consolidated allocation changes to Excel.
