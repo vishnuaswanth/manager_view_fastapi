@@ -20,7 +20,11 @@ from dataclasses import dataclass, field
 import pandas as pd
 import logging
 import re
+import os
+import numpy as np
 
+
+from code.settings import BASE_DIR
 from code.logics.core_utils import CoreUtils
 from code.logics.db import AllocationReportsModel, ForecastModel, MonthConfigurationModel
 from code.logics.allocation import parse_main_lob, normalize_locality, Calculations
@@ -1352,7 +1356,8 @@ class BenchAllocator:
         self._initialize_buckets()
 
         logger.info(f"✓ BenchAllocator initialized:")
-        logger.info(f"  - Vendors: {len(self.vendors)}")
+        for vendor_month, vendor_list in self.vendors.items():
+            logger.info(f"  - Month: {vendor_month[0]}_{vendor_month[1]}, Vendors: {len(vendor_list)}")
         logger.info(f"  - Buckets: {len(self.buckets)}")
         logger.info(f"  - Forecast rows: {len(self.forecast_df)}")
 
@@ -1961,6 +1966,63 @@ class BenchAllocator:
 
         return bucket_rows
 
+    def export_buckets_before_allocation(self, output_path: str):
+        """
+        Export bucket data BEFORE allocation to Excel.
+
+        Each row represents a bucket with:
+        - Platform: Normalized platform (e.g., "AMISYS", "FACETS")
+        - Location: Normalized location (e.g., "Domestic", "Global")
+        - Month: Month name (e.g., "April")
+        - States: Comma-separated state codes or "N/A"
+        - Skills: Comma-separated skillset
+        - Vendor_Count: Number of vendors in bucket
+        - Vendor_CNs: All vendor CN values concatenated as single string (comma-separated)
+        - Vendor_Names: All vendor names (FirstName LastName) concatenated (comma-separated)
+
+        Args:
+            output_path: Path where Excel file will be saved
+        """
+        bucket_rows = []
+
+        # Iterate through all buckets
+        for bucket_key, vendors in self.buckets.items():
+            platform, location, month_name, state_set, skillset = bucket_key
+
+            # Format states (empty set → "N/A", otherwise comma-separated)
+            states_str = ', '.join(sorted(state_set)) if state_set else 'N/A'
+
+            # Format skills (comma-separated)
+            skills_str = ', '.join(sorted(skillset))
+
+            # Concatenate vendor CNs
+            vendor_cns = ', '.join([vendor.cn for vendor in vendors])
+
+            # Concatenate vendor names (FirstName LastName)
+            vendor_names = ', '.join([f"{vendor.first_name} {vendor.last_name}" for vendor in vendors])
+
+            bucket_rows.append({
+                'Platform': platform,
+                'Location': location,
+                'Month': month_name,
+                'States': states_str,
+                'Skills': skills_str,
+                'Vendor_Count': len(vendors),
+                'Vendor_CNs': vendor_cns,
+                'Vendor_Names': vendor_names
+            })
+
+        # Create DataFrame
+        df = pd.DataFrame(bucket_rows)
+
+        # Sort by Platform, Location, Month, Skills for readability
+        df = df.sort_values(['Platform', 'Location', 'Month', 'Skills'], ignore_index=True)
+
+        # Export to Excel
+        df.to_excel(output_path, index=False, sheet_name='Buckets_Before_Allocation')
+
+        logger.info(f"Exported {len(bucket_rows)} buckets to {output_path}")
+
     def export_to_excel(self, output_path: str):
         """
         Export consolidated allocation changes to Excel.
@@ -2124,6 +2186,9 @@ def allocate_bench_for_month(
             core_utils=core_utils
         )
 
+        output_path = os.path.join(BASE_DIR, "logics", "buckets_before_allocation.xlsx")
+        allocator.export_buckets_before_allocation(output_path)
+        logger.info(f"Exported buckets before allocation to {output_path}")
         # Check if there are vendors to allocate
         if not allocator.vendors:
             logger.info("No unallocated vendors found")
