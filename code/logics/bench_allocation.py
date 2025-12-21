@@ -1765,6 +1765,7 @@ class BenchAllocator:
         Formula: capacity = fte_count × target_cph × work_hours × occupancy × (1 - shrinkage) × working_days
         """
         # Get month config using pre-parsed locality
+        # TODO cache this for performance if needed
         config = get_specific_config(
             forecast_row.month_name,
             forecast_row.month_year,
@@ -1802,13 +1803,15 @@ class BenchAllocator:
 
     def _update_roster_allotment_report(self):
         """
-        Update existing roster_allotment report with bench allocation results.
+        Create a new bench_roster_allotment report based on roster_allotment with bench allocation results.
 
-        Updates:
-        1. Status column: 'Not Allocated' → 'Allocated (Bench)'
-        2. Month columns: 'Not Allocated' → 'Main LOB | State | Case Type'
+        Creates a NEW report with ReportType='bench_roster_allotment' containing:
+        1. Status column: 'Not Allocated' → 'Allocated (Bench)' for allocated vendors
+        2. Month columns: 'Not Allocated' → 'Main LOB | State | Case Type' for allocated vendors
 
         Format: "Amisys Medicaid | FL | FTC-Basic/Non MMP"
+
+        Note: The original roster_allotment report is NOT modified.
         """
         consolidated = self.consolidate_changes()
 
@@ -1820,7 +1823,7 @@ class BenchAllocator:
             vendors = change_data['vendors']
 
             # Use pre-parsed fields
-            lob_name = forecast_row.market  # Use pre-parsed market field (was incorrectly looking for 'lob_name')
+            lob_name = forecast_row.market  # Use pre-parsed market field
             state = forecast_row.state
             case_type = forecast_row.case_type
             month_name = forecast_row.month_name
@@ -1835,10 +1838,10 @@ class BenchAllocator:
                 vendor_allocations[vendor.cn].append((month_name, allocation_string))
 
         if not vendor_allocations:
-            logger.info("No vendor allocations to update in roster_allotment report")
+            logger.info("No vendor allocations to save in bench_roster_allotment report")
             return
 
-        # Update roster_allotment report in database
+        # Create new bench_roster_allotment report
         import pandas as pd
         from datetime import datetime
 
@@ -1850,23 +1853,23 @@ class BenchAllocator:
         )
 
         with db_manager.SessionLocal() as session:
-            # Fetch the SINGLE roster_allotment report for this execution (not per-vendor)
-            report_row = session.query(AllocationReportsModel).filter(
+            # Fetch the original roster_allotment report (read-only)
+            original_report = session.query(AllocationReportsModel).filter(
                 AllocationReportsModel.execution_id == self.execution_id,
                 AllocationReportsModel.ReportType == 'roster_allotment'
             ).first()
 
-            if not report_row:
-                logger.warning(f"Roster allotment report not found for execution {self.execution_id}")
+            if not original_report:
+                logger.warning(f"Original roster_allotment report not found for execution {self.execution_id}")
                 return
 
-            # Parse JSON string to DataFrame
-            report_json = report_row.ReportData  # Correct attribute name
+            # Parse JSON string to DataFrame (make a copy)
+            report_json = original_report.ReportData
             df = pd.read_json(report_json)
 
             logger.info(f"Loaded roster_allotment DataFrame: {len(df)} vendors, {len(df.columns)} columns")
 
-            # Update all allocated vendors
+            # Update all allocated vendors in the copy
             updated_count = 0
             for cn, allocations in vendor_allocations.items():
                 # Find vendor row(s) by CN
@@ -1881,7 +1884,7 @@ class BenchAllocator:
 
                 # Update month columns
                 for month_name, allocation_string in allocations:
-                    # Month column format: "April 2025_LOB" (already includes year)
+                    # Month column format: "April_LOB"
                     month_col_lob = f"{month_name}_LOB"
 
                     if month_col_lob in df.columns:
@@ -1890,20 +1893,26 @@ class BenchAllocator:
                     else:
                         logger.warning(f"Column {month_col_lob} not found in roster_allotment DataFrame")
 
-            logger.info(f"Updated roster_allotment for {len(vendor_allocations)} vendors ({updated_count} month allocations)")
+            logger.info(f"Updated {len(vendor_allocations)} vendors ({updated_count} month allocations) in bench roster")
 
-            # Convert DataFrame back to JSON string
-            updated_json = df.to_json(orient='records', date_format='iso')
-            report_row.ReportData = updated_json  # Correct attribute name
+            # Convert DataFrame to JSON string
+            bench_roster_json = df.to_json(orient='records', date_format='iso')
 
-            # Update metadata
-            report_row.UpdatedDateTime = datetime.now()
-            report_row.UpdatedBy = 'bench_allocation'
+            # Create NEW report with ReportType='bench_roster_allotment'
+            new_report = AllocationReportsModel(
+                execution_id=self.execution_id,
+                ReportType='bench_roster_allotment',
+                ReportData=bench_roster_json,
+                CreatedDateTime=datetime.now(),
+                CreatedBy='bench_allocation',
+                UpdatedDateTime=datetime.now(),
+                UpdatedBy='bench_allocation'
+            )
 
-            # Commit changes (no need for session.add() - object is already tracked)
+            session.add(new_report)
             session.commit()
 
-            logger.info(f"✓ Updated roster_allotment report in database for execution {self.execution_id}")
+            logger.info(f"✓ Created new bench_roster_allotment report for execution {self.execution_id}")
 
     def _update_bucket_after_allocation_report(self):
         """
