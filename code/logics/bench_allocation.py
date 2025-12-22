@@ -1813,33 +1813,61 @@ class BenchAllocator:
 
         Should be called after allocation is complete.
         """
+        from code.logics.allocation_reports import (
+            AllocationReportManager,
+            ReportType
+        )
+
         logger.info("Updating allocation reports with bench allocation results...")
 
-        # Update roster allotment report with vendor-to-forecast mapping
-        self._update_roster_allotment_report()
+        report_manager = AllocationReportManager(self.core_utils)
+
+        # Update roster allotment report
+        roster_df = self._generate_bench_roster_allotment()
+        if roster_df is not None:
+            report_manager.save_report(
+                df=roster_df,
+                report_type=ReportType.BENCH_ROSTER_ALLOTMENT,
+                execution_id=self.execution_id,
+                month=self.month,
+                year=self.year,
+                created_by='bench_allocation',
+                upsert=True
+            )
 
         # Update bucket after allocation report
-        self._update_bucket_after_allocation_report()
+        bucket_df = self._generate_buckets_after_allocation()
+        if bucket_df is not None:
+            report_manager.save_report(
+                df=bucket_df,
+                report_type=ReportType.BENCH_BUCKET_AFTER_ALLOCATION,
+                execution_id=self.execution_id,
+                month=self.month,
+                year=self.year,
+                created_by='bench_allocation',
+                upsert=True
+            )
 
-        logger.info("Report updates completed successfully")
+        logger.info("✓ Report updates completed successfully")
 
-    def _update_roster_allotment_report(self):
+    def _generate_bench_roster_allotment(self) -> Optional[pd.DataFrame]:
         """
-        Create a new bench_roster_allotment report based on roster_allotment with bench allocation results.
+        Generate bench_roster_allotment DataFrame based on original roster with bench allocation results.
 
-        Creates a NEW report with ReportType='bench_roster_allotment' containing:
+        Returns DataFrame with:
         1. Status column: 'Not Allocated' → 'Allocated (Bench)' for allocated vendors
         2. Month columns: 'Not Allocated' → 'Main LOB | State | Case Type' for allocated vendors
-
-        Format: "Amisys Medicaid | FL | FTC-Basic/Non MMP"
-
-        Note: The original roster_allotment report is NOT modified.
 
         Optimizations:
         - Uses CN as index for O(1) lookups instead of O(n) boolean masking
         - Pre-validates month columns to avoid repeated checks
         - Batches status updates using vectorized operations
+
+        Returns:
+            DataFrame with updated bench allocations, or None if no allocations or error
         """
+        from code.logics.allocation_reports import ReportType
+
         consolidated = self.consolidate_changes()
 
         # Group allocations by vendor: CN → [(month, LOB, state, case_type), ...]
@@ -1862,8 +1890,8 @@ class BenchAllocator:
                 vendor_allocations[vendor.cn].append((month_name, lob_name, state, case_type))
 
         if not vendor_allocations:
-            logger.info("No vendor allocations to save in bench_roster_allotment report")
-            return
+            logger.info("No vendor allocations to include in bench_roster_allotment report")
+            return None
 
         db_manager = self.core_utils.get_db_manager(
             AllocationReportsModel,
@@ -1872,172 +1900,94 @@ class BenchAllocator:
             select_columns=None
         )
 
-        with db_manager.SessionLocal() as session:
-            # Fetch the original roster_allotment report (read-only)
-            original_report = session.query(AllocationReportsModel).filter(
-                AllocationReportsModel.execution_id == self.execution_id,
-                AllocationReportsModel.ReportType == 'roster_allotment'
-            ).first()
+        try:
+            with db_manager.SessionLocal() as session:
+                # Fetch the original roster_allotment report (read-only)
+                original_report = session.query(AllocationReportsModel).filter(
+                    AllocationReportsModel.execution_id == self.execution_id,
+                    AllocationReportsModel.ReportType == ReportType.ROSTER_ALLOTMENT.value
+                ).first()
 
-            if not original_report:
-                logger.warning(f"Original roster_allotment report not found for execution {self.execution_id}")
-                return
+                if not original_report:
+                    logger.warning(f"Original roster_allotment report not found for execution {self.execution_id}")
+                    return None
 
-            # Parse JSON string to DataFrame (make a copy)
-            report_json = original_report.ReportData
-            df = pd.read_json(StringIO(report_json))
+                # Parse JSON string to DataFrame (make a copy)
+                report_json = original_report.ReportData
+                df = pd.read_json(StringIO(report_json))
 
-            logger.info(f"Loaded roster_allotment DataFrame: {len(df)} vendors, {len(df.columns)} columns")
+                logger.info(f"Loaded roster_allotment DataFrame: {len(df)} vendors, {len(df.columns)} columns")
 
-            # Optimization: Set CN as index for O(1) lookups
-            if 'CN' not in df.columns:
-                logger.error("CN column not found in roster_allotment DataFrame")
-                return
+                # Optimization: Set CN as index for O(1) lookups
+                if 'CN' not in df.columns:
+                    logger.error("CN column not found in roster_allotment DataFrame")
+                    return None
 
-            # Set CN as index (drop=False keeps CN as a column too)
-            df_indexed = df.set_index('CN', drop=False)
+                # Set CN as index (drop=False keeps CN as a column too)
+                df_indexed = df.set_index('CN', drop=False)
 
-            # Pre-validate which month columns exist (check each unique month only once)
-            # Extract unique months from all allocations
-            unique_months = set()
-            for allocations in vendor_allocations.values():
-                for month_name, _, _, _ in allocations:
-                    unique_months.add(month_name)
+                # Pre-validate which month columns exist (check each unique month only once)
+                # Extract unique months from all allocations
+                unique_months = set()
+                for allocations in vendor_allocations.values():
+                    for month_name, _, _, _ in allocations:
+                        unique_months.add(month_name)
 
-            # Check column existence for each unique month once
-            available_months = set()
-            for month_name in unique_months:
-                month_col_lob = f"{month_name}_LOB"
-                month_col_state = f"{month_name}_State"
-                month_col_case = f"{month_name}_Worktype"
-
-                if all(col in df_indexed.columns for col in [month_col_lob, month_col_state, month_col_case]):
-                    available_months.add(month_name)
-                else:
-                    logger.warning(f"Month columns for {month_name} not found in DataFrame")
-
-            # Batch update: Collect all CNs to update Status
-            allocated_cns = list(vendor_allocations.keys())
-            valid_cns = [cn for cn in allocated_cns if cn in df_indexed.index]
-            missing_cns = set(allocated_cns) - set(valid_cns)
-
-            if missing_cns:
-                logger.warning(f"{len(missing_cns)} vendor CNs not found in roster_allotment report: {missing_cns}")
-
-            # Vectorized update: Update Status for all allocated vendors at once
-            if valid_cns:
-                df_indexed.loc[valid_cns, 'Status'] = 'Allocated (Bench)'
-
-            # Update month columns for each vendor
-            updated_count = 0
-            for cn in valid_cns:
-                allocations = vendor_allocations[cn]
-
-                for month_name, lob_name, state, case_type in allocations:
-                    # Skip if month columns don't exist
-                    if month_name not in available_months:
-                        continue
-
-                    # Month column format: "April_LOB", "April_State", "April_Worktype"
+                # Check column existence for each unique month once
+                available_months = set()
+                for month_name in unique_months:
                     month_col_lob = f"{month_name}_LOB"
                     month_col_state = f"{month_name}_State"
                     month_col_case = f"{month_name}_Worktype"
 
-                    # Update all three columns for this month
-                    df_indexed.loc[cn, month_col_lob] = lob_name
-                    df_indexed.loc[cn, month_col_state] = state
-                    df_indexed.loc[cn, month_col_case] = case_type
-                    updated_count += 1
+                    if all(col in df_indexed.columns for col in [month_col_lob, month_col_state, month_col_case]):
+                        available_months.add(month_name)
+                    else:
+                        logger.warning(f"Month columns for {month_name} not found in DataFrame")
 
-            logger.info(f"Updated {len(valid_cns)} vendors ({updated_count} month allocations) in bench roster")
+                # Batch update: Collect all CNs to update Status
+                allocated_cns = list(vendor_allocations.keys())
+                valid_cns = [cn for cn in allocated_cns if cn in df_indexed.index]
+                missing_cns = set(allocated_cns) - set(valid_cns)
 
-            # Reset index to original format
-            df_updated = df_indexed.reset_index(drop=True)
+                if missing_cns:
+                    logger.warning(f"{len(missing_cns)} vendor CNs not found in roster_allotment report: {missing_cns}")
 
-            # Convert DataFrame to JSON string
-            bench_roster_json = df_updated.to_json(orient='records', date_format='iso')
+                # Vectorized update: Update Status for all allocated vendors at once
+                if valid_cns:
+                    df_indexed.loc[valid_cns, 'Status'] = 'Allocated (Bench)'
 
-            # UPSERT: Check if report already exists for this execution_id
-            existing_report = session.query(AllocationReportsModel).filter(
-                AllocationReportsModel.execution_id == self.execution_id,
-                AllocationReportsModel.ReportType == 'bench_roster_allotment'
-            ).first()
+                # Update month columns for each vendor
+                updated_count = 0
+                for cn in valid_cns:
+                    allocations = vendor_allocations[cn]
 
-            if existing_report:
-                # UPDATE existing record
-                existing_report.ReportData = bench_roster_json
-                existing_report.UpdatedDateTime = datetime.now()
-                existing_report.UpdatedBy = 'bench_allocation'
-                logger.info(f"✓ Updated existing bench_roster_allotment report for execution {self.execution_id}")
-            else:
-                # CREATE new record
-                new_report = AllocationReportsModel(
-                    execution_id=self.execution_id,
-                    Month=self.month,
-                    Year=self.year,
-                    ReportType='bench_roster_allotment',
-                    ReportData=bench_roster_json,
-                    CreatedDateTime=datetime.now(),
-                    CreatedBy='bench_allocation',
-                    UpdatedDateTime=datetime.now(),
-                    UpdatedBy='bench_allocation'
-                )
-                session.add(new_report)
-                logger.info(f"✓ Created new bench_roster_allotment report for execution {self.execution_id}")
+                    for month_name, lob_name, state, case_type in allocations:
+                        # Skip if month columns don't exist
+                        if month_name not in available_months:
+                            continue
 
-            session.commit()
+                        # Month column format: "April_LOB", "April_State", "April_Worktype"
+                        month_col_lob = f"{month_name}_LOB"
+                        month_col_state = f"{month_name}_State"
+                        month_col_case = f"{month_name}_Worktype"
 
-    def _update_bucket_after_allocation_report(self):
-        """
-        Create/update bench_bucket_after_allocation report showing vendor allocation by bucket.
+                        # Update all three columns for this month
+                        df_indexed.loc[cn, month_col_lob] = lob_name
+                        df_indexed.loc[cn, month_col_state] = state
+                        df_indexed.loc[cn, month_col_case] = case_type
+                        updated_count += 1
 
-        Report shows allocated vs unallocated vendors per bucket after bench allocation.
-        """
-        # Generate DataFrame
-        bucket_df = self._generate_buckets_after_allocation()
+                logger.info(f"Updated {len(valid_cns)} vendors ({updated_count} month allocations) in bench roster DataFrame")
 
-        # Serialize to JSON string
-        bucket_json = bucket_df.to_json(orient='records', date_format='iso')
+                # Reset index to original format
+                df_updated = df_indexed.reset_index(drop=True)
 
-        # Get DB manager
-        db_manager = self.core_utils.get_db_manager(
-            AllocationReportsModel,
-            limit=None,
-            skip=0,
-            select_columns=None
-        )
+                return df_updated
 
-        with db_manager.SessionLocal() as session:
-            # Check if report already exists (UPDATE pattern)
-            existing_report = session.query(AllocationReportsModel).filter(
-                AllocationReportsModel.execution_id == self.execution_id,
-                AllocationReportsModel.ReportType == 'bench_bucket_after_allocation'
-            ).first()
-
-            if existing_report:
-                # UPDATE existing report
-                existing_report.ReportData = bucket_json
-                existing_report.UpdatedDateTime = datetime.now()
-                existing_report.UpdatedBy = 'bench_allocation'
-                logger.info(f"Updated bench_bucket_after_allocation report for execution {self.execution_id}")
-            else:
-                # CREATE new report
-                new_report = AllocationReportsModel(
-                    execution_id=self.execution_id,
-                    Month=self.month,
-                    Year=self.year,
-                    ReportType='bench_bucket_after_allocation',
-                    ReportData=bucket_json,
-                    CreatedDateTime=datetime.now(),
-                    CreatedBy='bench_allocation',
-                    UpdatedDateTime=datetime.now(),
-                    UpdatedBy='bench_allocation'
-                )
-                session.add(new_report)
-                logger.info(f"Created bench_bucket_after_allocation report for execution {self.execution_id}")
-
-            session.commit()
-            logger.info(f"Stored bench_bucket_after_allocation report with {len(bucket_df)} buckets")
+        except Exception as e:
+            logger.error(f"Error generating bench_roster_allotment DataFrame: {e}", exc_info=True)
+            return None
 
     def _generate_buckets_after_allocation(self) -> pd.DataFrame:
         """

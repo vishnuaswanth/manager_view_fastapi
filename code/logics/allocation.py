@@ -1775,13 +1775,12 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
             # Save allocation reports to database
             logging.info("Saving allocation reports to database...")
             try:
-                # Get DBManager for allocation reports using core_utils
-                db_manager = core_utils.get_db_manager(
-                    AllocationReportsModel,
-                    limit=1000,
-                    skip=0,
-                    select_columns=None
+                from code.logics.allocation_reports import (
+                    AllocationReportManager,
+                    ReportType
                 )
+
+                report_manager = AllocationReportManager(core_utils)
 
                 # Generate and save bucket summary report (with details)
                 summary_df, details_df = allocator.generate_buckets_summary()
@@ -1791,42 +1790,41 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                 details_df['ReportSection'] = 'Details'
                 bucket_summary_combined = pd.concat([summary_df, details_df], ignore_index=True)
 
-                db_manager.save_allocation_report(
+                report_manager.save_report(
                     df=bucket_summary_combined,
+                    report_type=ReportType.BUCKET_SUMMARY,
                     execution_id=execution_id,
                     month=data_month,
                     year=data_year,
-                    report_type='bucket_summary',
                     created_by=forecast_file_uploaded_by,
                     updated_by=forecast_file_uploaded_by
                 )
-                logging.info(f"✓ Saved bucket_summary report to database (execution_id: {execution_id})")
 
                 # Generate and save buckets after allocation report
                 buckets_after_df = allocator.generate_buckets_after_allocation()
-                db_manager.save_allocation_report(
+                report_manager.save_report(
                     df=buckets_after_df,
+                    report_type=ReportType.BUCKET_AFTER_ALLOCATION,
                     execution_id=execution_id,
                     month=data_month,
                     year=data_year,
-                    report_type='bucket_after_allocation',
                     created_by=forecast_file_uploaded_by,
                     updated_by=forecast_file_uploaded_by
                 )
-                logging.info(f"✓ Saved bucket_after_allocation report to database (execution_id: {execution_id})")
 
                 # Generate and save roster allotment report
                 roster_allotment_df = allocator.generate_roster_allotment()
-                db_manager.save_allocation_report(
+                report_manager.save_report(
                     df=roster_allotment_df,
+                    report_type=ReportType.ROSTER_ALLOTMENT,
                     execution_id=execution_id,
                     month=data_month,
                     year=data_year,
-                    report_type='roster_allotment',
                     created_by=forecast_file_uploaded_by,
                     updated_by=forecast_file_uploaded_by
                 )
-                logging.info(f"✓ Saved roster_allotment report to database (execution_id: {execution_id})")
+
+                logging.info("✓ All allocation reports saved successfully")
 
                 # Create allocation validity record
                 logging.info("Creating allocation validity record...")
