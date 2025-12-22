@@ -1973,6 +1973,8 @@ class BenchAllocator:
                 # CREATE new record
                 new_report = AllocationReportsModel(
                     execution_id=self.execution_id,
+                    Month=self.month,
+                    Year=self.year,
                     ReportType='bench_roster_allotment',
                     ReportData=bench_roster_json,
                     CreatedDateTime=datetime.now(),
