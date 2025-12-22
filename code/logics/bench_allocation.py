@@ -1989,16 +1989,17 @@ class BenchAllocator:
 
     def _update_bucket_after_allocation_report(self):
         """
-        Create/update bucket_after_allocation report with consolidated changes.
+        Create/update bench_bucket_after_allocation report showing vendor allocation by bucket.
 
-        Shows bucket state after bench allocation (FTE_Avail, Capacity updated).
+        Report shows allocated vs unallocated vendors per bucket after bench allocation.
         """
-        consolidated = self.consolidate_changes()
+        # Generate DataFrame
+        bucket_df = self._generate_buckets_after_allocation()
 
-        # Generate bucket after allocation data
-        bucket_data = self._generate_buckets_after_allocation(consolidated)
+        # Serialize to JSON string
+        bucket_json = bucket_df.to_json(orient='records', date_format='iso')
 
-        # Store in AllocationReportsModel using proper session management
+        # Get DB manager
         db_manager = self.core_utils.get_db_manager(
             AllocationReportsModel,
             limit=None,
@@ -2007,46 +2008,107 @@ class BenchAllocator:
         )
 
         with db_manager.SessionLocal() as session:
-            for bucket_row in bucket_data:
-                report_row = AllocationReportsModel(
+            # Check if report already exists (UPDATE pattern)
+            existing_report = session.query(AllocationReportsModel).filter(
+                AllocationReportsModel.execution_id == self.execution_id,
+                AllocationReportsModel.ReportType == 'bench_bucket_after_allocation'
+            ).first()
+
+            if existing_report:
+                # UPDATE existing report
+                existing_report.ReportData = bucket_json
+                existing_report.UpdatedDateTime = datetime.now()
+                existing_report.UpdatedBy = 'bench_allocation'
+                logger.info(f"Updated bench_bucket_after_allocation report for execution {self.execution_id}")
+            else:
+                # CREATE new report
+                new_report = AllocationReportsModel(
                     execution_id=self.execution_id,
-                    report_type='bucket_after_allocation',
-                    cn=None,  # Not vendor-specific
-                    report_data=bucket_row
+                    Month=self.month,
+                    Year=self.year,
+                    ReportType='bench_bucket_after_allocation',
+                    ReportData=bucket_json,
+                    CreatedDateTime=datetime.now(),
+                    CreatedBy='bench_allocation',
+                    UpdatedDateTime=datetime.now(),
+                    UpdatedBy='bench_allocation'
                 )
-                session.add(report_row)
+                session.add(new_report)
+                logger.info(f"Created bench_bucket_after_allocation report for execution {self.execution_id}")
 
             session.commit()
-            logger.info(f"Created bucket_after_allocation report with {len(bucket_data)} rows")
+            logger.info(f"Stored bench_bucket_after_allocation report with {len(bucket_df)} buckets")
 
-    def _generate_buckets_after_allocation(self, consolidated: Dict) -> List[Dict]:
+    def _generate_buckets_after_allocation(self) -> pd.DataFrame:
         """
-        Generate bucket summary data after allocation.
+        Generate bucket allocation data after bench allocation.
 
-        Returns list of dicts with bucket state (FTE, Capacity after bench allocation).
+        Returns DataFrame showing allocated vs unallocated vendors per bucket.
+        Each row represents one bucket with vendor allocation statistics.
         """
         bucket_rows = []
 
-        for (forecast_id, month_index), change_data in consolidated.items():
-            forecast_row = change_data['forecast_row']
+        # CRITICAL: Buckets are static lookups NOT updated during allocation
+        # Use self.allocated_vendors dict to check allocation status per (CN, month)
+        # Build a set of allocated (CN, month) tuples for O(1) lookup
+        allocated_set = set(self.allocated_vendors.keys())
+        # allocated_set contains tuples: (vendor_cn, month_name)
+
+        # Iterate over buckets (sorted for deterministic output)
+        for bucket_key, vendors in sorted(self.buckets.items()):
+            # Unpack bucket key (5 elements in bench allocation)
+            platform, location, month_name, state_set, skillset = bucket_key
+
+            # Format skills: frozenset -> sorted string with ' + ' delimiter
+            skills_str = ' + '.join(sorted(skillset)) if skillset else ''
+
+            # Collect unique states from ALL vendors in bucket
+            all_states = set()
+            for vendor in vendors:
+                all_states.update(vendor.state_list)
+
+            # Remove 'N/A' if other specific states exist
+            if len(all_states) > 1 and 'N/A' in all_states:
+                all_states.discard('N/A')
+
+            states_str = ', '.join(sorted(all_states)) if all_states else 'N/A'
+
+            # Count allocated vs unallocated vendors for THIS MONTH
+            # Check allocation status using (vendor.cn, month_name) in allocated_set
+            allocated_count = 0
+            unallocated_count = 0
+            unallocated_cns = []
+
+            for vendor in vendors:
+                allocation_key = (vendor.cn, month_name)
+                if allocation_key in allocated_set:
+                    allocated_count += 1
+                else:
+                    unallocated_count += 1
+                    unallocated_cns.append(vendor.cn)
+
+            unallocated_vendors_str = ', '.join(unallocated_cns) if unallocated_cns else ''
 
             bucket_rows.append({
-                'Main_LOB': forecast_row.main_lob,
-                'State': forecast_row.state,
-                'Case_Type': forecast_row.case_type,
-                'Target_CPH': forecast_row.target_cph,
-                'Month': forecast_row.month_name,
-                'Month_Year': forecast_row.month_year,
-                'Month_Index': month_index,
-                'FTE_Required': forecast_row.fte_required,
-                'FTE_Avail': forecast_row.fte_avail,  # Updated value
-                'Capacity': forecast_row.capacity,  # Updated value
-                'Gap_Fill_Count': change_data['gap_fill_count'],
-                'Excess_Count': change_data['excess_count'],
-                'Total_Vendors_Allocated': len(change_data['vendors'])
+                'Platform': platform,
+                'Location': location,
+                'Month': month_name,
+                'States': states_str,
+                'Skills': skills_str,
+                'allocated_vendor_count': allocated_count,
+                'unallocated_vendor_count': unallocated_count,
+                'Unallocated Vendors': unallocated_vendors_str
             })
 
-        return bucket_rows
+        # Create DataFrame
+        df = pd.DataFrame(bucket_rows)
+
+        logger.info(f"Generated buckets_after_allocation data: {len(df)} buckets")
+        if len(df) > 0:
+            logger.info(f"  - Total allocated: {df['allocated_vendor_count'].sum()}")
+            logger.info(f"  - Total unallocated: {df['unallocated_vendor_count'].sum()}")
+
+        return df
 
     def export_buckets_before_allocation(self, output_path: str):
         """
