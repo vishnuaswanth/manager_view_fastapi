@@ -277,6 +277,17 @@ def filter_main_lobs_by_criteria(
     Filter Main_LOB strings that match platform/market/locality criteria.
     Used for worktype endpoint to find which Main_LOBs match before querying Case_Type.
 
+    IMPORTANT: Main_LOBs without explicit locality (e.g., "Facets OIC Volumes")
+    are treated as UNIVERSAL and match ANY locality filter. This is intentional
+    because some Main_LOBs don't have locality in the name - the locality comes
+    from other columns (e.g., worktype for OIC Volumes).
+
+    Locality Matching Rules:
+        - locality_filter=None: Include ALL Main_LOBs (with or without locality)
+        - locality_filter="Domestic": Include Main_LOBs with locality="Domestic" OR locality=None
+        - locality_filter="Global": Include Main_LOBs with locality="Global" OR locality=None
+        - Main_LOBs without locality are ALWAYS included (universal types)
+
     Args:
         main_lob_values: List of Main_LOB strings from database
         platform_filter: Required platform to match
@@ -290,12 +301,17 @@ def filter_main_lobs_by_criteria(
         ValueError: If platform_filter or market_filter is None or empty
 
     Example:
-        >>> main_lobs = ["Amisys Medicaid Domestic", "Amisys Medicaid Global", "Amisys Medicare"]
+        >>> main_lobs = [
+        ...     "Amisys Medicaid Domestic",
+        ...     "Amisys Medicaid Global",
+        ...     "Amisys Medicaid"           # NO locality - universal
+        ... ]
+
         >>> filter_main_lobs_by_criteria(main_lobs, "Amisys", "Medicaid", "Domestic")
-        ['Amisys Medicaid Domestic']
+        ['Amisys Medicaid Domestic', 'Amisys Medicaid']  # Includes universal!
 
         >>> filter_main_lobs_by_criteria(main_lobs, "Amisys", "Medicaid", None)
-        ['Amisys Medicaid Domestic', 'Amisys Medicaid Global']
+        ['Amisys Medicaid Domestic', 'Amisys Medicaid Global', 'Amisys Medicaid']
     """
     # Validate required inputs
     if not platform_filter or not isinstance(platform_filter, str) or not platform_filter.strip():
@@ -307,6 +323,12 @@ def filter_main_lobs_by_criteria(
     platform_filter_lower = platform_filter.strip().lower()
     market_filter_lower = market_filter.strip().lower()
     locality_filter_lower = locality_filter.strip().lower() if locality_filter and locality_filter.strip() else None
+
+    # Debug logging to trace filtering operation
+    logger.debug(
+        f"[CascadeFilters] Filtering {len(main_lob_values)} Main_LOBs: "
+        f"platform={platform_filter}, market={market_filter}, locality={locality_filter or 'ALL'}"
+    )
 
     for main_lob in main_lob_values:
         parsed = parse_main_lob_preserve_case(main_lob)
@@ -322,15 +344,31 @@ def filter_main_lobs_by_criteria(
             continue
 
         # Check locality match if specified (case-insensitive)
+        # IMPORTANT: Main_LOBs without locality (None) are treated as "universal"
+        #            and match ANY locality filter (Domestic/Global/None)
         if locality_filter_lower:
-            parsed_locality = parsed.get("locality", "")
-            if not parsed_locality or parsed_locality.lower() != locality_filter_lower:
+            parsed_locality = parsed.get("locality")
+
+            # If Main_LOB has NO locality (e.g., "Facets OIC Volumes"), treat as universal → MATCH
+            # If Main_LOB has a locality, it must match the filter
+            if parsed_locality is not None and parsed_locality.lower() != locality_filter_lower:
+                logger.debug(
+                    f"[CascadeFilters] Excluding '{main_lob}': locality '{parsed_locality}' "
+                    f"doesn't match filter '{locality_filter_lower}'"
+                )
                 continue
 
         # This Main_LOB matches all criteria
         matching_lobs.append(main_lob)
+        logger.debug(
+            f"[CascadeFilters] Including '{main_lob}': "
+            f"locality={parsed.get('locality')} matches filter={locality_filter_lower or 'ALL'}"
+        )
 
-    logger.debug(f"[CascadeFilters] Filtered {len(main_lob_values)} Main_LOBs -> {len(matching_lobs)} matches")
+    logger.debug(
+        f"[CascadeFilters] Filtered {len(main_lob_values)} Main_LOBs → "
+        f"{len(matching_lobs)} matches: {matching_lobs}"
+    )
     return matching_lobs
 
 
