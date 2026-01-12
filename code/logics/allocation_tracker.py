@@ -246,6 +246,8 @@ def get_execution_by_id(execution_id: str) -> Optional[Dict]:
                 'error_type': execution.ErrorType,
                 'stack_trace': execution.StackTrace,
                 'config_snapshot': json.loads(execution.ConfigSnapshot) if execution.ConfigSnapshot else None,
+                'bench_allocation_completed': execution.BenchAllocationCompleted,
+                'bench_allocation_completed_at': execution.BenchAllocationCompletedAt.isoformat() if execution.BenchAllocationCompletedAt else None,
                 'created_datetime': execution.CreatedDateTime.isoformat()
             }
 
@@ -448,3 +450,46 @@ def get_execution_kpis(
     except Exception as e:
         logger.error(f"Failed to calculate execution KPIs: {e}", exc_info=True)
         return None
+
+
+def mark_execution_bench_allocated(execution_id: str, core_utils: CoreUtils) -> None:
+    """
+    Mark an execution as having completed bench allocation.
+
+    Updates the execution record to set BenchAllocationCompleted=True and
+    BenchAllocationCompletedAt timestamp. This prevents duplicate bench
+    allocation operations on the same execution.
+
+    Args:
+        execution_id: UUID of the execution
+        core_utils: CoreUtils instance for database access
+
+    Raises:
+        No exceptions raised - errors are logged and operation continues
+    """
+    try:
+        db_manager = core_utils.get_db_manager(AllocationExecutionModel, limit=1, skip=0, select_columns=None)
+
+        with db_manager.SessionLocal() as session:
+            execution = session.query(AllocationExecutionModel).filter(
+                AllocationExecutionModel.execution_id == execution_id
+            ).first()
+
+            if execution:
+                execution.BenchAllocationCompleted = True
+                execution.BenchAllocationCompletedAt = datetime.now()
+                session.commit()
+                logger.info(f"Marked execution {execution_id} as bench allocated")
+
+                # Invalidate execution detail cache and list cache after marking bench allocation
+                try:
+                    invalidate_execution_detail_cache(execution_id)
+                    invalidate_execution_list_cache()
+                    logger.info(f"[Cache] Invalidated caches after marking bench allocation complete")
+                except Exception as cache_error:
+                    logger.warning(f"[Cache] Failed to invalidate caches: {cache_error}")
+            else:
+                logger.warning(f"Execution {execution_id} not found for bench allocation marking")
+
+    except Exception as e:
+        logger.error(f"Failed to mark execution as bench allocated: {e}", exc_info=True)

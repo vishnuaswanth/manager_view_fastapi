@@ -76,7 +76,8 @@ class VendorAllocation:
 @dataclass
 class ForecastRowData:
     """Forecast row data with allocation updates"""
-    forecast_id: int
+    forecast_id: int  # ForecastModel.id (database primary key, used for updates)
+    call_type_id: str  # Centene_Capacity_Plan_Call_Type_ID (business identifier)
     main_lob: str
     state: str
     case_type: str
@@ -134,7 +135,8 @@ class MonthData:
 @dataclass
 class ForecastRowDict:
     """Mutable forecast row data used during allocation processing"""
-    forecast_id: int
+    forecast_id: int  # ForecastModel.id (database primary key, used for updates)
+    call_type_id: str  # Centene_Capacity_Plan_Call_Type_ID (business identifier)
     main_lob: str
     state: str
     case_type: str
@@ -627,6 +629,7 @@ def _dataframe_row_to_forecast_dict(row: pd.Series) -> ForecastRowDict:
     """
     return ForecastRowDict(
         forecast_id=row['forecast_id'],
+        call_type_id=row['call_type_id'],
         main_lob=row['main_lob'],
         state=row['state'],
         case_type=row['case_type'],
@@ -736,6 +739,7 @@ def normalize_forecast_data(
     for record in forecast_records:
         # Parse common fields ONCE per record (outside month loop for 6x performance gain)
         forecast_id = record.id
+        call_type_id = record.Centene_Capacity_Plan_Call_Type_ID or ""
         main_lob = record.Centene_Capacity_Plan_Main_LOB
         state = record.Centene_Capacity_Plan_State
         case_type = record.Centene_Capacity_Plan_Case_Type
@@ -760,6 +764,7 @@ def normalize_forecast_data(
             row = {
                 # Common fields (reused from variables above - no redundant parsing)
                 'forecast_id': forecast_id,
+                'call_type_id': call_type_id,
                 'main_lob': main_lob,
                 'state': state,
                 'case_type': case_type,
@@ -2393,6 +2398,7 @@ def allocate_bench_for_month(
             # Convert ForecastRowDict to ForecastRowData for response
             forecast_row_data = ForecastRowData(
                 forecast_id=forecast_row.forecast_id,
+                call_type_id=forecast_row.call_type_id,
                 main_lob=forecast_row.main_lob,
                 state=forecast_row.state,
                 case_type=forecast_row.case_type,

@@ -8,6 +8,7 @@ Cache Instances:
     - filters_cache: 5 minutes TTL, max 8 entries (for filter dropdowns)
     - data_cache: 60 seconds TTL, max 64 entries (for data responses)
     - month_config_cache: 15 minutes TTL, max 20 entries (for month configurations)
+    - month_mappings_cache: 1 hour TTL, max 20 entries (for month mappings)
     - allocation_list_cache: 30 seconds TTL, max 50 entries (for execution lists)
     - allocation_detail_cache: dynamic TTL, max 100 entries (for execution details)
 
@@ -52,6 +53,12 @@ data_cache = TTLCache(max_size=64, ttl_seconds=60)
 # Keys: "month_config:v1:{month}:{year}:{work_type}"
 month_config_cache = TTLCache(max_size=20, ttl_seconds=900)
 
+# Month mappings cache: Used by edit view utilities
+# 1 hour TTL (3600 seconds), max 20 entries
+# Keys: "month_mappings:v1:{month}:{year}"
+# Rationale: Month mappings are static once set for a month/year, rarely change
+month_mappings_cache = TTLCache(max_size=20, ttl_seconds=3600)
+
 
 # ============ Allocation Execution Caches ============
 
@@ -95,6 +102,24 @@ def generate_month_config_cache_key(
     year_part = str(year) if year else ""
     work_type_part = work_type or ""
     return f"month_config:v1:{month_part}:{year_part}:{work_type_part}"
+
+
+def generate_month_mappings_cache_key(month: str, year: int) -> str:
+    """
+    Generate cache key for month mappings queries.
+
+    Args:
+        month: Report month name (e.g., "April")
+        year: Report year (e.g., 2025)
+
+    Returns:
+        Cache key string
+
+    Examples:
+        generate_month_mappings_cache_key("April", 2025)
+        -> "month_mappings:v1:April:2025"
+    """
+    return f"month_mappings:v1:{month}:{year}"
 
 
 def generate_execution_list_cache_key(
@@ -195,6 +220,39 @@ def invalidate_month_config_cache() -> int:
         return 0
 
 
+def invalidate_month_mappings_cache(month: str = None, year: int = None) -> int:
+    """
+    Invalidate month mappings cache entries.
+
+    Called when new forecast files are uploaded (rare event).
+    Can invalidate specific month/year or all entries.
+
+    Args:
+        month: Month name to invalidate (optional, if None clears all)
+        year: Year to invalidate (optional, if None clears all)
+
+    Returns:
+        Number of cache entries invalidated
+    """
+    try:
+        if month and year:
+            # Invalidate specific month/year
+            cache_key = generate_month_mappings_cache_key(month, year)
+            deleted = month_mappings_cache.delete(cache_key)
+            if deleted:
+                logger.info(f"[Cache] Invalidated month mappings cache for {month} {year}")
+            return 1 if deleted else 0
+        else:
+            # Clear all month mappings cache entries
+            month_mappings_cache.clear()
+            count = month_mappings_cache.stats()["size"]
+            logger.info(f"[Cache] Invalidated all month mappings cache entries")
+            return count
+    except Exception as e:
+        logger.error(f"[Cache] Error invalidating month mappings cache: {e}", exc_info=True)
+        return 0
+
+
 def invalidate_execution_list_cache() -> int:
     """
     Invalidate all execution list cache entries.
@@ -255,6 +313,7 @@ def clear_all_caches() -> dict:
         - filters_cache (manager view filters, forecast cascade filters)
         - data_cache (manager view hierarchical data)
         - month_config_cache (month configurations)
+        - month_mappings_cache (month mappings)
         - allocation_list_cache (execution lists)
         - allocation_detail_cache (execution details)
 
@@ -265,6 +324,7 @@ def clear_all_caches() -> dict:
             "filters_cache": {"size": 0, "max_size": 8, "ttl_seconds": 300},
             "data_cache": {"size": 0, "max_size": 64, "ttl_seconds": 60},
             "month_config_cache": {"size": 0, "max_size": 20, "ttl_seconds": 900},
+            "month_mappings_cache": {"size": 0, "max_size": 20, "ttl_seconds": 3600},
             "allocation_list_cache": {"size": 0, "max_size": 50, "ttl_seconds": 30},
             "allocation_detail_cache": {"size": 0, "max_size": 100, "ttl_seconds": 5},
             "cleared_at": "2025-01-15T10:30:00.123456",
@@ -276,6 +336,7 @@ def clear_all_caches() -> dict:
         filters_cache.clear()
         data_cache.clear()
         month_config_cache.clear()
+        month_mappings_cache.clear()
         allocation_list_cache.clear()
         allocation_detail_cache.clear()
 
@@ -286,6 +347,7 @@ def clear_all_caches() -> dict:
             f"filters_cache: {filters_cache.stats()}, "
             f"data_cache: {data_cache.stats()}, "
             f"month_config_cache: {month_config_cache.stats()}, "
+            f"month_mappings_cache: {month_mappings_cache.stats()}, "
             f"allocation_list_cache: {allocation_list_cache.stats()}, "
             f"allocation_detail_cache: {allocation_detail_cache.stats()}"
         )
@@ -295,6 +357,7 @@ def clear_all_caches() -> dict:
             "filters_cache": filters_cache.stats(),
             "data_cache": data_cache.stats(),
             "month_config_cache": month_config_cache.stats(),
+            "month_mappings_cache": month_mappings_cache.stats(),
             "allocation_list_cache": allocation_list_cache.stats(),
             "allocation_detail_cache": allocation_detail_cache.stats(),
             "cleared_at": cleared_at,
@@ -313,13 +376,16 @@ __all__ = [
     'filters_cache',
     'data_cache',
     'month_config_cache',
+    'month_mappings_cache',
     'allocation_list_cache',
     'allocation_detail_cache',
     'generate_month_config_cache_key',
+    'generate_month_mappings_cache_key',
     'generate_execution_list_cache_key',
     'generate_execution_detail_cache_key',
     'get_ttl_for_execution_status',
     'invalidate_month_config_cache',
+    'invalidate_month_mappings_cache',
     'invalidate_execution_list_cache',
     'invalidate_execution_detail_cache',
     'clear_all_caches'

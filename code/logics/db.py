@@ -438,6 +438,10 @@ class AllocationExecutionModel(SQLModel, table=True):
     # Configuration Snapshot (JSON)
     ConfigSnapshot: Optional[str] = Field(sa_column=Column(Text, nullable=True))
 
+    # Bench Allocation Tracking
+    BenchAllocationCompleted: bool = Field(default=False, nullable=False)
+    BenchAllocationCompletedAt: Optional[datetime] = Field(sa_column=Column(DateTime, nullable=True))
+
     # Audit Trail
     CreatedDateTime: datetime = Field(
         sa_column=Column(DateTime, nullable=False, server_default=func.now())
@@ -450,6 +454,155 @@ class AllocationExecutionModel(SQLModel, table=True):
         Index('idx_execution_id', 'execution_id'),
         Index('idx_execution_uploaded_by', 'UploadedBy', 'StartTime'),
     )
+
+
+class HistoryLogModel(SQLModel, table=True):
+    """
+    Tracks high-level history of allocation changes.
+
+    Each record represents one logical change operation (e.g., bench allocation,
+    CPH update) with summary-level statistics and metadata.
+    """
+    __tablename__ = "history_log"
+
+    # Primary Key
+    id: int | None = Field(default=None, primary_key=True)
+
+    # Unique Identifier (UUID for linking)
+    history_log_id: str = Field(
+        sa_column=Column(String(36), nullable=False, unique=True, index=True)
+    )
+
+    # Time Period
+    Month: str = Field(sa_column=Column(String(15), nullable=False))
+    Year: int = Field(nullable=False)
+
+    # Change Metadata
+    ChangeType: str = Field(
+        sa_column=Column(String(50), nullable=False),
+        description="Type of change operation. Valid values defined in code.logics.config.change_types.CHANGE_TYPES"
+    )
+
+    Timestamp: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+    User: str = Field(
+        sa_column=Column(String(100), nullable=False),
+        description="User who made the change"
+    )
+
+    Description: Optional[str] = Field(
+        sa_column=Column(Text, nullable=True),
+        description="User-provided notes about the change"
+    )
+
+    # Statistics
+    RecordsModified: int = Field(
+        nullable=False,
+        description="Number of forecast records modified"
+    )
+
+    # Summary Data (JSON string)
+    SummaryData: Optional[str] = Field(
+        sa_column=Column(Text, nullable=True),
+        description="JSON string with aggregated before/after totals by month"
+    )
+
+    # Audit Trail
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+    # Indexes for query performance
+    __table_args__ = (
+        Index('idx_history_month_year', 'Month', 'Year', 'Timestamp'),
+        Index('idx_history_change_type', 'ChangeType', 'Timestamp'),
+        Index('idx_history_user', 'User', 'Timestamp'),
+        Index('idx_history_log_id', 'history_log_id'),
+    )
+
+
+class HistoryChangeModel(SQLModel, table=True):
+    """
+    Stores field-level changes for each history log entry.
+
+    Each record represents one field change (e.g., "Jun-25.fte_avail" changed
+    from 25 to 28 for a specific forecast row).
+    """
+    __tablename__ = "history_change"
+
+    # Primary Key
+    id: int | None = Field(default=None, primary_key=True)
+
+    # Link to parent (string-based, no ForeignKey constraint)
+    history_log_id: str = Field(
+        sa_column=Column(String(36), nullable=False, index=True),
+        description="Links to HistoryLogModel.history_log_id"
+    )
+
+    # Record Identifiers (composite key for forecast row)
+    MainLOB: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Main line of business (e.g., 'Amisys Medicaid DOMESTIC')"
+    )
+
+    State: str = Field(
+        sa_column=Column(String(100), nullable=False),
+        description="State code (e.g., 'LA', 'TX')"
+    )
+
+    CaseType: str = Field(
+        sa_column=Column(String(255), nullable=False),
+        description="Case type (e.g., 'Claims Processing')"
+    )
+
+    CaseID: str = Field(
+        sa_column=Column(String(100), nullable=False),
+        description="Unique case identifier (e.g., 'CL-001')"
+    )
+
+    # Field Change Details
+    FieldName: str = Field(
+        sa_column=Column(String(100), nullable=False),
+        description="Field name in DOT notation (e.g., 'Jun-25.fte_avail', 'target_cph')"
+    )
+
+    OldValue: Optional[str] = Field(
+        sa_column=Column(Text, nullable=True),
+        description="Previous value (as string)"
+    )
+
+    NewValue: Optional[str] = Field(
+        sa_column=Column(Text, nullable=True),
+        description="New value (as string)"
+    )
+
+    Delta: Optional[float] = Field(
+        nullable=True,
+        description="Numeric change (new - old), null for non-numeric fields"
+    )
+
+    # Month Context (extracted from DOT notation if present)
+    MonthLabel: Optional[str] = Field(
+        sa_column=Column(String(15), nullable=True),
+        description="Month label if field is month-specific (e.g., 'Jun-25'), null for month-agnostic fields"
+    )
+
+    # Audit Trail
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+    # Indexes for query performance
+    __table_args__ = (
+        Index('idx_change_history_log', 'history_log_id'),
+        Index('idx_change_identifiers', 'MainLOB', 'State', 'CaseType', 'CaseID'),
+        Index('idx_change_field', 'FieldName'),
+        Index('idx_change_month', 'MonthLabel'),
+    )
+
 
 class RawData(SQLModel, table=True):
     __tablename__ = "raw_data"

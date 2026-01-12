@@ -37,6 +37,10 @@ from code.logics.export_utils import (
 )
 from code.logics.summary_utils import update_summary_data
 from code.logics.manager_view import parse_main_lob
+from code.logics.forecast_upload_history import (
+    capture_forecast_snapshot,
+    create_forecast_upload_history_log
+)
 
 # Configure logging
 logging.basicConfig(
@@ -1589,7 +1593,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
         # Filter to eligible vendors only (Production/Ramp, Claims Analyst)
         logging.info(f"Raw vendor data: {vendor_df_raw.shape}")
         vendor_df = vendor_df_raw[
-            (vendor_df_raw['PartofProduction'].isin(['Production', 'Ramp'])) &
+            (vendor_df_raw['PartofProduction'].isin(['Production'])) &
             (vendor_df_raw['BeelineTitle'] == 'Claims Analyst')
         ].copy()
         logging.info(f"Filtered vendor data: {vendor_df.shape} (eligible vendors only)")
@@ -1879,10 +1883,55 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                 logging.info("All vendor resources utilized!")
 
             # Save processed data
+            # STEP: Capture forecast snapshot before update (for history tracking)
+            logging.info("Capturing forecast snapshot before update...")
+            before_snapshot = capture_forecast_snapshot(
+                month=data_month,
+                year=data_year,
+                core_utils=core_utils
+            )
+
+            if before_snapshot is not None:
+                logging.info(f"Captured before snapshot: {len(before_snapshot)} existing records")
+            else:
+                logging.info("No existing forecast data (new upload)")
+
             preprocessor = PreProcessing("forecast")
             mod_consolitated_df = preprocessor.preprocess_forecast_df(consolidated_df.copy())
             update_forecast_data(mod_consolitated_df, data_month, data_year, forecast_file_uploaded_by, forecast_filename)
             logging.info("Forecast data updated successfully.")
+
+            # STEP: Create history log to track forecast changes
+            logging.info("Creating history log for forecast changes...")
+            try:
+                # Determine operation type based on before snapshot existence
+                operation_type = "updated" if before_snapshot is not None else "created"
+                description = f"Forecast data {operation_type} from allocation: {forecast_filename}"
+
+                history_result = create_forecast_upload_history_log(
+                    month=data_month,
+                    year=data_year,
+                    user=forecast_file_uploaded_by,
+                    description=description,
+                    before_df=before_snapshot,  # None for new uploads
+                    after_df=mod_consolitated_df,  # Preprocessed DataFrame
+                    core_utils=core_utils
+                )
+
+                if history_result['success']:
+                    logging.info(
+                        f"✓ Created history log {history_result['history_log_id']}: "
+                        f"{history_result['records_modified']} records modified"
+                    )
+                else:
+                    logging.warning(
+                        f"Failed to create history log: {history_result.get('error')}"
+                    )
+            except Exception as e:
+                # Don't fail allocation if history logging fails
+                logging.error(f"Error creating forecast history log: {e}", exc_info=True)
+                logging.warning("Continuing despite history logging failure...")
+
             update_summary_data(data_month, data_year)
             consolidated_df.to_excel(output_file)
             logging.info(f"Saved consolidated output to {output_file}")

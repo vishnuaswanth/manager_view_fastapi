@@ -237,6 +237,304 @@ driver = ODBC Driver 17 for SQL Server
 - Verify execution tracking records are created
 - Check that reports are properly linked via `execution_id`
 
+## Coding Standards and Best Practices
+
+### Dependency Injection Pattern
+
+**ALWAYS use the dependency injection pattern for CoreUtils and loggers:**
+
+```python
+# CORRECT - Use dependency injection
+from code.api.dependencies import get_core_utils, get_logger
+
+logger = get_logger(__name__)
+core_utils = get_core_utils()  # Singleton instance
+```
+
+```python
+# WRONG - Don't create instances directly
+from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
+from code.logics.core_utils import CoreUtils
+
+if MODE.upper() == "DEBUG":
+    DATABASE_URL = SQLITE_DATABASE_URL
+core_utils = CoreUtils(DATABASE_URL)  # Creates duplicate instance
+```
+
+**Why:** Ensures single CoreUtils instance, consistent error handling, follows project patterns.
+
+**Files:** All routers and logic modules should use `get_core_utils()` and `get_logger()`.
+
+---
+
+### Error Handling
+
+**Use specific exception types instead of broad catches:**
+
+```python
+# CORRECT - Specific exception handling
+from sqlalchemy.exc import SQLAlchemyError
+
+try:
+    # Database operations
+    pass
+except (ValueError, KeyError, AttributeError) as e:
+    # Data validation errors → 400 Bad Request
+    logger.error(f"Data validation error: {e}", exc_info=True)
+    raise HTTPException(status_code=400, detail={...})
+except SQLAlchemyError as e:
+    # Database errors → 500 Internal Server Error
+    logger.error(f"Database error: {e}", exc_info=True)
+    raise HTTPException(status_code=500, detail={...})
+except Exception as e:
+    # Unexpected errors → log as CRITICAL
+    logger.critical(f"Unexpected error: {e}", exc_info=True)
+    raise
+```
+
+```python
+# WRONG - Too broad
+try:
+    # operations
+except Exception as e:
+    logger.error(f"Error: {e}")
+    raise
+```
+
+**Why:** Better HTTP status codes, improved debugging, clearer error messages.
+
+**Files:** All API routers should use specific exception types.
+
+---
+
+### Input Validation
+
+**Add validation BEFORE database operations:**
+
+```python
+# CORRECT - Validate first
+def _validate_change_record(change: Dict, index: int) -> None:
+    """Validate change dict structure."""
+    if not isinstance(change, dict):
+        raise ValueError(f"Change at index {index} is not a dict")
+
+    required_keys = ['main_lob', 'state', 'case_type']
+    missing = [k for k in required_keys if k not in change]
+    if missing:
+        raise ValueError(f"Missing keys: {missing}")
+
+# Then validate all records before DB operations
+for i, change in enumerate(changes):
+    _validate_change_record(change, i)
+```
+
+**Why:** Prevents KeyError crashes, catches malformed data early, better error messages.
+
+**Files:** All data transformation and history logging functions.
+
+---
+
+### Utility Functions - DRY Principle
+
+**Use centralized utility functions instead of duplicating code:**
+
+```python
+# CORRECT - Use utility functions
+from code.logics.edit_view_utils import parse_field_path, get_forecast_column_name
+from code.logics.capacity_calculations import calculate_fte_required, calculate_capacity
+
+month_label, field_name = parse_field_path("Jun-25.fte_avail")
+column_name = get_forecast_column_name('forecast', '1')
+fte = calculate_fte_required(forecast, config, target_cph)
+capacity = calculate_capacity(fte_avail, config, target_cph)
+```
+
+```python
+# WRONG - Manual parsing and calculations
+if "." in field_path:
+    month_label, field_name = field_path.split(".", 1)
+
+column_name = f'Client_Forecast_Month{suffix}'  # Hardcoded
+
+fte = math.ceil(forecast / (working_days * work_hours * (1-shrinkage) * target_cph))
+```
+
+**Why:** Centralized logic, easier to maintain, consistent behavior, eliminates duplication.
+
+**Available Utilities:**
+- `code/logics/edit_view_utils.py` - Field parsing, column name mapping, validation
+- `code/logics/capacity_calculations.py` - FTE and capacity formulas
+
+---
+
+### Pydantic Models for Request Validation
+
+**Use strongly-typed Pydantic models instead of `Dict[str, Any]`:**
+
+```python
+# CORRECT - Strongly typed
+class MonthData(BaseModel):
+    forecast: float = Field(ge=0, description="Client forecast")
+    fte_req: int = Field(ge=0, description="FTE Required")
+
+    class Config:
+        extra = "forbid"  # Reject unknown fields
+
+class CPHRecord(BaseModel):
+    lob: str = Field(min_length=1)
+    target_cph: float = Field(gt=0, le=200)
+```
+
+```python
+# WRONG - Too permissive
+class Request(BaseModel):
+    modified_records: List[Dict[str, Any]]  # No validation!
+```
+
+**Why:** Input validation at API boundary, security, auto-generated API docs with constraints.
+
+**Files:** All API request models in routers.
+
+---
+
+### Database Session Management
+
+**Trust SQLAlchemy context managers for rollback:**
+
+```python
+# CORRECT - Context manager handles rollback
+with db_manager.SessionLocal() as session:
+    try:
+        # Database operations
+        session.commit()  # Explicit commit if needed
+    except Exception as e:
+        # Context manager will rollback automatically
+        logger.error(f"Transaction failed: {e}")
+        raise
+```
+
+```python
+# WRONG - Redundant manual rollback
+with db_manager.SessionLocal() as session:
+    try:
+        # operations
+    except Exception as e:
+        session.rollback()  # REDUNDANT!
+        raise
+```
+
+**Why:** Cleaner code, SQLAlchemy handles it automatically, avoid duplicate cleanup logic.
+
+---
+
+### Helper Functions for Repeated Operations
+
+**Extract helper functions to eliminate code duplication:**
+
+```python
+# CORRECT - Use helper function
+from code.logics.history_logger import create_complete_history_log
+
+history_log_id = create_complete_history_log(
+    month=request.month,
+    year=request.year,
+    change_type=CHANGE_TYPE_BENCH_ALLOCATION,
+    user="system",
+    user_notes=request.user_notes,
+    modified_records=modified_records_dict,
+    months_dict=request.months,
+    summary_data=summary_data
+)
+```
+
+```python
+# WRONG - Duplicated code
+changes = extract_specific_changes(modified_records_dict, request.months)
+history_log_id = create_history_log(...)
+add_history_changes(history_log_id, changes)
+```
+
+**Why:** Reduces duplication, centralizes logic, easier to modify.
+
+**Available Helpers:**
+- `create_complete_history_log()` - Creates history log with changes in one call
+- `calculate_fte_required()` - Standardized FTE calculation
+- `calculate_capacity()` - Standardized capacity calculation
+
+---
+
+### Comprehensive Error Handling in Transformers
+
+**ALL data transformation functions must have error handling:**
+
+```python
+# CORRECT - Input validation + error handling
+def transform_data(allocation_result, month, year, core_utils):
+    """Transform with error handling."""
+    try:
+        # Validate inputs
+        if not allocation_result:
+            raise ValueError("allocation_result cannot be None")
+
+        if not hasattr(allocation_result, 'allocations'):
+            raise ValueError("Missing 'allocations' attribute")
+
+        # Process with defensive checks
+        for i, record in enumerate(allocation_result.allocations):
+            if not hasattr(record, 'forecast_row'):
+                raise AttributeError(f"Record {i} missing 'forecast_row'")
+            # ...
+
+    except KeyError as e:
+        logger.error(f"Missing key: {e}", exc_info=True)
+        raise ValueError(f"Invalid data structure: {e}")
+    except AttributeError as e:
+        logger.error(f"Missing attribute: {e}", exc_info=True)
+        raise ValueError(f"Invalid record structure: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}", exc_info=True)
+        raise
+```
+
+**Why:** Prevents runtime crashes, clear error messages with context, better debugging.
+
+**Files:** All transformer modules in `code/logics/`.
+
+---
+
+### Testing Requirements
+
+**Create unit tests for all utility modules:**
+
+```python
+# Test file: code/logics/test_capacity_calculations.py
+
+class TestCalculateFTERequired:
+    def test_basic_calculation(self):
+        config = {'working_days': 21, 'work_hours': 9, 'shrinkage': 0.10}
+        result = calculate_fte_required(1000, config, 50.0)
+        assert result == 1
+
+    def test_zero_forecast_returns_zero(self):
+        result = calculate_fte_required(0, config, 50.0)
+        assert result == 0
+
+    def test_negative_forecast_raises_error(self):
+        with pytest.raises(ValueError):
+            calculate_fte_required(-100, config, 50.0)
+```
+
+**Coverage Requirements:**
+- Test valid inputs
+- Test edge cases (zero, negative, boundary values)
+- Test error conditions (missing keys, invalid types)
+- Test integration scenarios
+
+**Run tests:**
+```bash
+python3 -m pytest code/logics/test_capacity_calculations.py -v
+```
+
 ## API Documentation
 
 Full API specifications are available in:

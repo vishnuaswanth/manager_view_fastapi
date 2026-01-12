@@ -1,0 +1,5 @@
+Generic single-database configuration with SQLModel support.
+
+This Alembic environment is configured to work with SQLModel and
+automatically detects the correct database (SQLite or MSSQL) based
+on the MODE setting in code/config.ini.

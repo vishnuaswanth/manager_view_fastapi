@@ -481,6 +481,13 @@ def get_available_report_months(db_manager) -> List[Dict[str, str]]:
 
     Returns:
         List of dicts with 'value' (YYYY-MM) and 'display' (Month YYYY)
+
+    Example Output:
+        [
+            {"value": "2025-01", "display": "January 2025"},
+            {"value": "2025-02", "display": "February 2025"},
+            {"value": "2025-03", "display": "March 2025"}
+        ]
     """
     try:
         data = db_manager.read_db()
