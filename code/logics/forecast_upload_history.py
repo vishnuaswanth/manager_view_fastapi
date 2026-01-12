@@ -95,9 +95,14 @@ def compare_forecast_snapshots(
 
     Returns modified_records in same format as bench allocation for consistency.
 
-    Handles two cases:
+    Handles three cases:
     1. No before_df (new upload): All records are "new", change = value
-    2. With before_df: Compare old vs new, calculate deltas
+    2. With before_df (update):
+       a. Records in NEW only (additions): old=0, change=new
+       b. Records in OLD only (deletions): new=0, change=-old (negative)
+       c. Records in BOTH (updates): change=new-old
+
+    Uses FULL OUTER JOIN to capture all records including deletions.
 
     Args:
         before_df: Snapshot before upload (None for new uploads)
@@ -106,6 +111,9 @@ def compare_forecast_snapshots(
 
     Returns:
         Tuple of (modified_records list, total_modified count)
+        - Additions: old=0, positive change values
+        - Deletions: new=0, negative change values
+        - Updates: calculated deltas (can be positive, negative, or zero)
     """
     modified_records = []
 
@@ -164,86 +172,212 @@ def compare_forecast_snapshots(
         return modified_records, len(modified_records)
 
     # CASE 2: Update (compare old vs new)
-    # Merge on composite key
+    # FULL OUTER JOIN to capture additions, deletions, and updates
     merged = after_df.merge(
         before_df,
         on=['Main_LOB', 'State', 'Case_Type', 'Case_ID'],
-        how='left',
-        suffixes=('_new', '_old')
+        how='outer',      # FULL OUTER JOIN captures all records
+        suffixes=('_new', '_old'),
+        indicator=True    # Adds '_merge' column: 'left_only', 'right_only', 'both'
     )
 
+    logger.info(f"Merge result: {len(merged)} total records")
+    logger.info(f"  - New only (additions): {(merged['_merge'] == 'left_only').sum()}")
+    logger.info(f"  - Old only (deletions): {(merged['_merge'] == 'right_only').sum()}")
+    logger.info(f"  - Both (potential updates): {(merged['_merge'] == 'both').sum()}")
+
     for _, row in merged.iterrows():
+        merge_type = row['_merge']
+
+        # Extract common fields (use non-NaN values)
+        main_lob = row.get('Main_LOB', '')
+        state = row.get('State', '')
+        case_type = row.get('Case_Type', '')
+        case_id = row.get('Case_ID', '')
+
         record = {
-            "main_lob": row.get('Main_LOB', ''),
-            "state": row.get('State', ''),
-            "case_type": row.get('Case_Type', ''),
-            "case_id": row.get('Case_ID', ''),
-            "target_cph": row.get('Target_CPH_new', 0),
-            "target_cph_change": 0,
+            "main_lob": main_lob,
+            "state": state,
+            "case_type": case_type,
+            "case_id": case_id,
             "modified_fields": []
         }
 
-        # Check target_cph change
-        old_cph = row.get('Target_CPH_old', 0) if pd.notna(row.get('Target_CPH_old')) else 0
-        new_cph = row.get('Target_CPH_new', 0)
-        cph_change = new_cph - old_cph
+        # Handle based on merge type
+        if merge_type == 'left_only':
+            # SCENARIO: Record in NEW only (addition)
+            # old = 0, change = new
+            logger.debug(f"Addition: {case_id}")
 
-        if cph_change != 0:
+            new_cph = row.get('Target_CPH_new', 0) if pd.notna(row.get('Target_CPH_new')) else 0
+            record["target_cph"] = new_cph
+            record["target_cph_change"] = new_cph  # old=0, so change=new
+
+            if new_cph != 0:
+                record["modified_fields"].append("target_cph")
+
+            # Process month data
+            for month_idx, month_label in months_dict.items():
+                suffix = month_idx.replace('month', '')
+
+                forecast_new = row.get(f'Client_Forecast_Month{suffix}_new', 0)
+                forecast_new = forecast_new if pd.notna(forecast_new) else 0
+
+                fte_req_new = row.get(f'FTE_Required_Month{suffix}_new', 0)
+                fte_req_new = fte_req_new if pd.notna(fte_req_new) else 0
+
+                fte_avail_new = row.get(f'FTE_Avail_Month{suffix}_new', 0)
+                fte_avail_new = fte_avail_new if pd.notna(fte_avail_new) else 0
+
+                capacity_new = row.get(f'Capacity_Month{suffix}_new', 0)
+                capacity_new = capacity_new if pd.notna(capacity_new) else 0
+
+                record[month_label] = {
+                    "forecast": forecast_new,
+                    "fte_req": fte_req_new,
+                    "fte_avail": fte_avail_new,
+                    "capacity": capacity_new,
+                    "forecast_change": forecast_new,      # old=0
+                    "fte_req_change": fte_req_new,
+                    "fte_avail_change": fte_avail_new,
+                    "capacity_change": capacity_new
+                }
+
+                # Track non-zero fields
+                if forecast_new != 0:
+                    record["modified_fields"].append(f"{month_label}.forecast")
+                if fte_req_new != 0:
+                    record["modified_fields"].append(f"{month_label}.fte_req")
+                if fte_avail_new != 0:
+                    record["modified_fields"].append(f"{month_label}.fte_avail")
+                if capacity_new != 0:
+                    record["modified_fields"].append(f"{month_label}.capacity")
+
+        elif merge_type == 'right_only':
+            # SCENARIO: Record in OLD only (deletion)
+            # new = 0, change = -old (negative to show removal)
+            logger.debug(f"Deletion: {case_id}")
+
+            old_cph = row.get('Target_CPH_old', 0) if pd.notna(row.get('Target_CPH_old')) else 0
+            record["target_cph"] = 0  # Deleted, so new=0
+            record["target_cph_change"] = -old_cph  # Negative change
+
+            if old_cph != 0:
+                record["modified_fields"].append("target_cph")
+
+            # Process month data
+            for month_idx, month_label in months_dict.items():
+                suffix = month_idx.replace('month', '')
+
+                forecast_old = row.get(f'Client_Forecast_Month{suffix}_old', 0)
+                forecast_old = forecast_old if pd.notna(forecast_old) else 0
+
+                fte_req_old = row.get(f'FTE_Required_Month{suffix}_old', 0)
+                fte_req_old = fte_req_old if pd.notna(fte_req_old) else 0
+
+                fte_avail_old = row.get(f'FTE_Avail_Month{suffix}_old', 0)
+                fte_avail_old = fte_avail_old if pd.notna(fte_avail_old) else 0
+
+                capacity_old = row.get(f'Capacity_Month{suffix}_old', 0)
+                capacity_old = capacity_old if pd.notna(capacity_old) else 0
+
+                record[month_label] = {
+                    "forecast": 0,              # Deleted, new=0
+                    "fte_req": 0,
+                    "fte_avail": 0,
+                    "capacity": 0,
+                    "forecast_change": -forecast_old,    # Negative change
+                    "fte_req_change": -fte_req_old,
+                    "fte_avail_change": -fte_avail_old,
+                    "capacity_change": -capacity_old
+                }
+
+                # Track deleted fields (had old values)
+                if forecast_old != 0:
+                    record["modified_fields"].append(f"{month_label}.forecast")
+                if fte_req_old != 0:
+                    record["modified_fields"].append(f"{month_label}.fte_req")
+                if fte_avail_old != 0:
+                    record["modified_fields"].append(f"{month_label}.fte_avail")
+                if capacity_old != 0:
+                    record["modified_fields"].append(f"{month_label}.capacity")
+
+        else:  # merge_type == 'both'
+            # SCENARIO: Record in BOTH (update or no change)
+            # Calculate deltas: change = new - old
+            logger.debug(f"Update: {case_id}")
+
+            # Check target_cph change
+            old_cph = row.get('Target_CPH_old', 0) if pd.notna(row.get('Target_CPH_old')) else 0
+            new_cph = row.get('Target_CPH_new', 0) if pd.notna(row.get('Target_CPH_new')) else 0
+            cph_change = new_cph - old_cph
+
+            record["target_cph"] = new_cph
             record["target_cph_change"] = cph_change
-            record["modified_fields"].append("target_cph")
 
-        # Check month data changes
-        for month_idx, month_label in months_dict.items():
-            suffix = month_idx.replace('month', '')
+            if cph_change != 0:
+                record["modified_fields"].append("target_cph")
 
-            # Get new values
-            forecast_new = row.get(f'Client_Forecast_Month{suffix}_new', 0) or 0
-            fte_req_new = row.get(f'FTE_Required_Month{suffix}_new', 0) or 0
-            fte_avail_new = row.get(f'FTE_Avail_Month{suffix}_new', 0) or 0
-            capacity_new = row.get(f'Capacity_Month{suffix}_new', 0) or 0
+            # Check month data changes
+            for month_idx, month_label in months_dict.items():
+                suffix = month_idx.replace('month', '')
 
-            # Get old values (may be NaN if row is new)
-            forecast_old = row.get(f'Client_Forecast_Month{suffix}_old', 0)
-            forecast_old = forecast_old if pd.notna(forecast_old) else 0
+                # Get new values
+                forecast_new = row.get(f'Client_Forecast_Month{suffix}_new', 0)
+                forecast_new = forecast_new if pd.notna(forecast_new) else 0
 
-            fte_req_old = row.get(f'FTE_Required_Month{suffix}_old', 0)
-            fte_req_old = fte_req_old if pd.notna(fte_req_old) else 0
+                fte_req_new = row.get(f'FTE_Required_Month{suffix}_new', 0)
+                fte_req_new = fte_req_new if pd.notna(fte_req_new) else 0
 
-            fte_avail_old = row.get(f'FTE_Avail_Month{suffix}_old', 0)
-            fte_avail_old = fte_avail_old if pd.notna(fte_avail_old) else 0
+                fte_avail_new = row.get(f'FTE_Avail_Month{suffix}_new', 0)
+                fte_avail_new = fte_avail_new if pd.notna(fte_avail_new) else 0
 
-            capacity_old = row.get(f'Capacity_Month{suffix}_old', 0)
-            capacity_old = capacity_old if pd.notna(capacity_old) else 0
+                capacity_new = row.get(f'Capacity_Month{suffix}_new', 0)
+                capacity_new = capacity_new if pd.notna(capacity_new) else 0
 
-            # Calculate changes
-            forecast_change = forecast_new - forecast_old
-            fte_req_change = fte_req_new - fte_req_old
-            fte_avail_change = fte_avail_new - fte_avail_old
-            capacity_change = capacity_new - capacity_old
+                # Get old values
+                forecast_old = row.get(f'Client_Forecast_Month{suffix}_old', 0)
+                forecast_old = forecast_old if pd.notna(forecast_old) else 0
 
-            record[month_label] = {
-                "forecast": forecast_new,
-                "fte_req": fte_req_new,
-                "fte_avail": fte_avail_new,
-                "capacity": capacity_new,
-                "forecast_change": forecast_change,
-                "fte_req_change": fte_req_change,
-                "fte_avail_change": fte_avail_change,
-                "capacity_change": capacity_change
-            }
+                fte_req_old = row.get(f'FTE_Required_Month{suffix}_old', 0)
+                fte_req_old = fte_req_old if pd.notna(fte_req_old) else 0
 
-            # Track modified fields
-            if forecast_change != 0:
-                record["modified_fields"].append(f"{month_label}.forecast")
-            if fte_req_change != 0:
-                record["modified_fields"].append(f"{month_label}.fte_req")
-            if fte_avail_change != 0:
-                record["modified_fields"].append(f"{month_label}.fte_avail")
-            if capacity_change != 0:
-                record["modified_fields"].append(f"{month_label}.capacity")
+                fte_avail_old = row.get(f'FTE_Avail_Month{suffix}_old', 0)
+                fte_avail_old = fte_avail_old if pd.notna(fte_avail_old) else 0
 
-        # Only include if there are changes
-        if record["modified_fields"]:
+                capacity_old = row.get(f'Capacity_Month{suffix}_old', 0)
+                capacity_old = capacity_old if pd.notna(capacity_old) else 0
+
+                # Calculate changes
+                forecast_change = forecast_new - forecast_old
+                fte_req_change = fte_req_new - fte_req_old
+                fte_avail_change = fte_avail_new - fte_avail_old
+                capacity_change = capacity_new - capacity_old
+
+                record[month_label] = {
+                    "forecast": forecast_new,
+                    "fte_req": fte_req_new,
+                    "fte_avail": fte_avail_new,
+                    "capacity": capacity_new,
+                    "forecast_change": forecast_change,
+                    "fte_req_change": fte_req_change,
+                    "fte_avail_change": fte_avail_change,
+                    "capacity_change": capacity_change
+                }
+
+                # Track modified fields
+                if forecast_change != 0:
+                    record["modified_fields"].append(f"{month_label}.forecast")
+                if fte_req_change != 0:
+                    record["modified_fields"].append(f"{month_label}.fte_req")
+                if fte_avail_change != 0:
+                    record["modified_fields"].append(f"{month_label}.fte_avail")
+                if capacity_change != 0:
+                    record["modified_fields"].append(f"{month_label}.capacity")
+
+        # Include record if there are changes OR it's a deletion
+        # (deletions always have changes since old values become 0)
+        if record["modified_fields"] or merge_type == 'right_only':
             modified_records.append(record)
 
     return modified_records, len(modified_records)

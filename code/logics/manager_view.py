@@ -143,8 +143,8 @@ def validate_category_config(config: Dict) -> None:
 
         # Validate level
         cat_level = cat["level"]
-        if not isinstance(cat_level, int) or cat_level < 1 or cat_level > 5:
-            raise ValueError(f"Category '{cat['name']}' has invalid level: {cat_level} (must be 1-5)")
+        if not isinstance(cat_level, int) or cat_level < 1 or cat_level > 7:
+            raise ValueError(f"Category '{cat['name']}' has invalid level: {cat_level} (must be 1-7)")
 
         # Validate level matches hierarchy depth
         if cat_level != expected_level:
