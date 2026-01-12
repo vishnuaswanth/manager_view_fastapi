@@ -49,7 +49,7 @@ alembic stamp head
 alembic stamp <revision_id>
 ```
 
-## For Your Current Migration
+## For Your Current Migrations
 
 ### Development (SQLite)
 
@@ -57,12 +57,19 @@ alembic stamp <revision_id>
 # 1. Backup database
 cp code/test.db code/test.db.backup
 
-# 2. Apply migration
+# 2. Check current version
+alembic current
+
+# 3. Apply all migrations
 alembic upgrade head
 
-# 3. Verify
+# 4. Verify
 alembic current
-sqlite3 code/test.db "PRAGMA table_info(allocationexecutionmodel);"
+# Should show: 002_history_tables (head)
+
+# 5. Check tables created
+sqlite3 code/test.db ".tables" | grep -E "history_log|history_change"
+sqlite3 code/test.db "PRAGMA table_info(allocationexecutionmodel);" | grep -i bench
 ```
 
 ### Production (MSSQL)
@@ -96,12 +103,19 @@ curl http://localhost:8888/api/allocation-reports
 
 ## Check What Changed
 
-The migration adds these columns:
-- `AllocationExecutionModel.BenchAllocationCompleted` (BOOLEAN, NOT NULL, default=False)
-- `AllocationExecutionModel.BenchAllocationCompletedAt` (DATETIME, nullable)
+### Migration 001: Bench Allocation & WorkHours
+- Adds `AllocationExecutionModel.BenchAllocationCompleted` (BOOLEAN, NOT NULL, default=False)
+- Adds `AllocationExecutionModel.BenchAllocationCompletedAt` (DATETIME, nullable)
 - Changes `MonthConfigurationModel.WorkHours` from INTEGER to FLOAT
 
+### Migration 002: History Tables
+- Creates `history_log` table (10 columns + 4 indexes)
+- Creates `history_change` table (10 columns + 4 indexes)
+- Enables complete audit trail for bench allocation, CPH updates, and forecast changes
+
 These changes are **safe** and **backward compatible**:
-- Existing records get `BenchAllocationCompleted=False`
-- Existing WorkHours values preserved (9 → 9.0)
-- No data loss
+- ✅ Existing records get `BenchAllocationCompleted=False`
+- ✅ Existing WorkHours values preserved (9 → 9.0)
+- ✅ New tables are empty (no impact on existing data)
+- ✅ No data loss
+- ✅ Can be rolled back if needed

@@ -16,6 +16,48 @@ This guide covers running Alembic migrations for both SQLite (development) and M
 **Compatibility:**
 - ✅ SQLite (DEBUG mode) - Uses batch mode with table recreation
 - ✅ MSSQL (PRODUCTION mode) - Uses direct ALTER TABLE statements
+- ✅ Idempotent - Safe to run multiple times (checks if columns exist)
+
+---
+
+### 002_create_history_tables.py
+
+**Changes:**
+1. Creates `history_log` table - Tracks high-level change operations (bench allocation, CPH updates, forecast updates)
+2. Creates `history_change` table - Tracks field-level changes for each history log entry
+3. Creates all necessary indexes for query performance
+
+**Tables Created:**
+
+**history_log:**
+- `id` (INT, primary key)
+- `history_log_id` (VARCHAR(36), UUID, unique, indexed)
+- `Month` (VARCHAR(15)), `Year` (INT)
+- `ChangeType` (VARCHAR(50)) - e.g., "Bench Allocation", "CPH Update"
+- `Timestamp` (DATETIME, auto)
+- `User` (VARCHAR(100))
+- `Description` (TEXT, nullable)
+- `RecordsModified` (INT)
+- `SummaryData` (TEXT, JSON format, nullable)
+- `CreatedBy` (VARCHAR(100)), `CreatedDateTime` (DATETIME, auto)
+- Indexes: month_year, change_type, user, history_log_id
+
+**history_change:**
+- `id` (INT, primary key)
+- `history_log_id` (VARCHAR(36), links to history_log)
+- `MainLOB` (VARCHAR(255)), `State` (VARCHAR(100)), `CaseType` (VARCHAR(255)), `CaseID` (VARCHAR(100))
+- `FieldName` (VARCHAR(100)) - DOT notation (e.g., "Jun-25.fte_avail")
+- `OldValue` (TEXT, nullable), `NewValue` (TEXT, nullable)
+- `Delta` (FLOAT, nullable) - Numeric change (new - old)
+- `MonthLabel` (VARCHAR(15), nullable) - e.g., "Jun-25"
+- `CreatedDateTime` (DATETIME, auto)
+- Indexes: history_log, identifiers, field, month
+
+**Compatibility:**
+- ✅ SQLite (DEBUG mode) - Standard table creation
+- ✅ MSSQL (PRODUCTION mode) - Standard table creation
+- ✅ Idempotent - Safe to run multiple times (checks if tables exist)
+- ✅ No data loss on downgrade (but history data will be deleted)
 
 ---
 
