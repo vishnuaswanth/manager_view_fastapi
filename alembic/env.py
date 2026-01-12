@@ -20,15 +20,9 @@ from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 # Import SQLModel base and all models
 from sqlmodel import SQLModel
 from code.logics.db import (
-    ForecastModel,
-    ForecastMonthsModel,
-    ProdTeamRosterModel,
-    AllocationExecutionModel,
     AllocationReportsModel,
     AllocationValidityModel,
-    MonthConfigurationModel,
-    HistoryLogModel,
-    HistoryChangeModel,
+    UploadDataTimeDetails,
     # Import any other models you have
 )
 
