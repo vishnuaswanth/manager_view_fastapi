@@ -92,6 +92,10 @@ def run_migrations_offline() -> None:
 
     """
     url = config.get_main_option("sqlalchemy.url")
+
+    # Check if we're using SQLite
+    is_sqlite = url and url.startswith("sqlite")
+
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -99,6 +103,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,  # Detect column type changes
         compare_server_default=True,  # Detect default value changes
+        render_as_batch=is_sqlite,  # Enable batch mode for SQLite
     )
 
     with context.begin_transaction():
@@ -118,12 +123,17 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
 
+    # Check if we're using SQLite
+    url = config.get_main_option("sqlalchemy.url")
+    is_sqlite = url and url.startswith("sqlite")
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,  # Detect column type changes
             compare_server_default=True,  # Detect default value changes
+            render_as_batch=is_sqlite,  # Enable batch mode for SQLite
         )
 
         with context.begin_transaction():
