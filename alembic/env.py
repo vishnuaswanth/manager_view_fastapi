@@ -15,7 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # Import settings to get MODE and database URLs
-from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
+try:
+    from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
+except ImportError:
+    # Fallback if settings module doesn't exist
+    import os
+    MODE = os.getenv("MODE", "DEBUG")
+    SQLITE_DATABASE_URL = os.getenv("SQLITE_DATABASE_URL", "sqlite:///./database.db")
+    MSSQL_DATABASE_URL = os.getenv("MSSQL_DATABASE_URL", "")
 
 # Import SQLModel base and all models
 from sqlmodel import SQLModel
@@ -50,6 +57,8 @@ if MODE.upper() == "DEBUG":
     db_url = SQLITE_DATABASE_URL
     print(f"[Alembic] Using DEBUG mode - SQLite: {db_url}")
 elif MODE.upper() == "PRODUCTION":
+    if not MSSQL_DATABASE_URL:
+        raise ValueError("MSSQL_DATABASE_URL is required for PRODUCTION mode")
     db_url = MSSQL_DATABASE_URL
     print(f"[Alembic] Using PRODUCTION mode - MSSQL")
 else:
