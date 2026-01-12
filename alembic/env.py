@@ -20,10 +20,20 @@ from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 # Import SQLModel base and all models
 from sqlmodel import SQLModel
 from code.logics.db import (
-    AllocationReportsModel,
-    AllocationValidityModel,
     UploadDataTimeDetails,
-    # Import any other models you have
+    SkillingModel,
+    RosterModel,
+    RosterTemplate,
+    ProdTeamRosterModel,
+    ForecastModel,
+    ForecastMonthsModel,
+    AllocationReportsModel,
+    MonthConfigurationModel,
+    AllocationExecutionModel,
+    HistoryLogModel,
+    HistoryChangeModel,
+    RawData,
+    AllocationValidityModel,
 )
 
 # this is the Alembic Config object, which provides
