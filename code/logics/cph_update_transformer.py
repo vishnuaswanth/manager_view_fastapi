@@ -322,14 +322,14 @@ def calculate_cph_preview(
 
                 # Only include if there are changes (more than just "target_cph")
                 if len(modified_fields) > 1:
-                    # Create ModifiedRecordResponse
+                    # Create ModifiedRecordResponse with correct field names
                     record = ModifiedRecordResponse(
-                        main_lob=forecast_row.Main_LOB,
-                        state=forecast_row.State,
-                        case_type=forecast_row.Case_Type,
-                        case_id=forecast_row.Case_ID,
-                        target_cph=int(cph_record['target_cph']),
-                        target_cph_change=int(cph_record['modified_target_cph'] - cph_record['target_cph']),
+                        main_lob=forecast_row.Centene_Capacity_Plan_Main_LOB,
+                        state=forecast_row.Centene_Capacity_Plan_State,
+                        case_type=forecast_row.Centene_Capacity_Plan_Case_Type,
+                        case_id=forecast_row.Centene_Capacity_Plan_Call_Type_ID,
+                        target_cph=float(cph_record['modified_target_cph']),  # Use modified value as new target
+                        target_cph_change=float(cph_record['modified_target_cph'] - cph_record['target_cph']),
                         modified_fields=modified_fields,
                         months=month_data
                     )
