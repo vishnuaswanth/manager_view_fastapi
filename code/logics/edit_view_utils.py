@@ -155,11 +155,29 @@ def extract_month_suffix_from_index(month_index: str) -> str:
     Returns:
         Numeric suffix: "1", "2", etc.
 
+    Raises:
+        ValueError: If month_index format is invalid
+
     Examples:
         extract_month_suffix_from_index("month1") -> "1"
         extract_month_suffix_from_index("month6") -> "6"
     """
-    return month_index.replace("month", "")
+    import re
+
+    if not month_index or not isinstance(month_index, str):
+        raise ValueError(f"Invalid month_index: must be a non-empty string, got {type(month_index)}")
+
+    # Expected format: "month1", "month2", ..., "month6"
+    pattern = r'^month([1-6])$'
+    match = re.match(pattern, month_index)
+
+    if not match:
+        raise ValueError(
+            f"Invalid month_index format: '{month_index}'. "
+            f"Expected format: 'month1' through 'month6'"
+        )
+
+    return match.group(1)
 
 
 # ============ Field Mapping Utilities ============
@@ -193,13 +211,31 @@ def get_forecast_column_name(api_field: str, month_suffix: str) -> Optional[str]
     Returns:
         ForecastModel column name or None if invalid field
 
+    Raises:
+        ValueError: If month_suffix is invalid
+
     Examples:
         get_forecast_column_name("forecast", "1") -> "Client_Forecast_Month1"
         get_forecast_column_name("fte_avail", "3") -> "FTE_Avail_Month3"
         get_forecast_column_name("target_cph", "1") -> "Target_CPH"
     """
+    # Validate inputs
+    if not api_field or not isinstance(api_field, str):
+        raise ValueError(f"Invalid api_field: must be a non-empty string, got {type(api_field)}")
+
+    # target_cph doesn't use month suffix
     if api_field == "target_cph":
         return "Target_CPH"
+
+    # Validate month_suffix format (must be "1" through "6")
+    if not month_suffix or not isinstance(month_suffix, str):
+        raise ValueError(f"Invalid month_suffix: must be a non-empty string, got {type(month_suffix)}")
+
+    if month_suffix not in ["1", "2", "3", "4", "5", "6"]:
+        raise ValueError(
+            f"Invalid month_suffix: '{month_suffix}'. "
+            f"Must be one of: '1', '2', '3', '4', '5', '6'"
+        )
 
     field_patterns = {
         "forecast": f"Client_Forecast_Month{month_suffix}",
@@ -208,6 +244,54 @@ def get_forecast_column_name(api_field: str, month_suffix: str) -> Optional[str]
         "capacity": f"Capacity_Month{month_suffix}"
     }
     return field_patterns.get(api_field)
+
+
+def validate_month_label_format(month_label: str) -> None:
+    """
+    Validate that month label matches expected format: MMM-YY.
+
+    Args:
+        month_label: Month label to validate (e.g., "Jun-25")
+
+    Raises:
+        ValueError: If format is invalid
+
+    Expected format:
+        - 3-letter month abbreviation (Jan, Feb, Mar, etc.)
+        - Hyphen separator
+        - 2-digit year (24, 25, 26, etc.)
+    """
+    import re
+    from calendar import month_abbr as cal_month_abbr
+
+    if not month_label or not isinstance(month_label, str):
+        raise ValueError(f"Invalid month label: must be a non-empty string, got {type(month_label)}")
+
+    # Expected format: "Jun-25" (3 letters, hyphen, 2 digits)
+    pattern = r'^([A-Za-z]{3})-(\d{2})$'
+    match = re.match(pattern, month_label)
+
+    if not match:
+        raise ValueError(
+            f"Invalid month label format: '{month_label}'. "
+            f"Expected format: 'MMM-YY' (e.g., 'Jun-25', 'Dec-24')"
+        )
+
+    month_abbr = match.group(1)
+    year_suffix = match.group(2)
+
+    # Validate month abbreviation is valid
+    valid_abbrs = [abbr for abbr in cal_month_abbr if abbr]  # Filter out empty string at index 0
+    if month_abbr not in valid_abbrs:
+        raise ValueError(
+            f"Invalid month abbreviation: '{month_abbr}'. "
+            f"Must be one of: {', '.join(valid_abbrs)}"
+        )
+
+    # Year suffix is already validated by regex (2 digits), but check range if needed
+    year_num = int(year_suffix)
+    if year_num < 0 or year_num > 99:
+        raise ValueError(f"Invalid year suffix: '{year_suffix}'. Must be 00-99")
 
 
 def parse_field_path(field_path: str) -> tuple:
@@ -220,13 +304,29 @@ def parse_field_path(field_path: str) -> tuple:
     Returns:
         Tuple of (month_label or None, field_name)
 
+    Raises:
+        ValueError: If field_path is invalid or month label format is wrong
+
     Examples:
         parse_field_path("Jun-25.fte_avail") -> ("Jun-25", "fte_avail")
         parse_field_path("target_cph") -> (None, "target_cph")
     """
+    if not field_path or not isinstance(field_path, str):
+        raise ValueError(f"Invalid field_path: must be a non-empty string, got {type(field_path)}")
+
     if "." in field_path:
         parts = field_path.split(".", 1)
-        return (parts[0], parts[1])
+        month_label = parts[0]
+        field_name = parts[1]
+
+        # Validate month label format
+        validate_month_label_format(month_label)
+
+        # Validate field name is not empty
+        if not field_name:
+            raise ValueError(f"Invalid field_path: field name cannot be empty in '{field_path}'")
+
+        return (month_label, field_name)
     else:
         return (None, field_path)
 
@@ -242,11 +342,20 @@ def build_field_path(month_label: Optional[str], field_name: str) -> str:
     Returns:
         Field path string
 
+    Raises:
+        ValueError: If month_label format is invalid or field_name is empty
+
     Examples:
         build_field_path("Jun-25", "fte_avail") -> "Jun-25.fte_avail"
         build_field_path(None, "target_cph") -> "target_cph"
     """
+    # Validate field name
+    if not field_name or not isinstance(field_name, str):
+        raise ValueError(f"Invalid field_name: must be a non-empty string, got {type(field_name)}")
+
     if month_label:
+        # Validate month label format
+        validate_month_label_format(month_label)
         return f"{month_label}.{field_name}"
     else:
         return field_name
@@ -411,12 +520,27 @@ def parse_month_label(month_label: str) -> tuple:
     Returns:
         Tuple of (full_month_name, full_year)
 
+    Raises:
+        ValueError: If month label format is invalid
+
     Examples:
         parse_month_label("Jun-25") -> ("June", 2025)
         parse_month_label("Dec-24") -> ("December", 2024)
     """
+    # Validate format first
+    validate_month_label_format(month_label)
+
+    # Parse components (validation already ensured format is correct)
     month_abbr, year_suffix = month_label.split('-')
+
+    # Get full month name
     month_map = get_month_abbreviation_map()
-    full_month = month_map[month_abbr]
+    full_month = month_map.get(month_abbr)
+
+    if not full_month:
+        raise ValueError(f"Unknown month abbreviation: '{month_abbr}'")
+
+    # Convert year to full format
     full_year = 2000 + int(year_suffix)
+
     return (full_month, full_year)
