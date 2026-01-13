@@ -5,14 +5,14 @@ Revises: 002_history_tables
 Create Date: 2026-01-13 00:00:00.000000
 
 PURPOSE:
-This migration populates AllocationValidityModel from historical AllocationExecutionModel data.
+This migration populates allocation_validity from historical allocationexcutionmodel data.
 It takes the latest successful execution for each month+year combination and creates validity records.
 
 LOGIC:
-1. Query AllocationExecutionModel for all successful executions (Status='SUCCESS')
+1. Query allocationexcutionmodel for all successful executions (Status='SUCCESS')
 2. Group by Month+Year and get the most recent execution_id (max StartTime)
-3. Insert into AllocationValidityModel with is_valid=True
-4. Skip duplicates (if month+year already exists in AllocationValidityModel)
+3. Insert into allocation_validity with is_valid=True
+4. Skip duplicates (if month+year already exists in allocation_validity)
 
 TYPE SAFETY:
 This migration uses database-agnostic SQLAlchemy types that work on both SQLite and MSSQL.
@@ -46,10 +46,10 @@ def upgrade() -> None:
             aem.Year,
             aem.execution_id,
             aem.StartTime
-        FROM allocation_execution aem
+        FROM allocationexcutionmodel aem
         INNER JOIN (
             SELECT Month, Year, MAX(StartTime) as MaxStartTime
-            FROM allocation_execution
+            FROM allocationexcutionmodel
             WHERE Status = 'SUCCESS'
             GROUP BY Month, Year
         ) latest
@@ -129,10 +129,10 @@ def downgrade() -> None:
     query = text("""
         SELECT
             aem.execution_id
-        FROM allocation_execution aem
+        FROM allocationexcutionmodel aem
         INNER JOIN (
             SELECT Month, Year, MAX(StartTime) as MaxStartTime
-            FROM allocation_execution
+            FROM allocationexcutionmodel
             WHERE Status = 'SUCCESS'
             GROUP BY Month, Year
         ) latest
