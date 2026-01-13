@@ -6,7 +6,8 @@ field-level change data for history tracking.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
+from dataclasses import dataclass
 from pydantic import BaseModel, Field
 from code.logics.core_utils import CoreUtils
 from code.logics.edit_view_utils import (
@@ -17,6 +18,73 @@ from code.logics.edit_view_utils import (
 from code.logics.bench_allocation import AllocationResult
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# TYPE-SAFE DATA STRUCTURES
+# ============================================================================
+
+@dataclass
+class HistoryChangeData:
+    """
+    Type-safe structure for history change records.
+
+    Provides strong typing for field-level changes tracked in history logging.
+    Used to ensure data consistency and catch type errors at development time.
+
+    Attributes:
+        main_lob: Main Line of Business identifier
+        state: State code (2-letter)
+        case_type: Case type description
+        case_id: Business case identifier (Centene_Capacity_Plan_Call_Type_ID)
+        field_name: Field path in DOT notation (e.g., "Jun-25.fte_avail" or "target_cph")
+        old_value: Previous value before change (can be None for new records)
+        new_value: Current value after change
+        delta: Change amount (new_value - old_value)
+        month_label: Month label if field is month-specific (e.g., "Jun-25"), None otherwise
+
+    Example:
+        >>> change = HistoryChangeData(
+        ...     main_lob="Amisys Medicaid DOMESTIC",
+        ...     state="TX",
+        ...     case_type="Claims Processing",
+        ...     case_id="CL-001",
+        ...     field_name="Jun-25.fte_avail",
+        ...     old_value=20,
+        ...     new_value=25,
+        ...     delta=5,
+        ...     month_label="Jun-25"
+        ... )
+        >>> change_dict = change.to_dict()
+    """
+    main_lob: str
+    state: str
+    case_type: str
+    case_id: str
+    field_name: str
+    old_value: Union[int, float, str, None]
+    new_value: Union[int, float, str]
+    delta: Union[int, float]
+    month_label: Optional[str] = None
+
+    def to_dict(self) -> Dict:
+        """
+        Convert to dict for database insertion.
+
+        Returns:
+            Dict with all fields ready for HistoryChangeModel insertion
+        """
+        return {
+            "main_lob": self.main_lob,
+            "state": self.state,
+            "case_type": self.case_type,
+            "case_id": self.case_id,
+            "field_name": self.field_name,
+            "old_value": self.old_value,
+            "new_value": self.new_value,
+            "delta": self.delta,
+            "month_label": self.month_label
+        }
 
 
 # ============================================================================
@@ -345,6 +413,72 @@ def transform_allocation_result_to_preview(
     return response
 
 
+def _get_month_data(record: Dict, month_label: str) -> Optional[Dict]:
+    """
+    Extract month data from record, handling both flat and nested structures.
+
+    Supports two formats:
+    1. Flat structure (expected): record["Jun-25"] = {...}
+    2. Nested structure (actual from preview): record["months"]["Jun-25"] = {...}
+
+    This function enables backward compatibility by accepting both data structures,
+    fixing the history records bug where old values showed as 0 and new values
+    showed as deltas instead of actual values.
+
+    Args:
+        record: Modified record dict from update request
+        month_label: Month label (e.g., "Jun-25")
+
+    Returns:
+        Month data dict with keys: forecast, fte_req, fte_avail, capacity,
+        forecast_change, fte_req_change, fte_avail_change, capacity_change
+        Returns None if month data not found
+
+    Example:
+        >>> record = {"Jun-25": {"forecast": 1000, "fte_avail": 25, "fte_avail_change": 5}}
+        >>> _get_month_data(record, "Jun-25")
+        {"forecast": 1000, "fte_avail": 25, "fte_avail_change": 5}
+
+        >>> record = {"months": {"Jun-25": {"forecast": 1000, "fte_avail": 25}}}
+        >>> _get_month_data(record, "Jun-25")
+        {"forecast": 1000, "fte_avail": 25}
+    """
+    # Try root level first (flat structure - expected format)
+    if month_label in record:
+        month_data = record[month_label]
+        if isinstance(month_data, dict):
+            logger.debug(f"Found month data for '{month_label}' at root level (flat structure)")
+            return month_data
+        else:
+            logger.warning(
+                f"Month data for '{month_label}' at root level is not a dict: {type(month_data)}"
+            )
+            return None
+
+    # Try nested under "months" key (nested structure - actual format from preview)
+    if "months" in record:
+        months_container = record["months"]
+        if isinstance(months_container, dict):
+            month_data = months_container.get(month_label)
+            if month_data is not None:
+                if isinstance(month_data, dict):
+                    logger.debug(
+                        f"Found month data for '{month_label}' in nested 'months' key (nested structure)"
+                    )
+                    return month_data
+                else:
+                    logger.warning(
+                        f"Month data for '{month_label}' in 'months' is not a dict: {type(month_data)}"
+                    )
+                    return None
+        else:
+            logger.warning(f"'months' key exists but is not a dict: {type(months_container)}")
+
+    # Not found in either location
+    logger.debug(f"Month data for '{month_label}' not found in record (checked root and 'months' key)")
+    return None
+
+
 def extract_specific_changes(
     modified_records: List[Dict],
     months_dict: Dict[str, str]
@@ -402,11 +536,13 @@ def extract_specific_changes(
 
                 if month_label:
                     # Month-specific field: "Jun-25.fte_avail"
-                    month_data = record.get(month_label)
+                    # Use helper to extract month data (handles both flat and nested structures)
+                    month_data = _get_month_data(record, month_label)
 
                     if not isinstance(month_data, dict):
                         raise ValueError(
-                            f"Record at index {i}: month_label '{month_label}' not found or not a dict"
+                            f"Record at index {i}: month_label '{month_label}' not found or not a dict. "
+                            f"Expected either record['{month_label}'] or record['months']['{month_label}']"
                         )
 
                     # Get old/new values
