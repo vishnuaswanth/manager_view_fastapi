@@ -91,7 +91,8 @@ def get_cph_data(
 def get_month_config_for_forecast(
     month: str,
     year: int,
-    core_utils: CoreUtils
+    core_utils: CoreUtils,
+    work_type: str = "Domestic"
 ) -> Dict:
     """
     Get month configuration for all 6 months for forecast recalculation.
@@ -99,21 +100,41 @@ def get_month_config_for_forecast(
     Returns dict: {"month1": {config}, "month2": {config}, ...}
 
     Args:
-        month: Report month name
-        year: Report year
+        month: Report month name (e.g., "April")
+        year: Report year (e.g., 2025)
         core_utils: CoreUtils instance
+        work_type: Work type to query ("Domestic" or "Global"), defaults to "Domestic"
 
     Returns:
-        Dict with month configs for all 6 months
+        Dict with month configs for all 6 months, each containing:
+        - working_days: Number of working days
+        - work_hours: Work hours per day
+        - shrinkage: Shrinkage rate (0.0-1.0)
+        - occupancy: Occupancy rate (0.0-1.0)
+
+    Raises:
+        ValueError: If work_type is invalid
+
+    Example:
+        config = get_month_config_for_forecast("April", 2025, core_utils, "Domestic")
+        # Returns: {
+        #     "month1": {"working_days": 21, "work_hours": 9, "shrinkage": 0.10, "occupancy": 0.95},
+        #     "month2": {...},
+        #     ...
+        # }
     """
     from code.logics.db import MonthConfigurationModel
+
+    # Validate work_type
+    if work_type not in ["Domestic", "Global"]:
+        raise ValueError(f"Invalid work_type: '{work_type}'. Must be 'Domestic' or 'Global'")
 
     months_dict = get_months_dict(month, year, core_utils)
     month_config = {}
 
     db_manager = core_utils.get_db_manager(
         MonthConfigurationModel,
-        limit=10,
+        limit=20,  # Increased to accommodate both Domestic and Global records
         skip=0,
         select_columns=None
     )
@@ -123,14 +144,17 @@ def get_month_config_for_forecast(
             # Parse month label "Jun-25" → ("June", 2025)
             full_month, full_year = parse_month_label(month_label)
 
-            # Query month config
+            # Query month config for specific WorkType
             config_record = session.query(MonthConfigurationModel).filter(
                 MonthConfigurationModel.Month == full_month,
-                MonthConfigurationModel.Year == full_year
+                MonthConfigurationModel.Year == full_year,
+                MonthConfigurationModel.WorkType == work_type
             ).first()
 
             if not config_record:
-                logger.warning(f"Month config not found for {full_month} {full_year}, using defaults")
+                logger.warning(
+                    f"Month config not found for {full_month} {full_year} ({work_type}), using defaults"
+                )
                 # Use default values
                 month_config[month_idx] = {
                     'working_days': 21,
@@ -139,46 +163,19 @@ def get_month_config_for_forecast(
                     'occupancy': 0.95
                 }
             else:
-                # Parse JSON configuration (assuming Domestic for now)
-                import json
-                try:
-                    config_data = json.loads(config_record.ConfigurationJson)
+                # Access direct fields from model (no JSON parsing needed)
+                month_config[month_idx] = {
+                    'working_days': config_record.WorkingDays,
+                    'work_hours': config_record.WorkHours,
+                    'shrinkage': config_record.Shrinkage,
+                    'occupancy': config_record.Occupancy
+                }
 
-                    if not isinstance(config_data, dict):
-                        raise ValueError(
-                            f"Configuration JSON for {full_month} {full_year} is not a dict"
-                        )
-
-                    domestic_config = config_data.get('Domestic', {})
-
-                    if not isinstance(domestic_config, dict):
-                        logger.warning(
-                            f"Domestic config for {full_month} {full_year} is not a dict, using defaults"
-                        )
-                        domestic_config = {}
-
-                    month_config[month_idx] = {
-                        'working_days': domestic_config.get('working_days', 21),
-                        'work_hours': domestic_config.get('work_hours', 9),
-                        'shrinkage': domestic_config.get('shrinkage', 0.10),
-                        'occupancy': domestic_config.get('occupancy', 0.95)
-                    }
-
-                except json.JSONDecodeError as e:
-                    logger.error(
-                        f"Invalid JSON in month config for {full_month} {full_year}: {e}",
-                        exc_info=True,
-                        extra={'month': full_month, 'year': full_year}
-                    )
-                    raise ValueError(
-                        f"Corrupted month configuration for {full_month} {full_year}: {e}"
-                    )
-                except ValueError as e:
-                    logger.error(
-                        f"Invalid config structure for {full_month} {full_year}: {e}",
-                        exc_info=True
-                    )
-                    raise
+                logger.debug(
+                    f"Loaded config for {full_month} {full_year} ({work_type}): "
+                    f"WD={config_record.WorkingDays}, WH={config_record.WorkHours}, "
+                    f"S={config_record.Shrinkage}, O={config_record.Occupancy}"
+                )
 
     return month_config
 
