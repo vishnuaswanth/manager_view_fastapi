@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, TypeVar, Generic
 from pydantic import BaseModel, Field
-from pydantic.generics import GenericModel
 from sqlalchemy.exc import SQLAlchemyError
 from code.logics.manager_view import get_available_report_months
 from code.logics.bench_allocation import allocate_bench_for_month
@@ -86,7 +85,7 @@ class CPHRecord(BaseModel):
 RecordType = TypeVar('RecordType')
 
 
-class BasePreviewRequest(GenericModel, Generic[RecordType]):
+class BasePreviewRequest(BaseModel, Generic[RecordType]):
     """Base class for preview requests with common fields."""
     month: str = Field(min_length=1, description="Report month name")
     year: int = Field(ge=2020, le=2050, description="Report year")
@@ -100,7 +99,7 @@ class BasePreviewRequest(GenericModel, Generic[RecordType]):
         arbitrary_types_allowed = True
 
 
-class BaseUpdateRequest(GenericModel, Generic[RecordType]):
+class BaseUpdateRequest(BaseModel, Generic[RecordType]):
     """
     Base class for update requests with common fields.
 
