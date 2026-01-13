@@ -20,15 +20,13 @@ Complete guide for testing Edit View and History APIs using curl or Postman.
 
 **Endpoint**: `GET /api/allocation-reports`
 
-**Description**: Retrieve list of available allocation executions with report availability status.
+**Description**: Retrieve list of available report months with valid allocations. Only returns months where `is_valid=True` in AllocationValidityModel (allocations that haven't been invalidated by manual forecast edits).
 
-**Query Parameters**:
-- `month` (optional): Filter by month name (e.g., "April")
-- `year` (optional): Filter by year (e.g., 2025)
+**Query Parameters**: None
 
 **Example curl**:
 ```bash
-curl -X GET "http://localhost:8888/api/allocation-reports?month=April&year=2025"
+curl -X GET "http://localhost:8888/api/allocation-reports"
 ```
 
 **Example Response**:
@@ -37,21 +35,31 @@ curl -X GET "http://localhost:8888/api/allocation-reports?month=April&year=2025"
   "success": true,
   "data": [
     {
-      "execution_id": "550e8400-e29b-41d4-a716-446655440000",
-      "month": "April",
-      "year": 2025,
-      "status": "SUCCESS",
-      "created_at": "2025-01-12T10:30:00",
-      "reports_available": {
-        "bucket_summary": true,
-        "bucket_after_allocation": true,
-        "roster_allotment": true
-      },
-      "bench_allocation_completed": false
+      "value": "2025-01",
+      "display": "January 2025"
+    },
+    {
+      "value": "2025-02",
+      "display": "February 2025"
+    },
+    {
+      "value": "2025-03",
+      "display": "March 2025"
     }
-  ]
+  ],
+  "total": 3
 }
 ```
+
+**Response Fields**:
+- `value` (string): Month in YYYY-MM format (for API requests)
+- `display` (string): Human-readable month format (for UI display)
+- `total` (integer): Total number of available report months
+
+**Notes**:
+- Only returns months with valid allocations
+- If a forecast is manually edited, that month's allocation becomes invalid and won't appear in this list
+- To make an invalid month appear again, re-run the allocation process for that month
 
 ---
 
@@ -571,7 +579,10 @@ curl -X GET "http://localhost:8888/api/history-log/7c9e6679-7425-40de-944b-e07fc
 
 ### Complete Bench Allocation Workflow:
 ```bash
-# Step 1: Preview bench allocation
+# Step 0: Get available report months (check which months have valid allocations)
+curl -X GET "http://localhost:8888/api/allocation-reports"
+
+# Step 1: Preview bench allocation for a specific month
 curl -X POST "http://localhost:8888/api/bench-allocation/preview" \
   -H "Content-Type: application/json" \
   -d '{"month": "April", "year": 2025}'
@@ -615,6 +626,11 @@ curl -X GET "http://localhost:8888/api/history-log/{history_log_id}/download" \
 4. **Target CPH**: Must be > 0 and ≤ 200
 5. **Modified Records**: Must have at least 1 record and include all required fields
 6. **User Notes**: Optional but recommended for tracking change reasons (max 1000 characters)
+7. **Allocation Validity**:
+   - Only months with valid allocations (`is_valid=True`) appear in `/api/allocation-reports`
+   - Manual forecast edits invalidate the allocation for that month
+   - To restore a month, re-run the primary allocation process
+   - Bench allocation can only be performed on months with valid allocations
 
 ---
 

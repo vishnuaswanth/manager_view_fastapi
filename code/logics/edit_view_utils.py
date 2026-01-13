@@ -19,6 +19,8 @@ def get_months_dict(month: str, year: int, core_utils: CoreUtils) -> Dict[str, s
     """
     Get month mappings for a report month/year from ForecastMonthsModel.
 
+    Reads month names from database and constructs formatted labels with years.
+
     Results are cached with 1 hour TTL since month mappings are static.
 
     Args:
@@ -34,6 +36,8 @@ def get_months_dict(month: str, year: int, core_utils: CoreUtils) -> Dict[str, s
         ValueError: If month mappings not found in database
     """
     from code.cache import month_mappings_cache, generate_month_mappings_cache_key
+    from calendar import month_name as cal_month_name, month_abbr as cal_month_abbr
+    from datetime import datetime
 
     # Check cache first
     cache_key = generate_month_mappings_cache_key(month, year)
@@ -63,18 +67,45 @@ def get_months_dict(month: str, year: int, core_utils: CoreUtils) -> Dict[str, s
         if not record:
             raise ValueError(f"Month mappings not found for {month} {year}")
 
+        # Get report month number for year wrapping calculation
+        report_month_num = list(cal_month_name).index(month.strip().capitalize())
+
+        # Helper function to construct month label with year
+        def construct_month_label(month_name: str) -> str:
+            """
+            Construct formatted month label (e.g., "Jun-25") from month name.
+
+            Args:
+                month_name: Full month name (e.g., "June")
+
+            Returns:
+                Formatted label: "Mon-YY" (e.g., "Jun-25")
+            """
+            # Parse month name to get month number
+            forecast_month_num = list(cal_month_name).index(month_name.strip().capitalize())
+
+            # Determine year: if report month > forecast month, year wraps to next year
+            # Example: October 2024 report with January forecast → 2025
+            forecast_year = year + 1 if report_month_num > forecast_month_num else year
+
+            # Get abbreviated month name (3 letters)
+            month_abbr = cal_month_abbr[forecast_month_num]
+
+            # Format as "Mon-YY"
+            return f"{month_abbr}-{str(forecast_year)[-2:]}"
+
         result = {
-            "month1": record.Month1,
-            "month2": record.Month2,
-            "month3": record.Month3,
-            "month4": record.Month4,
-            "month5": record.Month5,
-            "month6": record.Month6,
+            "month1": construct_month_label(record.Month1),
+            "month2": construct_month_label(record.Month2),
+            "month3": construct_month_label(record.Month3),
+            "month4": construct_month_label(record.Month4),
+            "month5": construct_month_label(record.Month5),
+            "month6": construct_month_label(record.Month6),
         }
 
         # Cache the result
         month_mappings_cache.set(cache_key, result)
-        logger.debug(f"[Cache SET] Month mappings for {month} {year}")
+        logger.debug(f"[Cache SET] Month mappings for {month} {year}: {result}")
 
         return result
 
