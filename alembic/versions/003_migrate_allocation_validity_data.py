@@ -5,14 +5,20 @@ Revises: 002_history_tables
 Create Date: 2026-01-13 00:00:00.000000
 
 PURPOSE:
-This migration populates allocation_validity from historical allocationexcutionmodel data.
+This migration populates allocation_validity from historical allocationexecutionmodel data.
 It takes the latest successful execution for each month+year combination and creates validity records.
 
 LOGIC:
-1. Query allocationexcutionmodel for all successful executions (Status='SUCCESS')
+1. Query allocationexecutionmodel for all successful executions (Status='SUCCESS')
 2. Group by Month+Year and get the most recent execution_id (max StartTime)
 3. Insert into allocation_validity with is_valid=True
 4. Skip duplicates (if month+year already exists in allocation_validity)
+
+TABLE AND FIELD NAMES:
+- Source table: allocationexecutionmodel (auto-generated from AllocationExecutionModel)
+  - Fields: Month, Year, Status, execution_id, StartTime (note capitalization!)
+- Target table: allocation_validity (explicitly defined in AllocationValidityModel)
+  - Fields: month, year, allocation_execution_id, is_valid, created_datetime (lowercase)
 
 TYPE SAFETY:
 This migration uses database-agnostic SQLAlchemy types that work on both SQLite and MSSQL.
@@ -40,16 +46,17 @@ def upgrade() -> None:
 
     # Query to get the latest successful execution for each month+year combination
     # This works for both SQLite and MSSQL
+    # NOTE: Column names are case-sensitive: Month, Year, Status, execution_id, StartTime
     query = text("""
         SELECT
             aem.Month,
             aem.Year,
             aem.execution_id,
             aem.StartTime
-        FROM allocationexcutionmodel aem
+        FROM allocationexecutionmodel aem
         INNER JOIN (
             SELECT Month, Year, MAX(StartTime) as MaxStartTime
-            FROM allocationexcutionmodel
+            FROM allocationexecutionmodel
             WHERE Status = 'SUCCESS'
             GROUP BY Month, Year
         ) latest
@@ -125,14 +132,15 @@ def downgrade() -> None:
     """
     connection = op.get_bind()
 
-    # Get all execution_ids that were migrated (from AllocationExecutionModel)
+    # Get all execution_ids that were migrated (from allocationexecutionmodel)
+    # NOTE: Column names are case-sensitive: Month, Year, Status, execution_id, StartTime
     query = text("""
         SELECT
             aem.execution_id
-        FROM allocationexcutionmodel aem
+        FROM allocationexecutionmodel aem
         INNER JOIN (
             SELECT Month, Year, MAX(StartTime) as MaxStartTime
-            FROM allocationexcutionmodel
+            FROM allocationexecutionmodel
             WHERE Status = 'SUCCESS'
             GROUP BY Month, Year
         ) latest
