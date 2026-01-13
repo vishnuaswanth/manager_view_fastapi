@@ -71,14 +71,8 @@ def get_manager_view_filters():
         return cached_response
 
     try:
-        # Get available report months from database
-        db_manager = core_utils.get_db_manager(
-            UploadDataTimeDetails,
-            limit=1000,
-            skip=0,
-            select_columns=None
-        )
-        report_months = get_available_report_months(db_manager)
+        # Get available report months from AllocationValidityModel (valid allocations only)
+        report_months = get_available_report_months(core_utils)
 
         # Get categories from config
         categories = get_category_list()

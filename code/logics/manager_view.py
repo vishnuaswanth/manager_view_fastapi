@@ -10,7 +10,8 @@ from typing import Dict, List, Optional
 from calendar import month_name
 
 from code.logics.db import (
-    DBManager
+    DBManager,
+    AllocationValidityModel
 )
 
 logger = logging.getLogger(__name__)
@@ -472,12 +473,14 @@ def convert_month_to_yyyy_mm(month: str, year: int) -> str:
         return f"{year}-01"
 
 
-def get_available_report_months(db_manager) -> List[Dict[str, str]]:
+def get_available_report_months(core_utils) -> List[Dict[str, str]]:
     """
-    Get list of available report months from UploadDataTimeDetails.
+    Get list of available report months from AllocationValidityModel.
+
+    Only returns months where allocations are still valid (is_valid=True).
 
     Args:
-        db_manager: DBManager instance for UploadDataTimeDetails
+        core_utils: CoreUtils instance for database access
 
     Returns:
         List of dicts with 'value' (YYYY-MM) and 'display' (Month YYYY)
@@ -490,36 +493,50 @@ def get_available_report_months(db_manager) -> List[Dict[str, str]]:
         ]
     """
     try:
-        data = db_manager.read_db()
-        records = data.get("records", [])
-
-        # Create unique month-year combinations
-        month_year_set = set()
-        for record in records:
-            month = record.get("Month", "")
-            year = record.get("Year", 0)
-            if month and year:
-                month_year_set.add((month, year))
-
-        # Sort by year and month
-        sorted_months = sorted(
-            month_year_set,
-            key=lambda x: (x[1], list(month_name).index(x[0]) if x[0] in month_name else 0)
+        db_manager = core_utils.get_db_manager(
+            AllocationValidityModel,
+            limit=1000,
+            skip=0,
+            select_columns=None
         )
 
-        # Format as required
-        result = []
-        for month, year in sorted_months:
-            yyyy_mm = convert_month_to_yyyy_mm(month, year)
-            display = f"{month} {year}"
-            result.append({
-                "value": yyyy_mm,
-                "display": display
-            })
+        with db_manager.SessionLocal() as session:
+            # Query all valid allocation records
+            validity_records = session.query(AllocationValidityModel).filter(
+                AllocationValidityModel.is_valid == True
+            ).all()
 
-        return result
+            if not validity_records:
+                logger.warning("[ManagerView] No valid allocation records found")
+                return []
+
+            # Create unique month-year combinations
+            month_year_set = set()
+            for record in validity_records:
+                if record.month and record.year:
+                    month_year_set.add((record.month, record.year))
+
+            # Sort by year and month
+            sorted_months = sorted(
+                month_year_set,
+                key=lambda x: (x[1], list(month_name).index(x[0]) if x[0] in month_name else 0)
+            )
+
+            # Format as required
+            result = []
+            for month, year in sorted_months:
+                yyyy_mm = convert_month_to_yyyy_mm(month, year)
+                display = f"{month} {year}"
+                result.append({
+                    "value": yyyy_mm,
+                    "display": display
+                })
+
+            logger.info(f"[ManagerView] Found {len(result)} valid report months")
+            return result
+
     except Exception as e:
-        logger.error(f"[ManagerView] Error getting available months: {e}")
+        logger.error(f"[ManagerView] Error getting available months: {e}", exc_info=True)
         return []
 
 

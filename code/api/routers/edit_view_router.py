@@ -390,11 +390,13 @@ async def get_allocation_reports():
     """
     Get list of available allocation report months.
 
+    Only returns months with valid allocations (is_valid=True in AllocationValidityModel).
+
     Returns:
         List of report months with metadata
     """
     try:
-        reports = get_available_report_months()
+        reports = get_available_report_months(core_utils)
         return {
             "success": True,
             "data": reports,
