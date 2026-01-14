@@ -47,6 +47,23 @@ else:
 ### 4. Option 1 Implementation
 Tracks ALL 4 fields (forecast, fte_req, fte_avail, capacity) when ANY field changes in a record, providing complete snapshot of modified records.
 
+### 5. Missing Field Handling
+**Problem Solved:** When not all fields have data for a record (e.g., only FTE Available and Capacity changed), missing fields should show a value instead of being empty.
+
+**Solution:** Fill missing month field columns with 0:
+```python
+# Fill missing field values with 0 (only for month columns, not static columns)
+month_columns = [col for col in column_order if col not in static_columns]
+df_pivot[month_columns] = df_pivot[month_columns].fillna(0)
+```
+
+**Result:**
+- Missing Forecast → Shows `0`
+- Missing FTE Required → Shows `0`
+- Missing FTE Available → Shows `0`
+- Missing Capacity → Shows `0`
+- Present fields → Show actual values (e.g., `25 (20)` for changed values)
+
 ## Known Behavior: Excel for Mac Repair Dialog
 
 ### What Happens
@@ -112,11 +129,19 @@ Response:
 
 ## Example Output
 
-### Changes Sheet
-| Main LOB | State | Case Type | Case ID | Jun-25 (4 columns merged) |
-|----------|-------|-----------|---------|---------------------------|
+### Changes Sheet - All Fields Present
+| Main LOB | State | Case Type | Case ID | Jun-25 ||||
+|----------|-------|-----------|---------|---------|------|------|-------|
 | (merged) | (merged) | (merged) | (merged) | Client Forecast | FTE Required | FTE Available | Capacity |
 | Amisys Medicaid | TX | Claims | CL-001 | 1000 | 20 | 25 (20) | 1125 (1000) |
+
+### Changes Sheet - Partial Fields (Missing values filled with 0)
+| Main LOB | State | Case Type | Case ID | Jun-25 ||||
+|----------|-------|-----------|---------|---------|------|------|-------|
+| (merged) | (merged) | (merged) | (merged) | Client Forecast | FTE Required | FTE Available | Capacity |
+| Facets Commercial | CA | Enrollment | EN-002 | **0** | **0** | 50 (40) | 2500 (2000) |
+
+*Note: Bold 0 values indicate fields that had no data (were not tracked in this change)*
 
 ### Summary Sheet
 | Label | Value |

@@ -109,15 +109,15 @@ def test_partial_fields():
     capacity_val = ws.cell(row=3, column=8).value
 
     print("\n  Data values:")
-    print(f"    Client Forecast: {forecast_val} (should be None)")
-    print(f"    FTE Required: {fte_req_val} (should be None)")
+    print(f"    Client Forecast: {forecast_val} (should be 0)")
+    print(f"    FTE Required: {fte_req_val} (should be 0)")
     print(f"    FTE Available: {fte_avail_val} (should have value)")
     print(f"    Capacity: {capacity_val} (should have value)")
 
     # Assertions
-    # Missing fields should be None (empty)
-    assert forecast_val is None, f"Client Forecast should be None, got {forecast_val}"
-    assert fte_req_val is None, f"FTE Required should be None, got {fte_req_val}"
+    # Missing fields should be filled with 0
+    assert forecast_val == 0, f"Client Forecast should be 0, got {forecast_val}"
+    assert fte_req_val == 0, f"FTE Required should be 0, got {fte_req_val}"
 
     # Present fields should have values
     assert fte_avail_val is not None, "FTE Available should have a value"
@@ -125,7 +125,7 @@ def test_partial_fields():
 
     print("\n✓ Partial fields handled correctly")
     print("  ✓ All 4 column headers exist")
-    print("  ✓ Missing fields show as empty cells")
+    print("  ✓ Missing fields filled with 0")
     print("  ✓ Present fields show correct values")
 
 

@@ -434,6 +434,12 @@ def generate_history_excel(
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
         # Write pivot data with explicit column order
         df_pivot = pd.DataFrame(pivot_data, columns=column_order)
+
+        # Fill missing field values (Forecast, FTE Required, FTE Available, Capacity) with 0
+        # Only fill month-specific columns, not static columns
+        month_columns = [col for col in column_order if col not in static_columns]
+        df_pivot[month_columns] = df_pivot[month_columns].fillna(0)
+
         # Write WITHOUT headers - we'll create custom multi-level headers manually
         # Start data at row 3 (rows 1-2 for headers)
         df_pivot.to_excel(writer, sheet_name='Changes', index=False, header=False, startrow=2)
