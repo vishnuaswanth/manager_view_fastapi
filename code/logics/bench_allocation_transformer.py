@@ -362,11 +362,29 @@ def transform_allocation_result_to_preview(
                 )
 
                 # Track modified fields
-                if allocation_record.fte_change != 0:
-                    modified_fields.append(f"{month_label}.fte_avail")
+                # OPTION 1: If ANY field changed for this month, track ALL fields
+                has_changes = (
+                    allocation_record.fte_change != 0 or
+                    allocation_record.capacity_change != 0
+                )
+
+                if has_changes:
+                    # Add ALL fields for this month (complete snapshot of modified record)
+                    # Use set to avoid duplicates if multiple months for same record
+                    fields_to_add = [
+                        f"{month_label}.forecast",
+                        f"{month_label}.fte_req",
+                        f"{month_label}.fte_avail",
+                        f"{month_label}.capacity"
+                    ]
+
+                    # Only add if not already in list
+                    for field in fields_to_add:
+                        if field not in modified_fields:
+                            modified_fields.append(field)
+
+                    # Update totals
                     total_fte_change += abs(allocation_record.fte_change)
-                if allocation_record.capacity_change != 0:
-                    modified_fields.append(f"{month_label}.capacity")
                     total_capacity_change += abs(allocation_record.capacity_change)
 
             # Only include records with changes

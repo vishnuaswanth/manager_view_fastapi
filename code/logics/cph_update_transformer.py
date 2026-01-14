@@ -315,10 +315,22 @@ def calculate_cph_preview(
                     )
 
                     # Track modified fields
-                    if fte_req_change != 0:
-                        modified_fields.append(f"{month_label}.fte_req")
-                    if capacity_change != 0:
-                        modified_fields.append(f"{month_label}.capacity")
+                    # OPTION 1: If ANY field changed for this month, track ALL fields
+                    has_changes = (fte_req_change != 0 or capacity_change != 0)
+
+                    if has_changes:
+                        # Add ALL fields for this month (complete snapshot of modified record)
+                        fields_to_add = [
+                            f"{month_label}.forecast",
+                            f"{month_label}.fte_req",
+                            f"{month_label}.fte_avail",
+                            f"{month_label}.capacity"
+                        ]
+
+                        # Only add if not already in list
+                        for field in fields_to_add:
+                            if field not in modified_fields:
+                                modified_fields.append(field)
 
                 # Only include if there are changes (more than just "target_cph")
                 if len(modified_fields) > 1:

@@ -366,14 +366,27 @@ def compare_forecast_snapshots(
                 }
 
                 # Track modified fields
-                if forecast_change != 0:
-                    record["modified_fields"].append(f"{month_label}.forecast")
-                if fte_req_change != 0:
-                    record["modified_fields"].append(f"{month_label}.fte_req")
-                if fte_avail_change != 0:
-                    record["modified_fields"].append(f"{month_label}.fte_avail")
-                if capacity_change != 0:
-                    record["modified_fields"].append(f"{month_label}.capacity")
+                # OPTION 1: If ANY field changed for this month, track ALL fields
+                has_changes = (
+                    forecast_change != 0 or
+                    fte_req_change != 0 or
+                    fte_avail_change != 0 or
+                    capacity_change != 0
+                )
+
+                if has_changes:
+                    # Add ALL fields for this month (complete snapshot)
+                    fields_to_add = [
+                        f"{month_label}.forecast",
+                        f"{month_label}.fte_req",
+                        f"{month_label}.fte_avail",
+                        f"{month_label}.capacity"
+                    ]
+
+                    # Add to modified_fields if not already present
+                    for field in fields_to_add:
+                        if field not in record["modified_fields"]:
+                            record["modified_fields"].append(field)
 
         # Include record if there are changes OR it's a deletion
         # (deletions always have changes since old values become 0)
