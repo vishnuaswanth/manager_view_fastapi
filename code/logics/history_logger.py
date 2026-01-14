@@ -409,10 +409,45 @@ def get_history_log_with_changes(history_log_id: str) -> Optional[Dict]:
         history_log_id: UUID of history log
 
     Returns:
-        Dict with:
-            - history_log: parent record
-            - changes: list of all field changes
+        Dict with flat structure compatible with HistoryLogData:
+            - id: history log UUID
+            - change_type: type of change
+            - month: report month
+            - year: report year
+            - timestamp: ISO timestamp
+            - user: user who made change
+            - description: optional notes
+            - records_modified: count of modified records
+            - summary_data: optional summary statistics
+            - changes: list of field-level changes (dicts compatible with HistoryChangeRecord)
         Returns None if history_log_id not found
+
+    Example:
+        {
+            'id': 'uuid',
+            'change_type': 'Bench Allocation',
+            'month': 'March',
+            'year': 2025,
+            'timestamp': '2025-03-15T10:30:00',
+            'user': 'system',
+            'description': 'Notes',
+            'records_modified': 10,
+            'summary_data': {...},
+            'changes': [
+                {
+                    'main_lob': 'Amisys...',
+                    'state': 'TX',
+                    'case_type': 'Claims',
+                    'case_id': 'CL-001',
+                    'field_name': 'Jun-25.fte_avail',
+                    'old_value': '20',
+                    'new_value': '25',
+                    'delta': 5.0,
+                    'month_label': 'Jun-25'
+                },
+                ...
+            ]
+        }
     """
     try:
         # Get parent record
@@ -454,8 +489,17 @@ def get_history_log_with_changes(history_log_id: str) -> Optional[Dict]:
                     'month_label': change.MonthLabel
                 })
 
+            # Return flat structure with history_log fields at top level + changes list
             return {
-                'history_log': history_log,
+                'id': history_log['id'],
+                'change_type': history_log['change_type'],
+                'month': history_log['month'],
+                'year': history_log['year'],
+                'timestamp': history_log['timestamp'],
+                'user': history_log['user'],
+                'description': history_log['description'],
+                'records_modified': history_log['records_modified'],
+                'summary_data': history_log['summary_data'],
                 'changes': changes
             }
 

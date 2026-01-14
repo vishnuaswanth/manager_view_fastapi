@@ -348,48 +348,57 @@ class HistoryLogData:
 
 
 def generate_history_excel(
-    history_log_data: Union[HistoryLogData, Dict[str, Any]],
-    changes: Union[List[HistoryChangeRecord], List[Dict[str, Any]]]
+    history_log_data: HistoryLogData,
+    changes: List[HistoryChangeRecord]
 ) -> BytesIO:
     """
     Generate Excel file for history log download.
 
+    IMPORTANT: This function expects type-safe dataclass objects, not raw dicts.
+    Use HistoryLogData.from_dict() and HistoryChangeRecord.from_dict() to convert
+    if you have dict data.
+
     Args:
-        history_log_data: History log metadata (HistoryLogData or dict)
-        changes: List of field-level changes (HistoryChangeRecord or dict)
+        history_log_data: History log metadata (HistoryLogData instance)
+        changes: List of field-level changes (List[HistoryChangeRecord])
 
     Returns:
         BytesIO: Excel file buffer
 
     Raises:
-        ValueError: If data is invalid
-        KeyError: If required fields are missing
-        TypeError: If data types are incorrect
+        ValueError: If data is invalid or changes list is empty
+        TypeError: If parameters are not the expected types
+
+    Example:
+        # Convert dict data to type-safe objects
+        history_log = HistoryLogData.from_dict(history_data)
+        typed_changes = [HistoryChangeRecord.from_dict(c) for c in changes_data]
+
+        # Generate Excel
+        excel_buffer = generate_history_excel(history_log, typed_changes)
     """
-    # Convert to type-safe objects if dicts provided
-    if isinstance(history_log_data, dict):
-        try:
-            history_log_data = HistoryLogData.from_dict(history_log_data)
-        except (KeyError, ValueError, TypeError) as e:
-            logger.error(f"Invalid history_log_data: {e}", exc_info=True)
-            raise ValueError(f"Invalid history_log_data structure: {e}")
+    # Validate types
+    if not isinstance(history_log_data, HistoryLogData):
+        raise TypeError(
+            f"history_log_data must be HistoryLogData instance, got {type(history_log_data)}. "
+            f"Use HistoryLogData.from_dict() to convert from dict."
+        )
+
+    if not isinstance(changes, list):
+        raise TypeError(f"changes must be a list, got {type(changes)}")
 
     if not changes:
         raise ValueError("No changes provided for Excel generation")
 
-    # Convert changes to type-safe objects if needed
-    typed_changes: List[HistoryChangeRecord] = []
+    # Validate all changes are HistoryChangeRecord instances
     for i, change in enumerate(changes):
-        if isinstance(change, dict):
-            try:
-                typed_changes.append(HistoryChangeRecord.from_dict(change))
-            except (KeyError, ValueError, TypeError) as e:
-                logger.error(f"Invalid change record at index {i}: {e}", exc_info=True)
-                raise ValueError(f"Invalid change record at index {i}: {e}")
-        elif isinstance(change, HistoryChangeRecord):
-            typed_changes.append(change)
-        else:
-            raise TypeError(f"Change at index {i} must be HistoryChangeRecord or dict, got {type(change)}")
+        if not isinstance(change, HistoryChangeRecord):
+            raise TypeError(
+                f"Change at index {i} must be HistoryChangeRecord instance, got {type(change)}. "
+                f"Use HistoryChangeRecord.from_dict() to convert from dict."
+            )
+
+    typed_changes = changes  # Already validated as List[HistoryChangeRecord]
 
     # Step 1: Transform changes to pivot table structure WITH metadata
     pivot_data, month_labels, static_columns = _prepare_pivot_data(typed_changes)

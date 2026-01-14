@@ -12,7 +12,11 @@ from code.logics.history_logger import (
     list_history_logs,
     get_history_log_with_changes
 )
-from code.logics.history_excel_generator import generate_history_excel
+from code.logics.history_excel_generator import (
+    generate_history_excel,
+    HistoryLogData,
+    HistoryChangeRecord
+)
 from code.logics.config.change_types import validate_change_type
 from code.api.dependencies import get_logger
 
@@ -123,10 +127,10 @@ async def download_history_excel(history_log_id: str):
         StreamingResponse: Excel file download with proper headers
 
     Raises:
-        HTTPException: 404 if history log not found, 500 on server error
+        HTTPException: 404 if history log not found, 400 if data invalid, 500 on server error
     """
     try:
-        # Get history log with changes
+        # Get history log with changes (returns flat dict)
         history_data = get_history_log_with_changes(history_log_id)
 
         if not history_data:
@@ -135,16 +139,30 @@ async def download_history_excel(history_log_id: str):
                 detail={"success": False, "error": "History log entry not found"}
             )
 
-        # Generate Excel file
+        # Convert dict data to type-safe dataclasses
+        try:
+            history_log = HistoryLogData.from_dict(history_data)
+            changes_list = [
+                HistoryChangeRecord.from_dict(change)
+                for change in history_data.get('changes', [])
+            ]
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error(f"Invalid data structure from database: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail={"success": False, "error": f"Invalid history log data: {e}"}
+            )
+
+        # Generate Excel file with type-safe objects
         excel_buffer = generate_history_excel(
-            history_log_data=history_data,
-            changes=history_data.get('changes', [])
+            history_log_data=history_log,
+            changes=changes_list
         )
 
         # Create filename
-        month = history_data['month']
-        year = history_data['year']
-        change_type = history_data['change_type'].replace(' ', '_')
+        month = history_log.month
+        year = history_log.year
+        change_type = history_log.change_type.replace(' ', '_')
         filename = f"history_log_{change_type}_{month}_{year}_{history_log_id[:8]}.xlsx"
 
         # Return as streaming response
