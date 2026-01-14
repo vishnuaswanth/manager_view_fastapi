@@ -406,18 +406,44 @@ def generate_history_excel(
     # Step 2: Create Excel workbook with openpyxl
     excel_buffer = BytesIO()
 
-    # Step 3: Create main data sheet
+    # Step 3: Build correct column order to match header structure
+    # Order: [Static columns] [Month1 fields] [Month2 fields] ...
+    column_order = list(static_columns)  # Start with static columns
+
+    # Add month columns in order (chronological, already sorted)
+    for month_label in month_labels:
+        for field in CORE_FIELDS:
+            column_order.append(f"{month_label} {field}")
+
+    logger.debug(f"Expected column order for DataFrame: {column_order}")
+
+    # Validate that all expected columns exist in pivot_data
+    if pivot_data:
+        actual_columns = set(pivot_data[0].keys())
+        expected_columns = set(column_order)
+
+        missing_columns = expected_columns - actual_columns
+        extra_columns = actual_columns - expected_columns
+
+        if missing_columns:
+            logger.warning(f"Missing columns in pivot_data: {missing_columns}")
+        if extra_columns:
+            logger.warning(f"Extra columns in pivot_data (will be ignored): {extra_columns}")
+
+    # Step 4: Create main data sheet with explicit column order
     with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-        # Write pivot data
-        df_pivot = pd.DataFrame(pivot_data)
-        df_pivot.to_excel(writer, sheet_name='Changes', index=False)
+        # Write pivot data with explicit column order
+        df_pivot = pd.DataFrame(pivot_data, columns=column_order)
+        # Write WITHOUT headers - we'll create custom multi-level headers manually
+        # Start data at row 3 (rows 1-2 for headers)
+        df_pivot.to_excel(writer, sheet_name='Changes', index=False, header=False, startrow=2)
 
         # Write summary sheet
         summary_data = _prepare_summary_sheet(history_log_data)
         df_summary = pd.DataFrame(summary_data)
         df_summary.to_excel(writer, sheet_name='Summary', index=False, header=False)
 
-    # Step 4: Apply multi-level headers and formatting
+    # Step 5: Apply multi-level headers and formatting
     excel_buffer.seek(0)
     _apply_multilevel_headers_and_formatting(
         excel_buffer,
@@ -580,45 +606,62 @@ def _create_multilevel_headers(
     Row 1: [Static cols (merged)] [Month1 (merged 4 cols)] [Month2 (merged 4 cols)] ...
     Row 2: [Static cols (merged)] [Field1] [Field2] [Field3] [Field4] [Field1] ...
 
+    NOTE: This function assumes rows 1-2 are empty (pandas data starts at row 3).
+    It directly populates rows 1-2 without inserting any rows.
+
+    KNOWN BEHAVIOR: Excel for Mac may show a repair dialog when opening the file.
+    This is due to openpyxl's merged cell handling removing non-anchor cells from XML,
+    which Excel for Mac's strict validation flags as invalid. The file is functionally
+    correct and will open successfully after clicking "Yes" on the repair dialog.
+    All data and formatting will be preserved correctly.
+
     Args:
-        ws: openpyxl Worksheet
+        ws: openpyxl Worksheet (with empty rows 1-2, data starting at row 3)
         month_labels: List of month labels (e.g., ["Jun-25", "Jul-25"])
         static_columns: List of static column names
         core_fields: List of field names under each month
             (e.g., ["Client Forecast", "FTE Required", "FTE Available", "Capacity"])
     """
-    # Insert new row at top (shifts existing rows down)
-    ws.insert_rows(1)
+    # NOTE: Rows 1-2 are empty, data starts at row 3
+    # We populate rows 1-2 directly without inserting
 
     # Current column index
     col_idx = 1
+    total_merges = 0
 
     # 1. Create static column headers (merged vertically)
     for col_name in static_columns:
-        # Write to row 1
+        # Write value ONLY to row 1 (anchor cell)
         ws.cell(row=1, column=col_idx, value=col_name)
-        # Merge with row 2
+
+        # DON'T write to row 2 - leave empty for clean merge
+
+        # Merge
         end_col_letter = get_column_letter(col_idx)
         ws.merge_cells(f'{end_col_letter}1:{end_col_letter}2')
+        total_merges += 1
         col_idx += 1
 
     # 2. Create month headers with field subheaders
     for month_label in month_labels:
-        # Write month header in row 1 (merged across 4 columns)
         start_col = col_idx
         end_col = col_idx + len(core_fields) - 1
 
+        # Write month value ONLY to anchor cell in row 1
         ws.cell(row=1, column=start_col, value=month_label)
+
+        # Merge across columns in row 1
         start_letter = get_column_letter(start_col)
         end_letter = get_column_letter(end_col)
         ws.merge_cells(f'{start_letter}1:{end_letter}1')
+        total_merges += 1
 
-        # Write field headers in row 2
+        # Write field names to row 2 (no merge)
         for field_name in core_fields:
             ws.cell(row=2, column=col_idx, value=field_name)
             col_idx += 1
 
-    logger.debug(f"Created multi-level headers for {len(month_labels)} months")
+    logger.debug(f"Created multi-level headers for {len(month_labels)} months with {total_merges} merged ranges")
 
 
 def _prepare_summary_sheet(history_log_data: HistoryLogData) -> List[Dict[str, str]]:
@@ -647,38 +690,63 @@ def _prepare_summary_sheet(history_log_data: HistoryLogData) -> List[Dict[str, s
         summary_rows.append({'label': 'SUMMARY TOTALS', 'value': ''})
 
         summary_data = history_log_data.summary_data
-        if summary_data.totals:
-            for month_label, month_summary in summary_data.totals.items():
+
+        # Handle both dict and HistorySummaryData object
+        if isinstance(summary_data, dict):
+            totals = summary_data.get('totals', {})
+        else:
+            totals = summary_data.totals if hasattr(summary_data, 'totals') else {}
+
+        if totals:
+            for month_label, month_summary in totals.items():
+                # Handle both dict and object for month_summary
+                if isinstance(month_summary, dict):
+                    # Dict format from database
+                    fte_avail = month_summary.get('total_fte_available')
+                    forecast = month_summary.get('total_forecast')
+                    capacity = month_summary.get('total_capacity')
+                else:
+                    # Object format from typed conversion
+                    fte_avail = month_summary.total_fte_available if hasattr(month_summary, 'total_fte_available') else None
+                    forecast = month_summary.total_forecast if hasattr(month_summary, 'total_forecast') else None
+                    capacity = month_summary.total_capacity if hasattr(month_summary, 'total_capacity') else None
+
                 # Add FTE Available totals if present
-                if month_summary.total_fte_available:
+                if fte_avail:
+                    old_val = fte_avail.get('old') if isinstance(fte_avail, dict) else fte_avail.old
+                    new_val = fte_avail.get('new') if isinstance(fte_avail, dict) else fte_avail.new
                     summary_rows.append({
                         'label': f"{month_label} Total FTE Available (Old)",
-                        'value': str(month_summary.total_fte_available.old)
+                        'value': str(old_val)
                     })
                     summary_rows.append({
                         'label': f"{month_label} Total FTE Available (New)",
-                        'value': str(month_summary.total_fte_available.new)
+                        'value': str(new_val)
                     })
 
                 # Add other metrics if present
-                if month_summary.total_forecast:
+                if forecast:
+                    old_val = forecast.get('old') if isinstance(forecast, dict) else forecast.old
+                    new_val = forecast.get('new') if isinstance(forecast, dict) else forecast.new
                     summary_rows.append({
                         'label': f"{month_label} Total Forecast (Old)",
-                        'value': str(month_summary.total_forecast.old)
+                        'value': str(old_val)
                     })
                     summary_rows.append({
                         'label': f"{month_label} Total Forecast (New)",
-                        'value': str(month_summary.total_forecast.new)
+                        'value': str(new_val)
                     })
 
-                if month_summary.total_capacity:
+                if capacity:
+                    old_val = capacity.get('old') if isinstance(capacity, dict) else capacity.old
+                    new_val = capacity.get('new') if isinstance(capacity, dict) else capacity.new
                     summary_rows.append({
                         'label': f"{month_label} Total Capacity (Old)",
-                        'value': str(month_summary.total_capacity.old)
+                        'value': str(old_val)
                     })
                     summary_rows.append({
                         'label': f"{month_label} Total Capacity (New)",
-                        'value': str(month_summary.total_capacity.new)
+                        'value': str(new_val)
                     })
 
     logger.debug(f"Prepared {len(summary_rows)} summary rows")
