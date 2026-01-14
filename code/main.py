@@ -4,8 +4,11 @@ FastAPI application entry point.
 Registers all API routers and handles application startup configuration.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 import logging
+import json
 
 from code.settings import (
     MODE,
@@ -56,6 +59,41 @@ app = FastAPI(
     description="API for forecast management, allocation, and manager view reporting",
     version="0.2.0",  # Incremented version for router refactor
 )
+
+
+# Custom exception handler for Pydantic validation errors
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """
+    Log detailed validation errors before returning 422 response.
+
+    This helps debug Pydantic validation issues that occur before endpoint code runs.
+    """
+    # Get request body for logging
+    try:
+        body = await request.body()
+        body_str = body.decode('utf-8')
+        try:
+            body_json = json.loads(body_str)
+            body_preview = json.dumps(body_json, indent=2)[:1000]  # First 1000 chars
+        except:
+            body_preview = body_str[:1000]
+    except:
+        body_preview = "<unable to read body>"
+
+    # Log detailed error information
+    logger.error(
+        f"Validation Error on {request.method} {request.url.path}\n"
+        f"Request Body Preview:\n{body_preview}\n"
+        f"Validation Errors:\n{json.dumps(exc.errors(), indent=2)}"
+    )
+
+    # Return standard FastAPI validation error response
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()}
+    )
+
 
 # Register routers
 app.include_router(upload_router, tags=["File Management"])

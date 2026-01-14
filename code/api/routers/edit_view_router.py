@@ -67,9 +67,27 @@ class ModifiedForecastRecord(BaseModel):
     target_cph: float = Field(gt=0, le=200, description="Target Cases Per Hour")
     target_cph_change: float = Field(default=0, description="Change in Target CPH")
     modified_fields: List[str] = Field(min_items=1, description="List of modified field paths")
+    months: Dict[str, MonthData] = Field(
+        description="Month-specific data keyed by month label (e.g., 'Jun-25')"
+    )
 
     class Config:
-        extra = "allow"  # Allow month label keys like "Jun-25"
+        extra = "forbid"  # Strict validation
+
+    def model_dump(self, **kwargs):
+        """
+        Flatten months for backward compatibility with forecast_updater.
+
+        Transforms:
+            {"months": {"Jun-25": {...}}}
+        To:
+            {"Jun-25": {...}}
+        """
+        data = super().model_dump(**kwargs)
+        # Extract months and merge with top level
+        months_data = data.pop('months', {})
+        data.update(months_data)
+        return data
 
 
 class CPHRecord(BaseModel):
