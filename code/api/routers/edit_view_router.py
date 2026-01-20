@@ -62,7 +62,7 @@ class ModifiedForecastRecord(BaseModel):
     """Modified forecast record with month-specific data and changes."""
     case_id: str = Field(min_length=1, description="Case/Forecast ID")
     main_lob: str = Field(min_length=1, description="Main Line of Business")
-    state: str = Field(min_length=2, max_length=2, description="State code (2-letter)")
+    state: str = Field(min_length=2, max_length=3, description="State code (2-letter) or 'N/A'")
     case_type: str = Field(min_length=1, description="Case Type")
     target_cph: float = Field(gt=0, le=200, description="Target Cases Per Hour")
     target_cph_change: float = Field(default=0, description="Change in Target CPH")
@@ -490,23 +490,25 @@ async def preview_bench_allocation(request: BenchAllocationPreviewRequest):
 
         # Check if allocation succeeded
         if not allocation_result.success:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "success": False,
-                    "error": allocation_result.error_message or "Bench allocation failed"
-                }
-            )
+            error_detail = {
+                "success": False,
+                "error": allocation_result.error or "Bench allocation failed"
+            }
+            if allocation_result.recommendation:
+                error_detail["recommendation"] = allocation_result.recommendation
+            if allocation_result.context:
+                error_detail["context"] = allocation_result.context
+            raise HTTPException(status_code=400, detail=error_detail)
 
         # Check if any allocations were made
         if not allocation_result.allocations:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "success": False,
-                    "error": "No bench capacity available for allocation"
-                }
-            )
+            # This is a success case with no action - return info message
+            return {
+                "success": True,
+                "total_modified": 0,
+                "modified_records": [],
+                "info_message": allocation_result.info_message or "No bench capacity available for allocation"
+            }
 
         # Transform to preview format
         preview_response = transform_allocation_result_to_preview(
@@ -521,10 +523,38 @@ async def preview_bench_allocation(request: BenchAllocationPreviewRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to preview bench allocation: {e}", exc_info=True)
+        from code.logics.exceptions import EditViewException
+        from sqlalchemy.exc import SQLAlchemyError
+
+        # Custom domain exceptions - already have structured error info
+        if isinstance(e, EditViewException):
+            logger.warning(f"Bench allocation error: {e.message}", exc_info=True)
+            raise HTTPException(
+                status_code=e.http_status,
+                detail=e.to_dict()
+            )
+
+        # Database errors
+        if isinstance(e, SQLAlchemyError):
+            logger.error(f"Database error during bench allocation: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "success": False,
+                    "error": "Database operation failed",
+                    "recommendation": "Contact system administrator if this persists."
+                }
+            )
+
+        # Unexpected errors
+        logger.error(f"Unexpected error during bench allocation: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={"success": False, "error": str(e)}
+            detail={
+                "success": False,
+                "error": f"Unexpected error: {str(e)}",
+                "recommendation": "Contact system administrator."
+            }
         )
 
 
@@ -576,10 +606,38 @@ async def update_bench_allocation(request: BenchAllocationUpdateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update bench allocation: {e}", exc_info=True)
+        from code.logics.exceptions import EditViewException
+        from sqlalchemy.exc import SQLAlchemyError
+
+        # Custom domain exceptions - already have structured error info
+        if isinstance(e, EditViewException):
+            logger.warning(f"Bench allocation update error: {e.message}", exc_info=True)
+            raise HTTPException(
+                status_code=e.http_status,
+                detail=e.to_dict()
+            )
+
+        # Database errors
+        if isinstance(e, SQLAlchemyError):
+            logger.error(f"Database error during bench allocation update: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "success": False,
+                    "error": "Database operation failed during update",
+                    "recommendation": "Contact system administrator if this persists."
+                }
+            )
+
+        # Unexpected errors
+        logger.error(f"Unexpected error during bench allocation update: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={"success": False, "error": str(e)}
+            detail={
+                "success": False,
+                "error": f"Unexpected error: {str(e)}",
+                "recommendation": "Contact system administrator."
+            }
         )
 
 

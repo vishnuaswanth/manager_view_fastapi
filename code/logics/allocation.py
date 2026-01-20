@@ -261,8 +261,12 @@ def get_fte_required(row, month, calculations: Calculations):
     Determines work type (Domestic/Global) from LOB parsing, with special handling
     for OIC Volumes where work type is extracted from the Case Type column.
 
-    Formula: Volume / (Target_CPH * WorkHours * Occupancy * (1 - Shrinkage) * WorkingDays)
+    Formula: ceil(forecast / (working_days * work_hours * (1-shrinkage) * target_cph))
+    Note: Occupancy is NOT used in FTE Required calculation (as per business requirements).
+          Uses centralized calculation utility for consistency across the application.
     """
+    from code.logics.capacity_calculations import calculate_fte_required
+
     try:
         target_cph = row[('Centene Capacity plan', 'Target CPH')]
         month_value = row[('Client Forecast', month)]
@@ -287,14 +291,21 @@ def get_fte_required(row, month, calculations: Calculations):
         config = calculations.get_config_for_worktype(month, year, work_type)
 
         no_of_days = config['working_days']
-        occupancy = config['occupancy']
         shrinkage = config['shrinkage']
         workhours = config['work_hours']
 
         if target_cph == 0 or no_of_days == 0:
             return 0
 
-        fte_required = month_value / (target_cph * workhours * occupancy * (1 - shrinkage) * no_of_days)
+        # Build config dict for centralized utility (occupancy NOT included)
+        month_config = {
+            'working_days': no_of_days,
+            'work_hours': workhours,
+            'shrinkage': shrinkage
+        }
+
+        # Use centralized calculation utility (returns integer with ceiling)
+        fte_required = calculate_fte_required(month_value, month_config, target_cph)
         return fte_required
 
     except (KeyError, TypeError) as e:
@@ -1282,8 +1293,11 @@ def get_capacity(row, month, calculations: Calculations):
     Determines work type (Domestic/Global) from LOB parsing, with special handling
     for OIC Volumes where work type is extracted from the Case Type column.
 
-    Formula: Target_CPH * FTE_Available * (1 - Shrinkage) * WorkingDays * WorkHours
+    Formula: fte_avail * working_days * work_hours * (1-shrinkage) * target_cph
+    Note: Uses centralized calculation utility for consistency across the application.
     """
+    from code.logics.capacity_calculations import calculate_capacity
+
     try:
         target_cph = row[('Centene Capacity plan', 'Target CPH')]
         fte_available = row[('FTE Avail', month)]
@@ -1311,8 +1325,17 @@ def get_capacity(row, month, calculations: Calculations):
         shrinkage = config['shrinkage']
         workhours = config['work_hours']
 
+        # Build config dict for centralized utility
+        month_config = {
+            'working_days': no_of_days,
+            'work_hours': workhours,
+            'shrinkage': shrinkage
+        }
+
         logging.debug(f"FTE Avail for {month}: {fte_available}, work_type: {work_type}")
-        capacity = target_cph * fte_available * (1 - shrinkage) * no_of_days * workhours
+
+        # Use centralized calculation utility (returns float, rounded to 2 decimals)
+        capacity = calculate_capacity(int(fte_available), month_config, target_cph)
         return capacity
 
     except (KeyError, TypeError) as e:

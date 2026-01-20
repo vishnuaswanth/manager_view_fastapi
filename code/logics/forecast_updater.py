@@ -101,14 +101,16 @@ def update_forecast_from_modified_records(
                 ).first()
 
                 if not forecast_record:
+                    from code.logics.exceptions import ForecastRecordNotFoundException
+
                     logger.error(
                         f"Forecast record not found: Main_LOB={main_lob}, State={state}, "
                         f"Case_Type={case_type}, Call_Type_ID={call_type_id}, "
                         f"Month={report_month}, Year={report_year}"
                     )
-                    raise ValueError(
-                        f"Forecast record not found for Main_LOB={main_lob}, State={state}, "
-                        f"Case_Type={case_type}, Call_Type_ID={call_type_id}"
+                    raise ForecastRecordNotFoundException(
+                        main_lob, state, case_type, call_type_id,
+                        report_month, report_year
                     )
 
                 logger.debug(

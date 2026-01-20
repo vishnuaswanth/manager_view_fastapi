@@ -704,14 +704,17 @@ Do you want us to try to recover as much as we can?"
         "month5": "Oct-25",
         "month6": "Nov-25"
     },
+    "month": "April",
+    "year": 2025,
     "modified_records": [
         {
-            "id": "uuid-string",
             "main_lob": "Amisys Medicaid DOMESTIC",
             "state": "MO",
             "case_type": "Claims Processing",
             "case_id": "CASE-123",
-            "modified_fields": ["Jun-25.forecast", "Jun-25.fte_req", "Jun-25.fte_avail", "Jun-25.capacity", "Jul-25.forecast", "Jul-25.fte_req", "Jul-25.fte_avail", "Jul-25.capacity"],
+            "target_cph": 50.0,
+            "target_cph_change": 5.0,
+            "modified_fields": ["target_cph", "Jun-25.forecast", "Jun-25.fte_req", "Jun-25.fte_avail", "Jun-25.capacity", "Jul-25.forecast", "Jul-25.fte_req", "Jul-25.fte_avail", "Jul-25.capacity"],
             "months": {
                 "Jun-25": {
                     "forecast": 12500,
@@ -732,6 +735,46 @@ Do you want us to try to recover as much as we can?"
                     "fte_req_change": 3,
                     "fte_avail_change": 0,
                     "capacity_change": 120
+                },
+                "Aug-25": {
+                    "forecast": 13500,
+                    "fte_req": 12,
+                    "fte_avail": 8,
+                    "capacity": 480,
+                    "forecast_change": 0,
+                    "fte_req_change": 3,
+                    "fte_avail_change": 0,
+                    "capacity_change": 130
+                },
+                "Sep-25": {
+                    "forecast": 14000,
+                    "fte_req": 13,
+                    "fte_avail": 8,
+                    "capacity": 520,
+                    "forecast_change": 0,
+                    "fte_req_change": 3,
+                    "fte_avail_change": 0,
+                    "capacity_change": 140
+                },
+                "Oct-25": {
+                    "forecast": 14500,
+                    "fte_req": 14,
+                    "fte_avail": 8,
+                    "capacity": 560,
+                    "forecast_change": 0,
+                    "fte_req_change": 4,
+                    "fte_avail_change": 0,
+                    "capacity_change": 150
+                },
+                "Nov-25": {
+                    "forecast": 15000,
+                    "fte_req": 15,
+                    "fte_avail": 8,
+                    "capacity": 600,
+                    "forecast_change": 0,
+                    "fte_req_change": 4,
+                    "fte_avail_change": 0,
+                    "capacity_change": 160
                 }
             }
         }
@@ -764,17 +807,20 @@ Do you want us to try to recover as much as we can?"
 **Notes**:
 - **IMPORTANT**: Uses SAME standardized format as bench allocation preview (Section 2)
 - **Option 1 Implementation**: When ANY field changes for a month (FTE Required or Capacity due to CPH change), ALL 4 fields for that month are included in `modified_fields`
-  - Example: If Jun-25 FTE Required changes, `modified_fields` includes: `["Jun-25.forecast", "Jun-25.fte_req", "Jun-25.fte_avail", "Jun-25.capacity"]`
+  - Example: If Jun-25 FTE Required changes, `modified_fields` includes: `["target_cph", "Jun-25.forecast", "Jun-25.fte_req", "Jun-25.fte_avail", "Jun-25.capacity"]`
   - Provides complete snapshot of all modified records for audit trail
 - Returns top-level `months` object mapping month indices (month1-month6) to actual month labels
+- Returns `month` and `year` in the response for context
 - Only returns forecast records affected by CPH changes in `modified_records`
-- Each affected forecast record has a `months` object containing month-specific data for all 6 months
+- Each affected forecast record has a `months` object containing month-specific data for ALL 6 months
 - Each month object includes both current values AND `*_change` fields showing deltas
-- All numeric fields are integers (not decimals)
+- All numeric fields are integers (not decimals) except `target_cph` and `target_cph_change` which are floats
 - Change fields: `forecast_change`, `fte_req_change`, `fte_avail_change`, `capacity_change`
-- `modified_fields` array uses DOT notation (e.g., "Jun-25.fte_req", "Jul-25.capacity")
+- `modified_fields` array uses DOT notation (e.g., "target_cph", "Jun-25.fte_req", "Jul-25.capacity")
 - Field names: `forecast`, `fte_req`, `fte_avail`, `capacity` (standardized format)
-- **KEY DIFFERENCE from Bench Allocation**: CPH preview includes `case_id` but does NOT include `target_cph` or `target_cph_change` fields in the record
+- **IMPORTANT**: CPH preview includes `target_cph` and `target_cph_change` fields showing the new CPH value and the delta
+- `target_cph` in the response shows the NEW (modified) CPH value, NOT the original
+- `target_cph_change` shows the delta (modified_target_cph - target_cph)
 - Validates that modified_target_cph differs from target_cph (filters unchanged records)
 - Cache TTL: 5 minutes (configurable: `TargetCPHConfig.CPH_PREVIEW_TTL`)
 
@@ -783,20 +829,21 @@ Do you want us to try to recover as much as we can?"
 - `year` must be integer between 2020-2030
 - `modified_records` must be non-empty list
 - Each record must have: id, lob, case_type, target_cph, modified_target_cph
-- CPH values must be between 0.0 and 10000.0 (configurable)
+- CPH values must be between 0.0 and 200.0 (validated by Pydantic)
 - Raises ValidationError if no actual changes (target_cph == modified_target_cph for all records)
 
-**Field Reference for Modified Records**:
+**Field Reference for Modified Records in Response**:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | string | Unique forecast record identifier |
 | `main_lob` | string | Line of business identifier |
 | `state` | string | State code |
 | `case_type` | string | Case type (e.g., "Claims Processing") |
-| `case_id` | string | Case identifier (included for CPH preview) |
-| `modified_fields` | array | DOT notation list of changed fields (Option 1: includes all 4 fields for months with changes) |
-| `months` | object | NESTED object containing month-specific data. Keys are month labels (e.g., "Jun-25"). Each month object contains: forecast (int), fte_req (int), fte_avail (int), capacity (int), forecast_change (int), fte_req_change (int), fte_avail_change (int), capacity_change (int) |
+| `case_id` | string | Case identifier (Centene_Capacity_Plan_Call_Type_ID) |
+| `target_cph` | float | NEW Target CPH value (after modification) |
+| `target_cph_change` | float | Delta in Target CPH (modified - original) |
+| `modified_fields` | array | DOT notation list of changed fields (Option 1: includes "target_cph" + all 4 fields for months with changes) |
+| `months` | object | NESTED object containing month-specific data for ALL 6 months. Keys are month labels (e.g., "Jun-25"). Each month object contains: forecast (int), fte_req (int), fte_avail (int), capacity (int), forecast_change (int), fte_req_change (int), fte_avail_change (int), capacity_change (int) |
 
 ---
 
@@ -811,20 +858,85 @@ Do you want us to try to recover as much as we can?"
 {
     "month": "April",
     "year": 2025,
+    "months": {
+        "month1": "Jun-25",
+        "month2": "Jul-25",
+        "month3": "Aug-25",
+        "month4": "Sep-25",
+        "month5": "Oct-25",
+        "month6": "Nov-25"
+    },
     "modified_records": [
         {
-            "id": "cph_1",
-            "lob": "Amisys Medicaid DOMESTIC",
+            "main_lob": "Amisys Medicaid DOMESTIC",
+            "state": "MO",
             "case_type": "Claims Processing",
-            "target_cph": 45.0,
-            "modified_target_cph": 50.0
-        },
-        {
-            "id": "cph_2",
-            "lob": "Facets Medicare OFFSHORE",
-            "case_type": "Enrollment",
-            "target_cph": 52.0,
-            "modified_target_cph": 55.0
+            "case_id": "CASE-123",
+            "target_cph": 50.0,
+            "target_cph_change": 5.0,
+            "modified_fields": ["target_cph", "Jun-25.forecast", "Jun-25.fte_req", "Jun-25.fte_avail", "Jun-25.capacity", "Jul-25.forecast", "Jul-25.fte_req", "Jul-25.fte_avail", "Jul-25.capacity"],
+            "months": {
+                "Jun-25": {
+                    "forecast": 12500,
+                    "fte_req": 10,
+                    "fte_avail": 8,
+                    "capacity": 400,
+                    "forecast_change": 0,
+                    "fte_req_change": 2,
+                    "fte_avail_change": 0,
+                    "capacity_change": 100
+                },
+                "Jul-25": {
+                    "forecast": 13000,
+                    "fte_req": 11,
+                    "fte_avail": 8,
+                    "capacity": 440,
+                    "forecast_change": 0,
+                    "fte_req_change": 3,
+                    "fte_avail_change": 0,
+                    "capacity_change": 120
+                },
+                "Aug-25": {
+                    "forecast": 13500,
+                    "fte_req": 12,
+                    "fte_avail": 8,
+                    "capacity": 480,
+                    "forecast_change": 0,
+                    "fte_req_change": 3,
+                    "fte_avail_change": 0,
+                    "capacity_change": 130
+                },
+                "Sep-25": {
+                    "forecast": 14000,
+                    "fte_req": 13,
+                    "fte_avail": 8,
+                    "capacity": 520,
+                    "forecast_change": 0,
+                    "fte_req_change": 3,
+                    "fte_avail_change": 0,
+                    "capacity_change": 140
+                },
+                "Oct-25": {
+                    "forecast": 14500,
+                    "fte_req": 14,
+                    "fte_avail": 8,
+                    "capacity": 560,
+                    "forecast_change": 0,
+                    "fte_req_change": 4,
+                    "fte_avail_change": 0,
+                    "capacity_change": 150
+                },
+                "Nov-25": {
+                    "forecast": 15000,
+                    "fte_req": 15,
+                    "fte_avail": 8,
+                    "capacity": 600,
+                    "forecast_change": 0,
+                    "fte_req_change": 4,
+                    "fte_avail_change": 0,
+                    "capacity_change": 160
+                }
+            }
         }
     ],
     "user_notes": "Updated CPH values for Q2 optimization"
@@ -836,10 +948,9 @@ Do you want us to try to recover as much as we can?"
 {
     "success": true,
     "message": "CPH updated successfully",
-    "records_updated": 2,
     "cph_changes_applied": 2,
     "forecast_rows_affected": 15,
-    "timestamp": "2025-01-07T10:30:00"
+    "history_log_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -847,7 +958,7 @@ Do you want us to try to recover as much as we can?"
 ```json
 {
     "success": false,
-    "message": "Validation error: CPH value cannot exceed 10000.0, got 15000.0"
+    "error": "Validation error: CPH value cannot exceed 200.0"
 }
 ```
 
@@ -855,46 +966,59 @@ Do you want us to try to recover as much as we can?"
 ```json
 {
     "success": false,
-    "message": "Failed to update CPH"
+    "error": "Failed to update CPH"
 }
 ```
 
 **Notes**:
-- Send the same `modified_records` array from the GET CPH data endpoint (with user modifications)
-- **DO NOT** send the preview response records - use the original CPH records structure
-- Only records where `target_cph != modified_target_cph` are processed
+- **IMPORTANT**: Send the FULL record structure from the preview response (Section 8)
+- Uses the SAME `ModifiedForecastRecord` format as bench allocation update (Section 3)
+- Top-level `months` dictionary is **REQUIRED** - must be the same mapping received from preview response
+- Frontend should send the exact structure received from the preview endpoint - DO NOT manually construct
+- Each record must have a `months` object containing ALL 6 months with complete month data
+- All numeric fields are integers except `target_cph` and `target_cph_change` which are floats
+- Month data must include ALL fields: `forecast`, `fte_req`, `fte_avail`, `capacity`, plus corresponding `*_change` fields
+- `modified_fields` array is **REQUIRED** - lists which fields changed using DOT notation
+- **Option 1 Implementation**: When ANY field changes for a month, ALL 4 fields for that month MUST be included in `modified_fields`, plus "target_cph"
+- `target_cph` in request shows the NEW (modified) CPH value
+- `target_cph_change` shows the delta from original value
 - Creates corresponding history log entry automatically with change type "CPH Update"
 - Should be transactional (all or nothing)
-- Validator filters out unchanged records before processing
+- Validator will reject requests missing `months`, `modified_fields`, or required identifier fields
 - No cache (write operation)
 
-**Field Reference**:
+**Top-level Request Fields**:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `month` | string | Yes | Month name (e.g., "April") |
 | `year` | number | Yes | Year (e.g., 2025) |
-| `modified_records` | array | Yes | Array of CPH records with changes |
-| `user_notes` | string | No | User-provided description (max 500 chars) |
+| `months` (top-level) | object | Yes | Month index mapping (month1-month6) to labels. Must match preview response. Required for backend processing. Structure: `{"month1": "Jun-25", "month2": "Jul-25", ...}` |
+| `modified_records` | array | Yes | Array of modified forecast records (ModifiedForecastRecord format from preview) |
+| `user_notes` | string | No | User-provided description (max 1000 chars) |
 
 **Modified Records Structure**:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | Yes | CPH record identifier |
-| `lob` | string | Yes | Line of business |
-| `case_type` | string | Yes | Case type |
-| `target_cph` | number | Yes | Original CPH value |
-| `modified_target_cph` | number | Yes | New CPH value (must differ from target_cph) |
+| `main_lob` | string | Yes | Line of business identifier |
+| `state` | string | Yes | State code (2-letter) or 'N/A' |
+| `case_type` | string | Yes | Case type (e.g., "Claims Processing") |
+| `case_id` | string | Yes | Unique case identifier |
+| `target_cph` | float | Yes | NEW Target CPH value (after modification) |
+| `target_cph_change` | float | Yes | Delta from original CPH |
+| `modified_fields` | array | Yes | DOT notation list of ALL fields for months with changes. With Option 1, includes "target_cph" + all 4 fields for each month that has any change |
+| `months` | object | Yes | NESTED object containing month-specific data for all 6 months. Keys are month labels (e.g., "Jun-25"). Each month object contains: forecast (int), fte_req (int), fte_avail (int), capacity (int), forecast_change (int), fte_req_change (int), fte_avail_change (int), capacity_change (int) |
 
 **Validation Rules**:
 - `month`: Must be full month name (January-December)
-- `year`: Must be integer between 2020-2030
+- `year`: Must be integer between 2020-2050
 - `modified_records`: Must be non-empty array
-- CPH values: Must be between 0.0 and 10000.0 (configurable: `TargetCPHConfig.MIN_CPH_VALUE`, `MAX_CPH_VALUE`)
-- CPH precision: Rounded to 2 decimal places (configurable: `TargetCPHConfig.CPH_DECIMAL_PLACES`)
-- `user_notes`: Optional, max 500 characters (configurable: `TargetCPHConfig.MAX_USER_NOTES_LENGTH`)
-- At least one record must have actual change (target_cph != modified_target_cph)
+- `months`: Must have exactly 6 entries (month1-month6)
+- CPH values: Must be between 0.0 and 200.0 (validated by Pydantic)
+- `modified_fields`: Must be non-empty array
+- Each record's `months` object must contain all 6 month labels matching the top-level `months` mapping
+- `user_notes`: Optional, max 1000 characters
 
 **Response Fields**:
 
@@ -902,10 +1026,17 @@ Do you want us to try to recover as much as we can?"
 |-------|------|-------------|
 | `success` | boolean | Operation success status |
 | `message` | string | Success/error message |
-| `records_updated` | number | Number of CPH records updated |
 | `cph_changes_applied` | number | Number of CPH changes applied |
 | `forecast_rows_affected` | number | Number of forecast rows impacted by CPH changes |
-| `timestamp` | string | Update timestamp (ISO format) |
+| `history_log_id` | string | UUID of created history log entry |
+
+**Why Full Structure?**
+- Validator requires `modified_fields` to identify changes
+- Backend needs complete context for audit trail
+- History log stores before/after comparison using `*_change` fields
+- Ensures data consistency between preview and update operations
+- **Option 1**: Provides complete record snapshot for each modified month
+- Preview is server-generated and trusted, so update accepts it directly
 
 ---
 

@@ -106,7 +106,12 @@ class AllocationRecord:
 
 @dataclass
 class AllocationResult:
-    """Complete allocation result with type safety"""
+    """
+    Complete allocation result with type safety.
+
+    Provides structured result with clear success/failure indication
+    and detailed error information when failures occur.
+    """
     success: bool
     month: str
     year: int
@@ -116,6 +121,36 @@ class AllocationResult:
     rows_modified: int
     allocations: List[AllocationRecord]
     error: str = ""  # Only populated if success=False
+    recommendation: Optional[str] = None  # Actionable recommendation on errors
+    context: Optional[Dict] = None  # Additional context for errors
+    info_message: Optional[str] = None  # For success with warnings/info
+
+    def to_dict(self) -> Dict:
+        """Convert to API response format."""
+        result = {
+            "success": self.success,
+            "month": self.month,
+            "year": self.year,
+            "total_bench_allocated": self.total_bench_allocated,
+            "gaps_filled": self.gaps_filled,
+            "excess_distributed": self.excess_distributed,
+            "rows_modified": self.rows_modified,
+            "allocations_count": len(self.allocations)
+        }
+
+        if self.error:
+            result["error"] = self.error
+
+        if self.recommendation:
+            result["recommendation"] = self.recommendation
+
+        if self.context:
+            result["context"] = self.context
+
+        if self.info_message:
+            result["info_message"] = self.info_message
+
+        return result
 
 
 # ============================================================================
@@ -314,33 +349,31 @@ def get_unallocated_vendors_with_states(
         - valid_states_set: Set of valid states from forecast data
 
     Raises:
-        ValueError: If roster_allotment report not found or month mappings missing
+        RosterAllotmentNotFoundException: If roster_allotment report not found
+        EmptyRosterAllotmentException: If roster_allotment report is empty
     """
     import json
     from code.logics.db import ForecastMonthsModel, AllocationExecutionModel
+    from code.logics.exceptions import RosterAllotmentNotFoundException, EmptyRosterAllotmentException
 
     db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=None, skip=0, select_columns=None)
 
     # Step 1: Load roster_allotment report DataFrame
-    try:
-        with db_manager.SessionLocal() as session:
-            report = session.query(AllocationReportsModel).filter(
-                AllocationReportsModel.execution_id == execution_id,
-                AllocationReportsModel.ReportType == 'roster_allotment'
-            ).first()
+    with db_manager.SessionLocal() as session:
+        report = session.query(AllocationReportsModel).filter(
+            AllocationReportsModel.execution_id == execution_id,
+            AllocationReportsModel.ReportType == 'roster_allotment'
+        ).first()
 
-            if not report:
-                raise ValueError(f"No roster_allotment report found for execution_id: {execution_id}")
+        if not report:
+            raise RosterAllotmentNotFoundException(execution_id, month, year)
 
-            # Parse JSON report data to DataFrame
-            report_data = json.loads(report.ReportData)
-            report_df = pd.DataFrame(report_data)
+        # Parse JSON report data to DataFrame
+        report_data = json.loads(report.ReportData)
+        report_df = pd.DataFrame(report_data)
 
-            if report_df.empty:
-                raise ValueError(f"Empty roster_allotment report for execution_id: {execution_id}")
-
-    except Exception as e:
-        raise ValueError(f"Error reading roster_allotment report: {e}")
+        if report_df.empty:
+            raise EmptyRosterAllotmentException(execution_id, month, year)
 
     # Step 2: Get uploaded_file from execution (needed for month mappings)
     exec_db = core_utils.get_db_manager(AllocationExecutionModel, limit=None, skip=0, select_columns=None)
@@ -692,8 +725,10 @@ def normalize_forecast_data(
         - capacity_original: int - Original capacity before allocation
 
     Raises:
-        ValueError: If no forecast data found
+        ForecastDataNotFoundException: If no forecast data found
     """
+    from code.logics.exceptions import ForecastDataNotFoundException
+
     db_manager = core_utils.get_db_manager(ForecastModel, limit=None, skip=0, select_columns=None)
 
     with db_manager.SessionLocal() as session:
@@ -703,7 +738,7 @@ def normalize_forecast_data(
         ).all()
 
         if not forecast_records:
-            raise ValueError(f"No forecast data found for {month} {year}")
+            raise ForecastDataNotFoundException(month, year)
 
     # Get month mappings from ForecastMonthsModel (use pre-loaded data if available)
     if uploaded_file is None or months_record is None:
@@ -1357,10 +1392,48 @@ class BenchAllocator:
         self._month_config_cache: Dict[Tuple[str, int, str], Dict] = {}
 
         # Initialize
+        from code.logics.exceptions import (
+            ExecutionNotFoundException,
+            MonthMappingNotFoundException,
+            RosterAllotmentNotFoundException,
+            EmptyRosterAllotmentException,
+            ForecastDataNotFoundException
+        )
+
         logger.info(f"Initializing BenchAllocator for {month} {year} (execution: {execution_id})")
-        self._load_forecast_months_data()  # Load once first
-        self._load_unallocated_vendors()
-        self._load_and_normalize_forecast_data()
+
+        try:
+            self._load_forecast_months_data()  # Load once first
+        except ValueError as e:
+            # Determine specific error type and raise custom exception
+            error_msg = str(e)
+            if "Execution" in error_msg and "not found" in error_msg:
+                raise ExecutionNotFoundException(execution_id)
+            elif "Month mappings not found" in error_msg:
+                raise MonthMappingNotFoundException(execution_id, month, year)
+            else:
+                raise  # Re-raise if unknown
+
+        try:
+            self._load_unallocated_vendors()
+        except ValueError as e:
+            error_msg = str(e)
+            if "No roster_allotment report" in error_msg:
+                raise RosterAllotmentNotFoundException(execution_id, month, year)
+            elif "Empty roster_allotment" in error_msg:
+                raise EmptyRosterAllotmentException(execution_id, month, year)
+            else:
+                raise
+
+        try:
+            self._load_and_normalize_forecast_data()
+        except ValueError as e:
+            error_msg = str(e)
+            if "No forecast data found" in error_msg:
+                raise ForecastDataNotFoundException(month, year)
+            else:
+                raise
+
         self._build_worktype_vocabulary()
         self._initialize_buckets()
 
@@ -1382,8 +1455,13 @@ class BenchAllocator:
         - self.uploaded_file
         - self.forecast_months_record (full record)
         - self.forecast_months (list of 6 month names)
+
+        Raises:
+            ExecutionNotFoundException: When execution record is not found
+            MonthMappingNotFoundException: When month mappings are not found
         """
         from code.logics.db import AllocationExecutionModel, ForecastMonthsModel
+        from code.logics.exceptions import ExecutionNotFoundException, MonthMappingNotFoundException
 
         # Query 1: Get uploaded_file from execution
         exec_db = self.core_utils.get_db_manager(
@@ -1399,7 +1477,7 @@ class BenchAllocator:
             ).first()
 
             if not execution:
-                raise ValueError(f"Execution {self.execution_id} not found")
+                raise ExecutionNotFoundException(self.execution_id)
 
             self.uploaded_file = execution.ForecastFilename
 
@@ -1417,7 +1495,7 @@ class BenchAllocator:
             ).first()
 
             if not month_record:
-                raise ValueError(f"Month mappings not found for file: {self.uploaded_file}")
+                raise MonthMappingNotFoundException(self.execution_id, self.month, self.year)
 
             # Store full record for get_month_mappings_from_db
             self.forecast_months_record = month_record
@@ -1779,10 +1857,13 @@ class BenchAllocator:
         """
         Calculate capacity for given FTE count using month configuration.
 
-        Formula: capacity = fte_count × target_cph × work_hours × (1 - shrinkage) × working_days
+        Formula: capacity = fte_count × working_days × work_hours × (1 - shrinkage) × target_cph
 
         Uses cached month configurations to minimize database calls.
+        Uses centralized calculation utility for consistency across the application.
         """
+        from code.logics.capacity_calculations import calculate_capacity
+
         # Create cache key (month_name, year, locality)
         cache_key = (forecast_row.month_name, forecast_row.month_year, forecast_row.locality_norm)
 
@@ -1800,15 +1881,8 @@ class BenchAllocator:
             # Cache hit
             config = self._month_config_cache[cache_key]
 
-        # Calculate capacity using month-specific configuration
-        # Formula: Capacity = FTE × WorkingDays × WorkHours × (1 - Shrinkage) × TargetCPH
-        capacity = (
-            fte_count *
-            config['working_days'] *
-            config['work_hours'] *
-            (1 - config['shrinkage']) *
-            forecast_row.target_cph
-        )
+        # Use centralized calculation utility (returns float, rounded to 2 decimals)
+        capacity = calculate_capacity(fte_count, config, forecast_row.target_cph)
 
         return int(capacity)
 
@@ -2357,7 +2431,7 @@ def allocate_bench_for_month(
         logger.info(f"Exported buckets before allocation to {output_path}")
         # Check if there are vendors to allocate
         if not allocator.vendors:
-            logger.info("No unallocated vendors found")
+            logger.info(f"No unallocated vendors found for {month} {year}")
             return AllocationResult(
                 success=True,
                 month=month,
@@ -2366,7 +2440,8 @@ def allocate_bench_for_month(
                 gaps_filled=0,
                 excess_distributed=0,
                 rows_modified=0,
-                allocations=[]
+                allocations=[],
+                info_message="No bench capacity available to allocate (all vendors already allocated)"
             )
 
         logger.info(f"✓ Found {len(allocator.vendors)} unallocated vendors")
@@ -2445,7 +2520,14 @@ def allocate_bench_for_month(
         )
 
     except Exception as e:
-        logger.error(f"Error during bench allocation: {e}", exc_info=True)
+        from code.logics.exceptions import EditViewException
+
+        # Re-raise custom exceptions to preserve structure
+        if isinstance(e, EditViewException):
+            raise
+
+        # Log and return structured error for unexpected exceptions
+        logger.error(f"Unexpected error during bench allocation: {e}", exc_info=True)
         return AllocationResult(
             success=False,
             month=month,
@@ -2455,6 +2537,7 @@ def allocate_bench_for_month(
             excess_distributed=0,
             rows_modified=0,
             allocations=[],
-            error=str(e)
+            error=f"Allocation failed: {type(e).__name__}: {str(e)}",
+            recommendation="Contact system administrator if this persists."
         )
 
