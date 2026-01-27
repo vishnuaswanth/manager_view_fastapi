@@ -23,16 +23,17 @@ def calculate_fte_required(
     Formula: fte_req = ceil(forecast / (working_days * work_hours * (1-shrinkage) * target_CPH))
 
     Args:
-        forecast: Client forecast value
+        forecast: Client forecast value (>= 0)
         config: Month configuration dict with keys:
             - working_days: int
             - work_hours: int
             - shrinkage: float (0.0-1.0)
             - occupancy: float (0.0-1.0)
-        target_cph: Target Cases Per Hour
+        target_cph: Target Cases Per Hour (>= 0, if 0 returns 0)
 
     Returns:
         FTE Required (integer, always ceiling)
+        Returns 0 if forecast is 0 or target_cph is 0
 
     Raises:
         ValueError: If parameters are invalid or result in zero denominator
@@ -41,13 +42,15 @@ def calculate_fte_required(
         >>> config = {'working_days': 21, 'work_hours': 9, 'shrinkage': 0.10, 'occupancy': 0.95}
         >>> calculate_fte_required(1000, config, 50.0)
         2
+        >>> calculate_fte_required(1000, config, 0)
+        0
     """
     # Input validation
     if forecast < 0:
         raise ValueError(f"forecast cannot be negative: {forecast}")
 
-    if target_cph <= 0:
-        raise ValueError(f"target_cph must be positive: {target_cph}")
+    if target_cph < 0:
+        raise ValueError(f"target_cph cannot be negative: {target_cph}")
 
     # Validate config
     required_keys = ['working_days', 'work_hours', 'shrinkage']
@@ -71,6 +74,10 @@ def calculate_fte_required(
 
     # Special case: zero forecast
     if forecast == 0:
+        return 0
+
+    # Special case: zero target_cph (no target set, FTE required is 0)
+    if target_cph == 0:
         return 0
 
     # Calculate denominator
@@ -109,16 +116,17 @@ def calculate_capacity(
     Formula: capacity = fte_avail * working_days * work_hours * (1-shrinkage) * target_CPH
 
     Args:
-        fte_avail: FTE Available
+        fte_avail: FTE Available (>= 0)
         config: Month configuration dict with keys:
             - working_days: int
             - work_hours: int
             - shrinkage: float (0.0-1.0)
             - occupancy: float (0.0-1.0)
-        target_cph: Target Cases Per Hour
+        target_cph: Target Cases Per Hour (>= 0, if 0 returns 0.0)
 
     Returns:
         Capacity (float, rounded to 2 decimal places)
+        Returns 0.0 if fte_avail is 0 or target_cph is 0
 
     Raises:
         ValueError: If parameters are invalid
@@ -127,13 +135,15 @@ def calculate_capacity(
         >>> config = {'working_days': 21, 'work_hours': 9, 'shrinkage': 0.10, 'occupancy': 0.95}
         >>> calculate_capacity(10, config, 50.0)
         8505.0
+        >>> calculate_capacity(10, config, 0)
+        0.0
     """
     # Input validation
     if fte_avail < 0:
         raise ValueError(f"fte_avail cannot be negative: {fte_avail}")
 
-    if target_cph <= 0:
-        raise ValueError(f"target_cph must be positive: {target_cph}")
+    if target_cph < 0:
+        raise ValueError(f"target_cph cannot be negative: {target_cph}")
 
     # Validate config
     required_keys = ['working_days', 'work_hours', 'shrinkage']
@@ -157,6 +167,10 @@ def calculate_capacity(
 
     # Special case: zero FTE available
     if fte_avail == 0:
+        return 0.0
+
+    # Special case: zero target_cph (no target set, capacity is 0)
+    if target_cph == 0:
         return 0.0
 
     # Calculate capacity

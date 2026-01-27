@@ -27,6 +27,7 @@ from code.api.routers.allocation_router import router as allocation_router
 from code.api.routers.month_config_router import router as month_config_router
 from code.api.routers.edit_view_router import router as edit_view_router
 from code.api.routers.history_router import router as history_router
+from code.api.routers.llm_router import router as llm_router
 
 # Setup logging
 setup_logging()
@@ -103,6 +104,7 @@ app.include_router(allocation_router, tags=["Allocation"])
 app.include_router(month_config_router, tags=["Month Configuration"])
 app.include_router(edit_view_router, tags=["Edit View"])
 app.include_router(history_router, tags=["History Log"])
+app.include_router(llm_router, tags=["LLM Tools"])
 
 logger.info("[Startup] All routers registered successfully")
 logger.info("[Startup] Application started in %s mode", MODE.upper())

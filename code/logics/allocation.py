@@ -1747,7 +1747,16 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                     elif file_type == 'medicare_medicaid_summary':
                         output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_summary', df), axis=1)
 
+                # Clean forecast data: Replace NaN with 0 BEFORE calculations
+                # This ensures FTE Required and Capacity calculations work correctly
+                for month in month_headers:
+                    output_df[('Client Forecast', month)] = output_df[('Client Forecast', month)].fillna(0)
+
+                # Get Target CPH and clean any NaN values
                 output_df[('Centene Capacity plan', 'Target CPH')] = output_df.apply(calculations.get_target_cph, axis=1)
+                output_df[('Centene Capacity plan', 'Target CPH')] = output_df[('Centene Capacity plan', 'Target CPH')].fillna(0)
+
+                # Calculate FTE Required (now using clean forecast and target_cph data)
                 for month in month_headers:
                     output_df[('FTE Required', month)] = output_df.apply(lambda row: get_fte_required(row, month, calculations), axis=1)
                     output_df[('FTE Required', month)] = output_df[('FTE Required', month)].apply(lambda x: 0.5 if 0 < x < 0.5 else x)
