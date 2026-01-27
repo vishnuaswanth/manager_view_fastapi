@@ -633,6 +633,8 @@ def get_available_forecast_reports():
             ).join(
                 AllocationExecutionModel,
                 AllocationValidityModel.allocation_execution_id == AllocationExecutionModel.execution_id
+            ).filter(
+                AllocationValidityModel.is_valid == True
             ).order_by(
                 AllocationValidityModel.year.desc(),
                 AllocationValidityModel.month.desc()
@@ -640,10 +642,9 @@ def get_available_forecast_reports():
 
             results = query.all()
 
-        # Step 3: Build response
+        # Step 3: Build response (only valid reports since we filtered in query)
         reports = []
-        valid_count = 0
-        outdated_count = 0
+        valid_count = len(results)  # All results are valid due to filter
 
         for result in results:
             (month, year, execution_id, is_valid, created_dt, invalidated_dt,
@@ -655,15 +656,7 @@ def get_available_forecast_reports():
             value = f"{year}-{month_abbr}"
             display = f"{month} {year}"
 
-            # Determine data freshness
-            if is_valid:
-                data_freshness = "current"
-                valid_count += 1
-            else:
-                data_freshness = "outdated"
-                outdated_count += 1
-
-            # Build report object
+            # Build report object (all are current since we filtered for is_valid=True)
             report = {
                 "value": value,
                 "display": display,
@@ -676,18 +669,12 @@ def get_available_forecast_reports():
                 "roster_file": roster_file,
                 "created_at": created_dt.isoformat() if created_dt else None,
                 "has_bench_allocation": bench_completed,
-                "data_freshness": data_freshness
+                "data_freshness": "current"
             }
 
             # Add optional fields if applicable
             if records_count is not None:
                 report["records_count"] = records_count
-
-            if invalidated_dt:
-                report["invalidated_at"] = invalidated_dt.isoformat()
-
-            if invalidated_reason:
-                report["invalidated_reason"] = invalidated_reason
 
             reports.append(report)
 
@@ -697,8 +684,7 @@ def get_available_forecast_reports():
             "reports": reports,
             "total_reports": len(reports),
             "valid_reports": valid_count,
-            "outdated_reports": outdated_count,
-            "description": "List of available forecast reports. Use 'value' field to query /api/llm/forecast?month={month}&year={year}",
+            "description": "List of current/valid forecast reports. Use 'value' field to query /api/llm/forecast?month={month}&year={year}",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
@@ -706,8 +692,7 @@ def get_available_forecast_reports():
         filters_cache.set(cache_key, response)
 
         logger.info(
-            f"[LLM Available Reports] Returned {len(reports)} reports "
-            f"({valid_count} valid, {outdated_count} outdated)"
+            f"[LLM Available Reports] Returned {len(reports)} current/valid reports"
         )
 
         return response
