@@ -613,7 +613,7 @@ def get_available_forecast_reports():
         # Step 2: Query database for all validity records with execution metadata
         from code.logics.db import AllocationValidityModel, AllocationExecutionModel
 
-        db_manager = core_utils.db_manager
+        db_manager = core_utils.get_db_manager(AllocationValidityModel, limit=1000, skip=0, select_columns=None)
         with db_manager.SessionLocal() as session:
             # Join AllocationValidityModel with AllocationExecutionModel
             query = session.query(
