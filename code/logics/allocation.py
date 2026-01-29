@@ -1862,6 +1862,22 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 
                 logging.info("✓ All allocation reports saved successfully")
 
+                # Populate FTE allocation mapping table for LLM queries
+                try:
+                    from code.logics.fte_allocation_mapping import populate_fte_mapping_from_primary
+                    fte_mapping_count = populate_fte_mapping_from_primary(
+                        execution_id=execution_id,
+                        month=data_month,
+                        year=data_year,
+                        vendor_allocations=allocator.vendor_allocations,
+                        vendor_df=allocator.vendor_df_original,
+                        month_headers=month_headers,
+                        core_utils=core_utils
+                    )
+                    logging.info(f"✓ Populated {fte_mapping_count} FTE allocation mappings (primary)")
+                except Exception as e:
+                    logging.warning(f"Failed to populate FTE allocation mappings: {e}")
+
                 # Create allocation validity record
                 logging.info("Creating allocation validity record...")
                 validity_result = create_validity_record(

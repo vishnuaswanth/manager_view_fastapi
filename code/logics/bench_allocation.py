@@ -1929,6 +1929,21 @@ class BenchAllocator:
 
         logger.info("✓ Report updates completed successfully")
 
+        # Populate FTE allocation mapping table for LLM queries
+        try:
+            from code.logics.fte_allocation_mapping import populate_fte_mapping_from_bench
+            consolidated = self.consolidate_changes()
+            fte_mapping_count = populate_fte_mapping_from_bench(
+                execution_id=self.execution_id,
+                month=self.month,
+                year=self.year,
+                consolidated_changes=consolidated,
+                core_utils=self.core_utils
+            )
+            logger.info(f"✓ Populated {fte_mapping_count} FTE allocation mappings (bench)")
+        except Exception as e:
+            logger.warning(f"Failed to populate FTE allocation mappings (bench): {e}")
+
     def _generate_bench_roster_allotment(self) -> Optional[pd.DataFrame]:
         """
         Generate bench_roster_allotment DataFrame based on original roster with bench allocation results.

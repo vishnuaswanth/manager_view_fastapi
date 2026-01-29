@@ -707,6 +707,158 @@ def get_available_forecast_reports():
         }
 
 
+@router.get("/api/llm/fte-allocations")
+def get_fte_allocations(
+    report_month: str,
+    report_year: int,
+    main_lob: str,
+    case_type: str,
+    state: str,
+    forecast_month: Optional[str] = None
+):
+    """
+    Get FTE allocation details for a specific forecast record.
+
+    This endpoint allows LLMs to query which FTEs (resources) are allocated
+    to a specific forecast record, grouped by forecast month.
+
+    Args:
+        report_month: Report month (e.g., "March")
+        report_year: Report year (e.g., 2025)
+        main_lob: Main LOB filter (e.g., "Amisys Medicaid Domestic")
+        case_type: Case type filter (e.g., "Claims Processing")
+        state: State filter (e.g., "LA", "N/A")
+        forecast_month: Optional forecast month filter in "Apr-25" format
+
+    Returns:
+        FTE allocation details grouped by forecast month
+
+    Example:
+        GET /api/llm/fte-allocations?report_month=March&report_year=2025&main_lob=Amisys%20Medicaid%20Domestic&case_type=Claims%20Processing&state=LA
+
+    Response includes:
+        - total_fte_count: Total FTEs allocated across all months
+        - allocation_type_summary: Count of primary vs bench allocations
+        - fte_by_month: FTE details grouped by forecast month (e.g., "Apr-25")
+        - forecast_months: List of available forecast months
+
+    Cache: 60 seconds TTL
+    """
+    try:
+        # Validate required parameters
+        if not report_month or not report_month.strip():
+            return {
+                "success": False,
+                "error": "report_month is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        if not main_lob or not main_lob.strip():
+            return {
+                "success": False,
+                "error": "main_lob is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        if not case_type or not case_type.strip():
+            return {
+                "success": False,
+                "error": "case_type is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        if not state or not state.strip():
+            return {
+                "success": False,
+                "error": "state is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Validate year range
+        current_year = datetime.now().year
+        if report_year < 2020 or report_year > current_year + 5:
+            return {
+                "success": False,
+                "error": f"report_year must be between 2020 and {current_year + 5}",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Generate cache key
+        cache_key = f"llm:fte-allocations:{report_month}:{report_year}:{main_lob}:{state}:{case_type}:{forecast_month or 'all'}"
+        cached_response = data_cache.get(cache_key)
+        if cached_response is not None:
+            logger.debug(f"[LLM FTE Allocations] Returning cached response")
+            return cached_response
+
+        # Query FTE mappings
+        from code.logics.fte_allocation_mapping import get_fte_mappings
+
+        result = get_fte_mappings(
+            report_month=report_month.strip(),
+            report_year=report_year,
+            main_lob=main_lob.strip(),
+            state=state.strip(),
+            case_type=case_type.strip(),
+            forecast_month_label=forecast_month.strip() if forecast_month else None,
+            core_utils=core_utils
+        )
+
+        if not result.get('success'):
+            return {
+                "success": False,
+                "error": result.get('error', 'No FTE allocations found'),
+                "status_code": 404,
+                "report_month": report_month,
+                "report_year": report_year,
+                "main_lob": main_lob,
+                "case_type": case_type,
+                "state": state,
+                "forecast_month_filter": forecast_month,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Build successful response
+        response = {
+            "success": True,
+            "report_month": report_month,
+            "report_year": report_year,
+            "main_lob": main_lob,
+            "case_type": case_type,
+            "state": state,
+            "forecast_month_filter": forecast_month,
+            "allocation_execution_id": result.get('allocation_execution_id'),
+            "total_fte_count": result.get('total_fte_count', 0),
+            "allocation_type_summary": result.get('allocation_type_summary', {}),
+            "fte_by_month": result.get('fte_by_month', {}),
+            "forecast_months": result.get('forecast_months', []),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+        # Cache the response
+        data_cache.set(cache_key, response)
+
+        logger.info(
+            f"[LLM FTE Allocations] Returned {result.get('total_fte_count', 0)} FTEs "
+            f"for {main_lob} | {state} | {case_type} ({report_month} {report_year})"
+        )
+
+        return response
+
+    except Exception as e:
+        logger.error(f"[LLM FTE Allocations] Error in endpoint: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": "Internal server error",
+            "status_code": 500,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+
 def _get_metadata() -> dict:
     """
     Get metadata section for response.

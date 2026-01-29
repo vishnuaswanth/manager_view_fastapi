@@ -347,6 +347,68 @@ class AllocationReportsModel(SQLModel, table=True):
         Index('idx_allocation_month_year', 'Month', 'Year'),
     )
 
+
+class FTEAllocationMappingModel(SQLModel, table=True):
+    """
+    Denormalized FTE allocation mapping for fast querying.
+
+    One row per (CN, forecast_month) combination when allocated.
+    Links an FTE (resource) to a specific forecast record for a specific month.
+
+    Data is cleared and replaced when allocation runs - no historical preservation.
+    """
+    __tablename__ = "fte_allocation_mapping"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    # Execution/Validity tracking
+    allocation_execution_id: str = Field(
+        sa_column=Column(String(36), nullable=False, index=True)
+    )  # Links to AllocationExecutionModel
+    report_month: str = Field(sa_column=Column(String(15), nullable=False))  # e.g., "March"
+    report_year: int = Field(nullable=False)  # e.g., 2025
+
+    # Forecast record identification (composite key for forecast lookup)
+    main_lob: str = Field(sa_column=Column(String(255), nullable=False))  # e.g., "Amisys Medicaid Domestic"
+    state: str = Field(sa_column=Column(String(100), nullable=False))  # e.g., "CA", "N/A"
+    case_type: str = Field(sa_column=Column(String(255), nullable=False))  # e.g., "Claims Processing"
+    call_type_id: str = Field(sa_column=Column(String(100), nullable=True))  # Business identifier
+
+    # Forecast month context
+    forecast_month: str = Field(sa_column=Column(String(15), nullable=False))  # e.g., "April"
+    forecast_year: int = Field(nullable=False)  # e.g., 2025
+    forecast_month_label: str = Field(sa_column=Column(String(10), nullable=False))  # e.g., "Apr-25"
+    forecast_month_index: int = Field(nullable=False)  # 1-6 (which MonthX column)
+
+    # FTE/Resource details (denormalized from roster)
+    cn: str = Field(sa_column=Column(String(50), nullable=False, index=True))  # CN# - primary resource identifier
+    first_name: str = Field(sa_column=Column(String(100), nullable=True))
+    last_name: str = Field(sa_column=Column(String(100), nullable=True))
+    opid: str = Field(sa_column=Column(String(50), nullable=True))
+    primary_platform: str = Field(sa_column=Column(String(100), nullable=True))
+    primary_market: str = Field(sa_column=Column(String(100), nullable=True))
+    location: str = Field(sa_column=Column(String(100), nullable=True))  # Domestic/Global indicator
+    original_state: str = Field(sa_column=Column(String(100), nullable=True))  # Vendor's original state
+    worktype: str = Field(sa_column=Column(String(255), nullable=True))  # NewWorkType from roster
+
+    # Allocation source
+    allocation_type: str = Field(
+        sa_column=Column(String(20), nullable=False)
+    )  # 'primary' or 'bench'
+
+    # Audit trail
+    created_datetime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+
+    # Indexes for query performance
+    __table_args__ = (
+        Index('idx_fte_mapping_query', 'report_month', 'report_year', 'main_lob', 'state', 'case_type'),
+        Index('idx_fte_mapping_forecast_month', 'report_month', 'report_year', 'forecast_month_label'),
+        Index('idx_fte_mapping_lob_state_case', 'main_lob', 'state', 'case_type'),
+    )
+
+
 class MonthConfigurationModel(SQLModel, table=True):
     """
     Model for storing month-specific configuration parameters for FTE calculations.
