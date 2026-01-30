@@ -146,15 +146,24 @@ APIs for bench allocation and Target CPH management with preview/approval workfl
 }
 ```
 
+**Success Response with No Changes** (200):
+```json
+{
+    "success": true,
+    "total_modified": 0,
+    "modified_records": [],
+    "info_message": "No bench capacity available for allocation"
+}
+```
+
 **Error Response** (400/500):
 ```json
 {
     "success": false,
-    "months": null,
-    "modified_records": [],
-    "total_modified": 0,
-    "summary": null,
-    "message": "No bench capacity available for allocation"
+    "error": "Bench allocation has already been completed for April 2025",
+    "completed_at": "2025-04-15T14:30:00",
+    "execution_id": "550e8400-e29b-41d4-a716-446655440000",
+    "recommendation": "To modify bench allocation, you must re-run the primary allocation first."
 }
 ```
 
@@ -170,6 +179,18 @@ APIs for bench allocation and Target CPH management with preview/approval workfl
 - **Option 1 Implementation**: When ANY field changes for a month, ALL 4 fields for that month are included in `modified_fields` (e.g., if only `fte_avail` changes for Jun-25, the array includes `Jun-25.forecast`, `Jun-25.fte_req`, `Jun-25.fte_avail`, and `Jun-25.capacity`)
 - This provides a complete snapshot of the record state at the time of modification for audit purposes
 - For bench allocation: `target_cph_change` is typically 0 (CPH doesn't change during bench allocation)
+
+**Validation Checks**:
+1. **Allocation Validity**: Validates that a valid allocation exists for the selected month/year
+2. **Bench Allocation Status**: Checks if bench allocation has already been completed for this execution
+   - If already completed, returns 400 error with `completed_at` timestamp and `recommendation`
+   - To re-run bench allocation, user must first re-run the primary allocation
+
+**Response Variants**:
+- **Success with changes**: Returns `modified_records` array with allocation changes
+- **Success without changes**: Returns `info_message` explaining why no changes (e.g., no bench capacity)
+- **Error - Already completed**: Returns 400 with `completed_at`, `execution_id`, and `recommendation`
+- **Error - No valid allocation**: Returns 400 with validation error details
 
 ---
 
@@ -273,8 +294,9 @@ APIs for bench allocation and Target CPH management with preview/approval workfl
 ```json
 {
     "success": true,
-    "message": "Allocation updated successfully",
-    "records_updated": 15
+    "message": "Bench allocation updated successfully",
+    "records_updated": 15,
+    "history_log_id": "550e8400-e29b-41d4-a716-446655440000"
 }
 ```
 
@@ -282,10 +304,18 @@ APIs for bench allocation and Target CPH management with preview/approval workfl
 ```json
 {
     "success": false,
-    "message": "Failed to update allocation: validation error",
-    "records_updated": 0
+    "error": "Failed to update allocation: validation error"
 }
 ```
+
+**Response Fields**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | boolean | Operation success status |
+| `message` | string | Success/error message |
+| `records_updated` | number | Number of forecast records updated |
+| `history_log_id` | string | UUID of created history log entry (for audit trail) |
 
 **Notes**:
 - **IMPORTANT**: Send the FULL record structure from the preview response (Section 2)
@@ -388,13 +418,13 @@ CHANGE_TYPES = [
     "success": true,
     "data": [
         {
-            "id": "550e8400-e29b-41d4-a716-446655440000",
+            "history_log_id": "550e8400-e29b-41d4-a716-446655440000",
             "change_type": "Bench Allocation",
             "month": "April",
             "year": 2025,
-            "timestamp": "2025-04-15T14:30:00",
-            "user": "john.doe",
-            "description": "Allocated excess bench capacity for Q2",
+            "created_at": "2025-04-15T14:30:00",
+            "user": "system",
+            "user_notes": "Allocated excess bench capacity for Q2",
             "records_modified": 15,
             "summary_data": {
                 "report_month": "April",
@@ -423,12 +453,10 @@ CHANGE_TYPES = [
             }
         }
     ],
-    "pagination": {
-        "total": 127,
-        "page": 1,
-        "limit": 25,
-        "has_more": true
-    }
+    "total": 127,
+    "page": 1,
+    "limit": 25,
+    "has_more": true
 }
 ```
 
@@ -436,8 +464,6 @@ CHANGE_TYPES = [
 ```json
 {
     "success": false,
-    "data": [],
-    "pagination": null,
     "error": "Failed to retrieve history log"
 }
 ```
@@ -457,6 +483,21 @@ GET /api/history-log?change_types=Bench%20Allocation&change_types=CPH%20Update&p
 - `summary_data` provides aggregated totals by month for frontend display
 - Backend stores detailed field-level changes internally for audit trail
 - All change types must match the constants defined in Section 4
+- Response uses flat pagination fields (`total`, `page`, `limit`, `has_more`) not nested `pagination` object
+
+**Response Field Reference**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `history_log_id` | string | UUID identifier for the history log entry |
+| `change_type` | string | Type of change (see Section 4) |
+| `month` | string | Report month name |
+| `year` | number | Report year |
+| `created_at` | string | ISO timestamp of when the change was recorded |
+| `user` | string | User who made the change (default: "system") |
+| `user_notes` | string | User-provided notes/description |
+| `records_modified` | number | Count of records modified in this change |
+| `summary_data` | object | Aggregated before/after totals by month |
 
 **Summary Data Structure**:
 - `months`: Array of month labels covered by the report
@@ -622,8 +663,7 @@ Do you want us to try to recover as much as we can?"
             "modified_target_cph": 52.0
         }
     ],
-    "total": 55,
-    "timestamp": "2025-01-07T10:30:00"
+    "total": 55
 }
 ```
 
@@ -845,6 +885,12 @@ Do you want us to try to recover as much as we can?"
 | `modified_fields` | array | DOT notation list of changed fields (Option 1: includes "target_cph" + all 4 fields for months with changes) |
 | `months` | object | NESTED object containing month-specific data for ALL 6 months. Keys are month labels (e.g., "Jun-25"). Each month object contains: forecast (int), fte_req (int), fte_avail (int), capacity (int), forecast_change (int), fte_req_change (int), fte_avail_change (int), capacity_change (int) |
 
+**CPH Preview Specific Notes**:
+- For CPH changes, `fte_avail_change` is always 0 (CPH affects FTE Required and Capacity, not FTE Available)
+- `fte_req_change` shows the delta in FTE Required due to CPH change
+- `capacity_change` shows the delta in Capacity due to CPH change
+- Response can be directly submitted to the CPH update endpoint after user approval
+
 ---
 
 ## 9. Update Target CPH
@@ -1053,10 +1099,10 @@ From `TargetCPHConfig` in config.py:
 - **CPH Data Cache TTL**: 900 seconds (15 minutes)
 - **CPH Preview Cache TTL**: 300 seconds (5 minutes)
 - **Records Per Page**: 20 records
-- **Min CPH Value**: 0.0
-- **Max CPH Value**: 10000.0
+- **Min CPH Value**: 0.0 (exclusive - CPH must be greater than 0)
+- **Max CPH Value**: 200.0 (validated by Pydantic models)
 - **CPH Decimal Places**: 2
-- **Max User Notes Length**: 500 characters
+- **Max User Notes Length**: 1000 characters
 
 ---
 
