@@ -390,6 +390,8 @@ class FTEAllocationMappingModel(SQLModel, table=True):
     location: str = Field(sa_column=Column(String(100), nullable=True))  # Domestic/Global indicator
     original_state: str = Field(sa_column=Column(String(100), nullable=True))  # Vendor's original state
     worktype: str = Field(sa_column=Column(String(255), nullable=True))  # NewWorkType from roster
+    new_work_type: str = Field(sa_column=Column(String(500), nullable=True))  # Raw NewWorkType from roster
+    skills: str = Field(sa_column=Column(String(500), nullable=True))  # Comma-separated parsed skills
 
     # Allocation source
     allocation_type: str = Field(

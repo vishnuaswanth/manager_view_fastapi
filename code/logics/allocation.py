@@ -1872,6 +1872,7 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
                         vendor_allocations=allocator.vendor_allocations,
                         vendor_df=allocator.vendor_df_original,
                         month_headers=month_headers,
+                        worktype_vocab=allocator.worktype_vocab,
                         core_utils=core_utils
                     )
                     logging.info(f"✓ Populated {fte_mapping_count} FTE allocation mappings (primary)")

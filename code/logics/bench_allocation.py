@@ -1938,6 +1938,7 @@ class BenchAllocator:
                 month=self.month,
                 year=self.year,
                 consolidated_changes=consolidated,
+                worktype_vocab=self.worktype_vocab,
                 core_utils=self.core_utils
             )
             logger.info(f"✓ Populated {fte_mapping_count} FTE allocation mappings (bench)")

@@ -17,6 +17,7 @@ from sqlalchemy import and_
 from sqlalchemy.exc import SQLAlchemyError
 
 from code.logics.db import FTEAllocationMappingModel
+from code.logics.bench_allocation import parse_vendor_skills
 from code.api.dependencies import get_core_utils, get_logger
 
 logger = get_logger(__name__)
@@ -149,6 +150,7 @@ def populate_fte_mapping_from_primary(
     vendor_allocations: Dict[int, Dict[str, Dict[str, str]]],
     vendor_df: pd.DataFrame,
     month_headers: List[str],
+    worktype_vocab: List[str],
     core_utils: Any
 ) -> int:
     """
@@ -164,6 +166,7 @@ def populate_fte_mapping_from_primary(
                            allocation_details has: platform (main_lob), state, worktype
         vendor_df: Original vendor DataFrame with vendor details
         month_headers: List of month names (e.g., ["April", "May", ...])
+        worktype_vocab: List of valid worktypes for skill parsing (sorted longest-first)
         core_utils: CoreUtils instance
 
     Returns:
@@ -208,6 +211,10 @@ def populate_fte_mapping_from_primary(
         original_state = str(vendor_row.get('State', ''))
         worktype_from_roster = str(vendor_row.get('NewWorkType', ''))
 
+        # Parse skills from NewWorkType using vocabulary
+        parsed_skills = parse_vendor_skills(worktype_from_roster, worktype_vocab)
+        skills_str = ', '.join(sorted(parsed_skills)) if parsed_skills else ''
+
         # Process each month allocation
         for forecast_month, allocation_details in month_allocations.items():
             main_lob = allocation_details.get('platform', '')
@@ -240,6 +247,8 @@ def populate_fte_mapping_from_primary(
                 location=location,
                 original_state=original_state,
                 worktype=worktype_from_roster,
+                new_work_type=worktype_from_roster,
+                skills=skills_str,
                 allocation_type='primary'
             )
             records_to_insert.append(record)
@@ -266,6 +275,7 @@ def populate_fte_mapping_from_bench(
     month: str,
     year: int,
     consolidated_changes: Dict,
+    worktype_vocab: List[str],
     core_utils: Any
 ) -> int:
     """
@@ -279,6 +289,7 @@ def populate_fte_mapping_from_bench(
         year: Report year (e.g., 2025)
         consolidated_changes: Dict mapping (forecast_id, month_index) -> change_data
                              change_data has: forecast_row (ForecastRowData), vendors ([VendorAllocation])
+        worktype_vocab: List of valid worktypes for skill parsing (sorted longest-first)
         core_utils: CoreUtils instance
 
     Returns:
@@ -320,6 +331,16 @@ def populate_fte_mapping_from_bench(
 
         # Process each vendor allocation
         for vendor in vendors:
+            # Get raw NewWorkType from vendor.skills field
+            new_work_type_raw = vendor.skills or ''
+
+            # Parse skills - use vendor.skillset if available (already parsed), otherwise parse
+            if vendor.skillset:
+                skills_str = ', '.join(sorted(vendor.skillset))
+            else:
+                parsed_skills = parse_vendor_skills(new_work_type_raw, worktype_vocab)
+                skills_str = ', '.join(sorted(parsed_skills)) if parsed_skills else ''
+
             record = FTEAllocationMappingModel(
                 allocation_execution_id=execution_id,
                 report_month=month,
@@ -335,12 +356,14 @@ def populate_fte_mapping_from_bench(
                 cn=vendor.cn,
                 first_name=vendor.first_name or '',
                 last_name=vendor.last_name or '',
-                opid=vendor.opid or '',
+                opid='',  # Not available in VendorAllocation
                 primary_platform=vendor.platform or '',
-                primary_market=vendor.market or '',
+                primary_market='',  # Not available in VendorAllocation
                 location=vendor.location or '',
                 original_state=vendor.original_state or '',
-                worktype='',  # Not available in VendorAllocation
+                worktype=new_work_type_raw,
+                new_work_type=new_work_type_raw,
+                skills=skills_str,
                 allocation_type='bench'
             )
             records_to_insert.append(record)
@@ -459,6 +482,8 @@ def get_fte_mappings(
                     'location': record.location,
                     'original_state': record.original_state,
                     'worktype': record.worktype,
+                    'new_work_type': record.new_work_type,
+                    'skills': record.skills,
                     'allocation_type': record.allocation_type
                 })
 
