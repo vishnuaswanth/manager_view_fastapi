@@ -180,6 +180,25 @@ def get_month_config_for_forecast(
     return month_config
 
 
+def _get_work_type_from_main_lob(main_lob: str) -> str:
+    """
+    Extract work type (Domestic/Global) from Main LOB string.
+
+    Args:
+        main_lob: Main LOB string (e.g., "Amisys Medicaid DOMESTIC", "Facets Medicare OFFSHORE")
+
+    Returns:
+        "Global" if main_lob contains OFFSHORE/GLOBAL (case-insensitive), otherwise "Domestic"
+    """
+    if not main_lob:
+        return "Domestic"
+
+    main_lob_upper = main_lob.upper()
+    if "OFFSHORE" in main_lob_upper or "GLOBAL" in main_lob_upper:
+        return "Global"
+    return "Domestic"
+
+
 def calculate_cph_preview(
     month: str,
     year: int,
@@ -235,8 +254,16 @@ def calculate_cph_preview(
     # Get month mappings
     months_dict = get_months_dict(month, year, core_utils)
 
-    # Get month config for recalculation
-    month_config = get_month_config_for_forecast(month, year, core_utils)
+    # Cache month configs by work_type to avoid redundant DB calls
+    month_config_cache: Dict[str, Dict] = {}
+
+    def get_cached_month_config(work_type: str) -> Dict:
+        """Get month config from cache or fetch from DB."""
+        if work_type not in month_config_cache:
+            month_config_cache[work_type] = get_month_config_for_forecast(
+                month, year, core_utils, work_type
+            )
+        return month_config_cache[work_type]
 
     # Get affected forecast records
     db_manager = core_utils.get_db_manager(
@@ -260,6 +287,12 @@ def calculate_cph_preview(
 
             # Calculate new FTE Required and Capacity for each affected record
             for forecast_row in forecast_records:
+                # Determine work_type from main_lob for correct month config
+                work_type = _get_work_type_from_main_lob(
+                    forecast_row.Centene_Capacity_Plan_Main_LOB
+                )
+                month_config = get_cached_month_config(work_type)
+
                 modified_fields = ["target_cph"]
                 month_data = {}
 
@@ -289,7 +322,7 @@ def calculate_cph_preview(
                         0
                     )
 
-                    # Recalculate with new CPH
+                    # Recalculate with new CPH using work_type-specific config
                     new_cph = cph_record['modified_target_cph']
                     config = month_config[month_idx]
 
@@ -417,8 +450,16 @@ def update_forecast_from_cph_changes(
     cph_records_updated = 0
     forecast_rows_affected = 0
 
-    # Get month config for recalculation
-    month_config = get_month_config_for_forecast(month, year, core_utils)
+    # Cache month configs by work_type to avoid redundant DB calls
+    month_config_cache: Dict[str, Dict] = {}
+
+    def get_cached_month_config(work_type: str) -> Dict:
+        """Get month config from cache or fetch from DB."""
+        if work_type not in month_config_cache:
+            month_config_cache[work_type] = get_month_config_for_forecast(
+                month, year, core_utils, work_type
+            )
+        return month_config_cache[work_type]
 
     with db_manager.SessionLocal() as session:
         for cph_record in actual_changes:
@@ -440,6 +481,12 @@ def update_forecast_from_cph_changes(
             new_cph = cph_record['modified_target_cph']
 
             for forecast_row in forecast_records:
+                # Determine work_type from main_lob for correct month config
+                work_type = _get_work_type_from_main_lob(
+                    forecast_row.Centene_Capacity_Plan_Main_LOB
+                )
+                month_config = get_cached_month_config(work_type)
+
                 # Update Target_CPH
                 forecast_row.Centene_Capacity_Plan_Target_CPH = new_cph
 
