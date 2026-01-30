@@ -387,7 +387,7 @@ class ResourceAllocator:
         # Store reference to original vendor_df for report generation
         self.vendor_df_original = vendor_df.copy()
 
-        # Reverse lookup index: vendor_df_idx -> {month: allocation_details}
+        # Reverse lookup index: CN# -> {month: allocation_details}
         # Enables O(1) lookup during report generation
         self.vendor_allocations = {}
 
@@ -671,10 +671,11 @@ class ResourceAllocator:
                 if key not in buckets:
                     buckets[key] = []
 
-                # Store vendor with their state list and original DataFrame index
+                # Store vendor with their state list and CN# for stable identification
+                cn = str(row.get('CN', ''))
                 buckets[key].append({
                     'vendor_id': vendor_id,
-                    'vendor_df_idx': idx,  # Original DataFrame index for report lookup
+                    'cn': cn,  # Use CN# as stable identifier instead of DataFrame index
                     'states': state_list,
                     'allocated': False  # Track if this vendor has been allocated
                 })
@@ -1030,10 +1031,11 @@ class ResourceAllocator:
                 vendor['allocation_details'] = allocation_details
 
                 # Add to reverse lookup index for O(1) report generation
-                vendor_df_idx = vendor['vendor_df_idx']
-                if vendor_df_idx not in self.vendor_allocations:
-                    self.vendor_allocations[vendor_df_idx] = {}
-                self.vendor_allocations[vendor_df_idx][month] = allocation_details
+                # Use CN# as key for stable identification (DataFrame indices are unreliable after filtering)
+                cn = vendor['cn']
+                if cn not in self.vendor_allocations:
+                    self.vendor_allocations[cn] = {}
+                self.vendor_allocations[cn][month] = allocation_details
 
                 allocated += 1
 
@@ -1210,7 +1212,9 @@ class ResourceAllocator:
             production_pct = vendor_row.get('Production%', '')
 
             # Check if this vendor was allocated (in any month)
-            vendor_allocations = self.vendor_allocations.get(idx, {})
+            # Use CN# as key for lookup (stable identifier, not DataFrame index)
+            cn = str(vendor_row.get('CN', ''))
+            vendor_allocations = self.vendor_allocations.get(cn, {})
             is_allocated = len(vendor_allocations) > 0
             status = "Allocated" if is_allocated else "Not Allocated"
 

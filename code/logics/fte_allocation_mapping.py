@@ -147,7 +147,7 @@ def populate_fte_mapping_from_primary(
     execution_id: str,
     month: str,
     year: int,
-    vendor_allocations: Dict[int, Dict[str, Dict[str, str]]],
+    vendor_allocations: Dict[str, Dict[str, Dict[str, str]]],
     vendor_df: pd.DataFrame,
     month_headers: List[str],
     worktype_vocab: List[str],
@@ -162,7 +162,7 @@ def populate_fte_mapping_from_primary(
         execution_id: Allocation execution ID
         month: Report month (e.g., "March")
         year: Report year (e.g., 2025)
-        vendor_allocations: Dict mapping vendor_df_idx -> {month: allocation_details}
+        vendor_allocations: Dict mapping CN# -> {month: allocation_details}
                            allocation_details has: platform (main_lob), state, worktype
         vendor_df: Original vendor DataFrame with vendor details
         month_headers: List of month names (e.g., ["April", "May", ...])
@@ -190,15 +190,16 @@ def populate_fte_mapping_from_primary(
 
     records_to_insert = []
 
-    for vendor_df_idx, month_allocations in vendor_allocations.items():
-        # Get vendor details from DataFrame
-        try:
-            vendor_row = vendor_df.iloc[vendor_df_idx] if isinstance(vendor_df_idx, int) else vendor_df.loc[vendor_df_idx]
-        except (IndexError, KeyError):
-            logger.warning(f"Vendor index {vendor_df_idx} not found in vendor_df")
+    for cn, month_allocations in vendor_allocations.items():
+        # Get vendor details from DataFrame using CN# as key
+        # CN# is a stable identifier (DataFrame indices become unreliable after filtering)
+        vendor_matches = vendor_df[vendor_df['CN'].astype(str) == str(cn)]
+        if vendor_matches.empty:
+            logger.warning(f"Vendor CN {cn} not found in vendor_df")
             continue
+        vendor_row = vendor_matches.iloc[0]
 
-        cn = str(vendor_row.get('CN', ''))
+        # CN is already known from the loop
         if not cn:
             continue
 
