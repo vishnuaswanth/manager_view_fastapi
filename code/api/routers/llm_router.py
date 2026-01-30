@@ -4,6 +4,7 @@ Provides endpoints optimized for LLM consumption with rich metadata and context.
 """
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timezone
 import hashlib
@@ -851,6 +852,189 @@ def get_fte_allocations(
 
     except Exception as e:
         logger.error(f"[LLM FTE Allocations] Error in endpoint: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": "Internal server error",
+            "status_code": 500,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+
+# Request model for target CPH update
+class UpdateTargetCPHRequest(BaseModel):
+    """Request model for updating target CPH."""
+    report_month: str = Field(
+        ...,
+        min_length=1,
+        description="Report month (e.g., 'March')"
+    )
+    report_year: int = Field(
+        ...,
+        ge=2020,
+        description="Report year (e.g., 2025)"
+    )
+    main_lob: str = Field(
+        ...,
+        min_length=1,
+        description="Main LOB (e.g., 'Amisys Medicaid Domestic')"
+    )
+    state: str = Field(
+        ...,
+        min_length=1,
+        description="State code (e.g., 'LA', 'N/A')"
+    )
+    case_type: str = Field(
+        ...,
+        min_length=1,
+        description="Case type (e.g., 'Claims Processing')"
+    )
+    new_target_cph: int = Field(
+        ...,
+        gt=0,
+        le=200,
+        description="New target CPH value (must be > 0 and <= 200)"
+    )
+    user_notes: Optional[str] = Field(
+        default=None,
+        description="Optional description of why CPH changed"
+    )
+
+    class Config:
+        extra = "forbid"
+
+
+@router.post("/api/llm/forecast/update-target-cph")
+def update_forecast_target_cph(request: UpdateTargetCPHRequest):
+    """
+    Update target_CPH for forecast records matching the criteria.
+
+    This endpoint is optimized for LLM consumption. It updates the target_CPH
+    for all forecast records matching (main_lob, state, case_type, month, year)
+    and automatically recalculates FTE_Required and Capacity for all 6 forecast months.
+
+    Request Body:
+        report_month (required): Report month name (e.g., "March")
+        report_year (required): Report year (e.g., 2025)
+        main_lob (required): Main LOB (e.g., "Amisys Medicaid Domestic")
+        state (required): State code (e.g., "LA", "N/A")
+        case_type (required): Case type (e.g., "Claims Processing")
+        new_target_cph (required): New target CPH value (1-200)
+        user_notes (optional): Description of why CPH changed
+
+    Formulas used:
+        FTE_Required = ceil(forecast / (working_days × work_hours × (1-shrinkage) × target_CPH))
+        Capacity = fte_avail × working_days × work_hours × (1-shrinkage) × target_CPH
+
+    Returns:
+        Success response with:
+            - old_target_cph: Previous target CPH value
+            - new_target_cph: New target CPH value
+            - records_updated: Count of forecast rows updated
+            - history_log_id: UUID of the history log entry
+            - recalculated_totals: Old/new FTE and Capacity by month
+
+        Error response with:
+            - error: Error message
+            - status_code: HTTP status code
+            - recommendation: Suggested action
+
+    Example:
+        POST /api/llm/forecast/update-target-cph
+        {
+            "report_month": "March",
+            "report_year": 2025,
+            "main_lob": "Amisys Medicaid Domestic",
+            "state": "LA",
+            "case_type": "Claims Processing",
+            "new_target_cph": 50,
+            "user_notes": "Adjusted based on new productivity analysis"
+        }
+
+    Response:
+        {
+            "success": true,
+            "message": "Target CPH updated successfully",
+            "old_target_cph": 45,
+            "new_target_cph": 50,
+            "records_updated": 3,
+            "history_log_id": "uuid-string",
+            "recalculated_totals": {
+                "Apr-25": {
+                    "fte_required": {"old": 36, "new": 30, "change": -6},
+                    "capacity": {"old": 13500, "new": 15000, "change": 1500}
+                },
+                ...
+            }
+        }
+    """
+    try:
+        # Validate year range
+        current_year = datetime.now().year
+        if request.report_year > current_year + 5:
+            return {
+                "success": False,
+                "error": f"report_year must be between 2020 and {current_year + 5}",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Normalize month
+        report_month = request.report_month.strip().capitalize()
+
+        # Validate month name
+        valid_months = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+        if report_month not in valid_months:
+            return {
+                "success": False,
+                "error": f"Invalid month: {request.report_month}. Must be a full month name.",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Import the updater function
+        from code.logics.llm_forecast_updater import update_single_record_target_cph
+
+        # Call the update function
+        result = update_single_record_target_cph(
+            report_month=report_month,
+            report_year=request.report_year,
+            main_lob=request.main_lob.strip(),
+            state=request.state.strip(),
+            case_type=request.case_type.strip(),
+            new_target_cph=request.new_target_cph,
+            user_notes=request.user_notes,
+            core_utils=core_utils
+        )
+
+        if result.get("success"):
+            logger.info(
+                f"[LLM Update Target CPH] Successfully updated CPH for "
+                f"{request.main_lob} | {request.state} | {request.case_type} "
+                f"({report_month} {request.report_year}): "
+                f"{result.get('old_target_cph')} -> {result.get('new_target_cph')}"
+            )
+        else:
+            logger.warning(
+                f"[LLM Update Target CPH] Failed to update CPH: {result.get('error')}"
+            )
+
+        return result
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        logger.error(f"[LLM Update Target CPH] Validation error: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": str(e),
+            "status_code": 400,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        logger.error(f"[LLM Update Target CPH] Error in endpoint: {e}", exc_info=True)
         return {
             "success": False,
             "error": "Internal server error",

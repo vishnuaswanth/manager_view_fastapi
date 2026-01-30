@@ -1,7 +1,7 @@
 # LLM Forecast Data API Specification
 
-**Version:** 1.1
-**Last Updated:** 2026-01-27
+**Version:** 1.2
+**Last Updated:** 2026-01-30
 **Target Audience:** LLM tools, AI agents, chatbots, automated systems
 
 ---
@@ -23,11 +23,13 @@ The LLM Forecast Data endpoint provides comprehensive forecast data optimized fo
 
 ## Endpoints
 
-This API provides three endpoints:
+This API provides five endpoints:
 
 0. **`GET /api/llm/forecast/available-reports`** - Discover available forecast reports (use this first!)
 1. **`GET /api/llm/forecast/filter-options`** - Get available filter values for a specific report
 2. **`GET /api/llm/forecast`** - Get comprehensive forecast data
+3. **`GET /api/llm/fte-allocations`** - Get FTE allocation details for a specific forecast record
+4. **`POST /api/llm/forecast/update-target-cph`** - Update target CPH for forecast records
 
 ### Recommended Workflow for LLMs
 
@@ -639,6 +641,274 @@ When filters are applied but no records match the criteria:
   "timestamp": "2025-01-23T10:30:00.000000Z"
 }
 ```
+
+---
+
+## Endpoint 3: FTE Allocations
+
+### Base Information
+
+- **URL**: `/api/llm/fte-allocations`
+- **Method**: `GET`
+- **Purpose**: Get FTE allocation details for a specific forecast record
+- **Authentication**: None (internal API)
+- **Content-Type**: `application/json`
+- **Cache TTL**: 60 seconds
+
+### Query Parameters
+
+| Parameter | Type | Required | Description | Example |
+|-----------|------|----------|-------------|---------|
+| `report_month` | string | Yes | Report month (full name) | `"March"` |
+| `report_year` | integer | Yes | Report year | `2025` |
+| `main_lob` | string | Yes | Main LOB filter | `"Amisys Medicaid Domestic"` |
+| `case_type` | string | Yes | Case type filter | `"Claims Processing"` |
+| `state` | string | Yes | State filter | `"LA"`, `"N/A"` |
+| `forecast_month` | string | No | Filter to specific month | `"Apr-25"` |
+
+### Success Response (200 OK)
+
+```json
+{
+  "success": true,
+  "report_month": "March",
+  "report_year": 2025,
+  "main_lob": "Amisys Medicaid Domestic",
+  "case_type": "Claims Processing",
+  "state": "LA",
+  "forecast_month_filter": null,
+  "allocation_execution_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "total_fte_count": 15,
+  "allocation_type_summary": {
+    "primary": 12,
+    "bench": 3
+  },
+  "fte_by_month": {
+    "Apr-25": [
+      {
+        "vendor_name": "John Smith",
+        "vendor_id": "V001",
+        "allocation_type": "primary",
+        "fte_value": 1.0
+      },
+      {
+        "vendor_name": "Jane Doe",
+        "vendor_id": "V002",
+        "allocation_type": "bench",
+        "fte_value": 1.0
+      }
+    ],
+    "May-25": [
+      // ... similar structure
+    ]
+  },
+  "forecast_months": ["Apr-25", "May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25"],
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_fte_count` | integer | Total FTEs allocated across all months |
+| `allocation_type_summary` | object | Count of primary vs bench allocations |
+| `fte_by_month` | object | FTE details grouped by forecast month label |
+| `forecast_months` | array | List of available forecast month labels |
+
+### Error Responses
+
+#### 400 Bad Request - Missing Parameters
+
+```json
+{
+  "success": false,
+  "error": "main_lob is required",
+  "status_code": 400,
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+#### 404 Not Found - No Allocations
+
+```json
+{
+  "success": false,
+  "error": "No FTE allocations found",
+  "status_code": 404,
+  "report_month": "March",
+  "report_year": 2025,
+  "main_lob": "Amisys Medicaid Domestic",
+  "case_type": "Claims Processing",
+  "state": "LA",
+  "forecast_month_filter": null,
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+### Use Cases
+
+**1. View FTE Details for a Forecast Record**
+```
+User: "Who is allocated to Claims Processing for Amisys Medicaid Domestic in Louisiana?"
+LLM: Calls /api/llm/fte-allocations with the filters
+LLM: "There are 15 FTEs allocated: 12 from primary allocation and 3 from bench. Here are the details by month..."
+```
+
+**2. Filter to Specific Month**
+```
+User: "Show me April allocations only"
+LLM: Calls /api/llm/fte-allocations?forecast_month=Apr-25
+LLM: "For April 2025, you have 10 FTEs allocated..."
+```
+
+---
+
+## Endpoint 4: Update Target CPH
+
+### Base Information
+
+- **URL**: `/api/llm/forecast/update-target-cph`
+- **Method**: `POST`
+- **Purpose**: Update target CPH and recalculate FTE_Required and Capacity
+- **Authentication**: None (internal API)
+- **Content-Type**: `application/json`
+
+### Request Body
+
+```json
+{
+  "report_month": "March",
+  "report_year": 2025,
+  "main_lob": "Amisys Medicaid Domestic",
+  "state": "LA",
+  "case_type": "Claims Processing",
+  "new_target_cph": 50,
+  "user_notes": "Adjusted based on new productivity analysis"
+}
+```
+
+### Request Fields
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `report_month` | string | Yes | Min length: 1 | Report month (full name, e.g., "March") |
+| `report_year` | integer | Yes | >= 2020 | Report year |
+| `main_lob` | string | Yes | Min length: 1 | Main LOB (e.g., "Amisys Medicaid Domestic") |
+| `state` | string | Yes | Min length: 1 | State code (e.g., "LA", "N/A") |
+| `case_type` | string | Yes | Min length: 1 | Case type (e.g., "Claims Processing") |
+| `new_target_cph` | integer | Yes | > 0 and <= 200 | New target CPH value |
+| `user_notes` | string | No | - | Optional description of why CPH changed |
+
+### Success Response (200 OK)
+
+```json
+{
+  "success": true,
+  "message": "Target CPH updated successfully",
+  "old_target_cph": 45,
+  "new_target_cph": 50,
+  "records_updated": 3,
+  "history_log_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "recalculated_totals": {
+    "Apr-25": {
+      "fte_required": {"old": 36, "new": 30, "change": -6},
+      "capacity": {"old": 13500.0, "new": 15000.0, "change": 1500.0}
+    },
+    "May-25": {
+      "fte_required": {"old": 38, "new": 32, "change": -6},
+      "capacity": {"old": 14040.0, "new": 15600.0, "change": 1560.0}
+    }
+  },
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `old_target_cph` | integer | Previous target CPH value |
+| `new_target_cph` | integer | New target CPH value |
+| `records_updated` | integer | Count of forecast rows updated |
+| `history_log_id` | string | UUID of the history log entry for audit trail |
+| `recalculated_totals` | object | Old/new FTE and Capacity values by month with change delta |
+
+### Calculation Formulas
+
+When target CPH is updated, the following fields are automatically recalculated for all 6 forecast months:
+
+```
+FTE_Required = ceil(forecast / (working_days × work_hours × (1 - shrinkage) × target_CPH))
+Capacity = fte_avail × working_days × work_hours × (1 - shrinkage) × target_CPH
+```
+
+### Error Responses
+
+#### 400 Bad Request - Invalid Parameters
+
+```json
+{
+  "success": false,
+  "error": "Invalid month: Mar. Must be a full month name.",
+  "status_code": 400,
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+#### 400 Bad Request - CPH Out of Range
+
+```json
+{
+  "success": false,
+  "error": "new_target_cph must be between 1 and 200",
+  "status_code": 400,
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+#### 404 Not Found - No Matching Records
+
+```json
+{
+  "success": false,
+  "error": "No forecast records found matching the criteria",
+  "status_code": 404,
+  "recommendation": "Verify main_lob, state, and case_type values using /api/llm/forecast/filter-options",
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+### Use Cases
+
+**1. Adjust Productivity Target**
+```
+User: "Change target CPH for Claims Processing in Louisiana to 50"
+LLM: Calls /api/llm/forecast/update-target-cph with the filters
+LLM: "Updated target CPH from 45 to 50. This reduced FTE required by 6 for April and increased capacity by 1,500 cases."
+```
+
+**2. Bulk Impact Analysis**
+```
+User: "What happens if we increase CPH for Amisys Medicaid Domestic?"
+LLM: First calls /api/llm/forecast to see current values
+LLM: Then calls update-target-cph with the new value
+LLM: "By increasing CPH to 50, you'll need 6 fewer FTEs in April and gain 1,500 cases of capacity."
+```
+
+**3. Document Changes**
+```
+User: "Update CPH to 55 because of the new automation rollout"
+LLM: Calls update-target-cph with user_notes="New automation rollout"
+LLM: "Done! The change has been logged with your note for audit purposes."
+```
+
+### Important Notes
+
+- **Audit Trail**: All changes are logged with `history_log_id` for compliance
+- **Cascading Updates**: Updating target CPH automatically recalculates FTE_Required and Capacity for all 6 months
+- **Validation First**: Use `/api/llm/forecast/filter-options` to validate filter values before calling this endpoint
+- **Month Format**: Use full month names (e.g., "March", not "Mar" or "3")
 
 ---
 
@@ -1305,9 +1575,72 @@ The system automatically parses `main_lob` into components:
 
 **🔑 Important:** All filter matching is **case-insensitive**. `platform[]=amisys`, `platform[]=AMISYS`, and `platform[]=Amisys` all work identically!
 
+### FTE Allocations Endpoint
+
+**URL:** `GET /api/llm/fte-allocations?report_month={month}&report_year={year}&main_lob={lob}&case_type={type}&state={state}`
+
+**Required Parameters:**
+- `report_month` - Full month name (e.g., "March")
+- `report_year` - Year (e.g., 2025)
+- `main_lob` - Main LOB filter
+- `case_type` - Case type filter
+- `state` - State code filter
+
+**Optional Parameters:**
+- `forecast_month` - Filter to specific month (e.g., "Apr-25")
+
+**Returns:** FTE allocation details grouped by forecast month
+- `total_fte_count` - Total FTEs allocated
+- `allocation_type_summary` - Count of primary vs bench allocations
+- `fte_by_month` - FTE details per month
+
+**Cache:** 60 seconds
+
+### Update Target CPH Endpoint
+
+**URL:** `POST /api/llm/forecast/update-target-cph`
+
+**Request Body (JSON):**
+```json
+{
+  "report_month": "March",
+  "report_year": 2025,
+  "main_lob": "Amisys Medicaid Domestic",
+  "state": "LA",
+  "case_type": "Claims Processing",
+  "new_target_cph": 50,
+  "user_notes": "Optional reason for change"
+}
+```
+
+**Returns:** Update result with recalculated values
+- `old_target_cph` - Previous CPH value
+- `new_target_cph` - New CPH value
+- `records_updated` - Count of updated rows
+- `history_log_id` - Audit trail UUID
+- `recalculated_totals` - Old/new FTE and Capacity by month
+
+**Constraints:**
+- `new_target_cph` must be > 0 and <= 200
+- `report_month` must be full month name (e.g., "March", not "Mar")
+
 ---
 
 ## Changelog
+
+### Version 1.2 (2026-01-30)
+
+- **New Feature**: Added `/api/llm/fte-allocations` endpoint for FTE allocation details
+  - Query which FTEs are allocated to a specific forecast record
+  - Grouped by forecast month with allocation type (primary/bench) breakdown
+  - Supports optional `forecast_month` filter for single-month queries
+- **New Feature**: Added `/api/llm/forecast/update-target-cph` endpoint for CPH updates
+  - Update target CPH for forecast records matching criteria
+  - Automatic recalculation of FTE_Required and Capacity for all 6 months
+  - Returns old/new values with change delta for impact analysis
+  - Creates audit trail via `history_log_id`
+- Updated endpoint count from 3 to 5 in Overview section
+- Added Quick Reference entries for both new endpoints
 
 ### Version 1.1 (2026-01-27)
 
