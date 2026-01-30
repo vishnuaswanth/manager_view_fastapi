@@ -2000,7 +2000,8 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 
             # Cleanup old reports (retention policy - keep last 10 executions)
             try:
-                report_manager.cleanup_old_reports(data_month, data_year, keep_last_n=10)
+                cleanup_db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=1000, skip=0, select_columns=None)
+                cleanup_db_manager.cleanup_old_reports(data_month, data_year, keep_last_n=10)
                 logging.info("✓ Retention policy cleanup completed")
             except Exception as cleanup_error:
                 logging.warning(f"Failed to cleanup old reports: {cleanup_error}")
