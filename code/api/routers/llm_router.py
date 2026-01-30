@@ -11,7 +11,12 @@ import hashlib
 import json
 import calendar
 
-from code.logics.db import ForecastModel
+from code.logics.db import (
+    ForecastModel,
+    ProdTeamRosterModel,
+    FTEAllocationMappingModel,
+    AllocationValidityModel
+)
 from code.logics.llm_utils import (
     determine_locality,
     apply_forecast_filters,
@@ -852,6 +857,345 @@ def get_fte_allocations(
 
     except Exception as e:
         logger.error(f"[LLM FTE Allocations] Error in endpoint: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": "Internal server error",
+            "status_code": 500,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+
+@router.get("/api/llm/available-ftes")
+def get_available_ftes(
+    report_month: str,
+    report_year: int,
+    main_lob: str,
+    case_type: str,
+    state: str,
+    forecast_month: Optional[str] = None
+):
+    """
+    Get unallocated (available) FTEs for allocation based on filter criteria.
+
+    This endpoint returns FTEs from the roster that have NOT been allocated
+    to the specified forecast record, with per-month breakdown and full roster details.
+
+    Args:
+        report_month: Report month (e.g., "March")
+        report_year: Report year (e.g., 2025)
+        main_lob: Main LOB filter (e.g., "Amisys Medicaid Domestic")
+        case_type: Case type to match NewWorkType
+        state: State filter (e.g., "LA", "N/A")
+        forecast_month: Optional specific forecast month filter (e.g., "Apr-25")
+
+    Returns:
+        Available FTE details grouped by forecast month with full roster info
+
+    Example:
+        GET /api/llm/available-ftes?report_month=March&report_year=2025&main_lob=Amisys%20Medicaid%20Domestic&case_type=FTC-Basic&state=LA
+
+    Cache: 60 seconds TTL
+    """
+    try:
+        # Validate required parameters
+        if not report_month or not report_month.strip():
+            return {
+                "success": False,
+                "error": "report_month is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        if not main_lob or not main_lob.strip():
+            return {
+                "success": False,
+                "error": "main_lob is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        if not case_type or not case_type.strip():
+            return {
+                "success": False,
+                "error": "case_type is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        if not state or not state.strip():
+            return {
+                "success": False,
+                "error": "state is required",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Validate year range
+        current_year = datetime.now().year
+        if report_year < 2020 or report_year > current_year + 5:
+            return {
+                "success": False,
+                "error": f"report_year must be between 2020 and {current_year + 5}",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Normalize inputs
+        report_month = report_month.strip().capitalize()
+        main_lob = main_lob.strip()
+        case_type = case_type.strip()
+        state = state.strip()
+        forecast_month_filter = forecast_month.strip() if forecast_month else None
+
+        # Generate cache key
+        cache_key = f"llm:available-ftes:{report_month}:{report_year}:{main_lob}:{state}:{case_type}:{forecast_month_filter or 'all'}"
+        cached_response = data_cache.get(cache_key)
+        if cached_response is not None:
+            logger.debug(f"[LLM Available FTEs] Returning cached response")
+            return cached_response
+
+        # Step 1: Get valid allocation execution ID
+        db_manager = core_utils.get_db_manager(
+            AllocationValidityModel,
+            limit=1,
+            skip=0,
+            select_columns=None
+        )
+
+        with db_manager.SessionLocal() as session:
+            validity_record = session.query(AllocationValidityModel).filter(
+                AllocationValidityModel.month == report_month,
+                AllocationValidityModel.year == report_year,
+                AllocationValidityModel.is_valid == True
+            ).first()
+
+            if not validity_record:
+                return {
+                    "success": False,
+                    "error": f"No valid allocation found for {report_month} {report_year}",
+                    "message": "Please run allocation first before querying available FTEs",
+                    "status_code": 404,
+                    "report_month": report_month,
+                    "report_year": report_year,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+
+            allocation_execution_id = validity_record.allocation_execution_id
+
+        # Step 2: Parse main_lob to get platform and locality
+        parsed = parse_main_lob(main_lob)
+        platform = parsed.get("platform", "")
+        locality = determine_locality(main_lob, case_type)
+
+        if not platform:
+            return {
+                "success": False,
+                "error": f"Unable to determine platform from main_lob: {main_lob}",
+                "status_code": 400,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        # Step 3: Get forecast months from ForecastMonthsModel
+        # First get uploaded file name from forecast data
+        db_manager_forecast = core_utils.get_db_manager(
+            ForecastModel,
+            limit=1,
+            skip=0,
+            select_columns=None
+        )
+        forecast_data = db_manager_forecast.read_db(report_month, report_year)
+        raw_records = forecast_data.get("records", [])
+
+        if not raw_records:
+            return {
+                "success": False,
+                "error": f"No forecast data found for {report_month} {report_year}",
+                "status_code": 404,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+
+        uploaded_file = raw_records[0].get("UploadedFile", "")
+        month_labels_list = get_forecast_months_list(report_month, report_year, uploaded_file)
+
+        # Build forecast months mapping
+        forecast_months = []
+        for i, month_name in enumerate(month_labels_list, start=1):
+            if month_name:
+                forecast_year = _get_year_for_month(report_month, report_year, month_name)
+                month_label = _get_month_label(month_name, forecast_year)
+                forecast_months.append({
+                    "label": month_label,
+                    "month_name": month_name,
+                    "year": forecast_year,
+                    "index": i
+                })
+
+        # Step 4: Query roster - filter by platform, locality, case_type (via NewWorkType)
+        # Normalize locality for roster query
+        location_filter = "Domestic" if locality == "Domestic" else "Global"
+        # Handle both "Offshore" and "Global" in the data
+        location_values = ["Domestic"] if locality == "Domestic" else ["Global", "Offshore"]
+
+        db_manager_roster = core_utils.get_db_manager(
+            ProdTeamRosterModel,
+            limit=100000,
+            skip=0,
+            select_columns=None
+        )
+
+        from sqlalchemy import func, or_
+
+        with db_manager_roster.SessionLocal() as session:
+            # Build roster query with filters
+            roster_query = session.query(ProdTeamRosterModel).filter(
+                ProdTeamRosterModel.Month == report_month,
+                ProdTeamRosterModel.Year == report_year,
+                func.lower(ProdTeamRosterModel.PrimaryPlatform) == platform.lower(),
+                or_(*[func.lower(ProdTeamRosterModel.Location) == loc.lower() for loc in location_values])
+            )
+
+            # Filter by case_type - match against NewWorkType (case-insensitive contains)
+            roster_query = roster_query.filter(
+                func.lower(ProdTeamRosterModel.NewWorkType).contains(case_type.lower())
+            )
+
+            # Filter by state - handle "N/A" case
+            if state.upper() != "N/A":
+                # For non-N/A states, check if state is in the roster's State field
+                # The roster State field might be a single state or pipe-delimited
+                roster_query = roster_query.filter(
+                    or_(
+                        func.lower(ProdTeamRosterModel.State) == state.lower(),
+                        ProdTeamRosterModel.State.contains(state)
+                    )
+                )
+
+            roster_records = roster_query.all()
+
+        if not roster_records:
+            response = {
+                "success": True,
+                "report_month": report_month,
+                "report_year": report_year,
+                "main_lob": main_lob,
+                "case_type": case_type,
+                "state": state,
+                "platform": platform,
+                "locality": locality,
+                "allocation_execution_id": allocation_execution_id,
+                "total_available_count": 0,
+                "available_by_month": {},
+                "forecast_months": [fm["label"] for fm in forecast_months],
+                "message": "No roster records match the filter criteria",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            data_cache.set(cache_key, response)
+            return response
+
+        # Step 5: Get allocated FTEs from FTEAllocationMappingModel
+        db_manager_mapping = core_utils.get_db_manager(
+            FTEAllocationMappingModel,
+            limit=100000,
+            skip=0,
+            select_columns=None
+        )
+
+        with db_manager_mapping.SessionLocal() as session:
+            # Query all allocated FTEs for this allocation execution
+            allocated_query = session.query(
+                FTEAllocationMappingModel.cn,
+                FTEAllocationMappingModel.forecast_month_label
+            ).filter(
+                FTEAllocationMappingModel.allocation_execution_id == allocation_execution_id
+            )
+
+            allocated_records = allocated_query.all()
+
+        # Build a set of (cn, month_label) tuples for allocated FTEs
+        allocated_by_month = {}
+        for cn, month_label in allocated_records:
+            if month_label not in allocated_by_month:
+                allocated_by_month[month_label] = set()
+            allocated_by_month[month_label].add(cn)
+
+        # Step 6: Calculate available FTEs for each forecast month
+        available_by_month = {}
+        total_available_count = 0
+
+        for fm in forecast_months:
+            month_label = fm["label"]
+
+            # Skip if forecast_month filter is applied and doesn't match
+            if forecast_month_filter and month_label != forecast_month_filter:
+                continue
+
+            # Get CNs allocated for this month
+            allocated_cns = allocated_by_month.get(month_label, set())
+
+            # Filter roster to get available FTEs (not in allocated list)
+            available_ftes = []
+            for roster in roster_records:
+                if roster.CN not in allocated_cns:
+                    fte_data = {
+                        "first_name": roster.FirstName or "",
+                        "last_name": roster.LastName or "",
+                        "cn": roster.CN or "",
+                        "opid": roster.OPID or "",
+                        "location": roster.Location or "",
+                        "zip_code": roster.ZIPCode or "",
+                        "city": roster.City or "",
+                        "beeline_title": roster.BeelineTitle or "",
+                        "status": roster.Status or "",
+                        "primary_platform": roster.PrimaryPlatform or "",
+                        "primary_market": roster.PrimaryMarket or "",
+                        "worktype": roster.Worktype or "",
+                        "lob": roster.LOB or "",
+                        "supervisor_full_name": roster.SupervisorFullName or "",
+                        "supervisor_cn_no": roster.SupervisorCNNo or "",
+                        "user_status": roster.UserStatus or "",
+                        "part_of_production": roster.PartofProduction or "",
+                        "production_percentage": roster.ProductionPercentage,
+                        "new_work_type": roster.NewWorkType or "",
+                        "state": roster.State or "",
+                        "centene_mail_id": roster.CenteneMailId or "",
+                        "ntt_mail_id": roster.NTTMailID or ""
+                    }
+                    available_ftes.append(fte_data)
+
+            available_by_month[month_label] = {
+                "available_count": len(available_ftes),
+                "ftes": available_ftes
+            }
+            total_available_count += len(available_ftes)
+
+        # Step 7: Build and cache response
+        response = {
+            "success": True,
+            "report_month": report_month,
+            "report_year": report_year,
+            "main_lob": main_lob,
+            "case_type": case_type,
+            "state": state,
+            "platform": platform,
+            "locality": locality,
+            "allocation_execution_id": allocation_execution_id,
+            "total_available_count": total_available_count,
+            "available_by_month": available_by_month,
+            "forecast_months": [fm["label"] for fm in forecast_months],
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+        data_cache.set(cache_key, response)
+
+        logger.info(
+            f"[LLM Available FTEs] Returned {total_available_count} available FTEs "
+            f"for {main_lob} | {state} | {case_type} ({report_month} {report_year})"
+        )
+
+        return response
+
+    except Exception as e:
+        logger.error(f"[LLM Available FTEs] Error in endpoint: {e}", exc_info=True)
         return {
             "success": False,
             "error": "Internal server error",
