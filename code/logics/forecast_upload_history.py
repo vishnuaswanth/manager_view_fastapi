@@ -19,6 +19,43 @@ from code.logics.config.change_types import CHANGE_TYPE_FORECAST_UPDATE
 
 logger = logging.getLogger(__name__)
 
+# Column name mapping: long names (from preprocess) -> short names (for comparison)
+# The after_df comes from preprocess_forecast_df() which uses Centene_Capacity_Plan_* names
+# The before_df comes from capture_forecast_snapshot() which uses short names (Main_LOB, State, etc.)
+FORECAST_COLUMN_MAPPING = {
+    'Centene_Capacity_Plan_Main_LOB': 'Main_LOB',
+    'Centene_Capacity_Plan_State': 'State',
+    'Centene_Capacity_Plan_Case_Type': 'Case_Type',
+    'Centene_Capacity_Plan_Call_Type_ID': 'Case_ID',
+    'Centene_Capacity_Plan_Target_CPH': 'Target_CPH',
+}
+
+
+def _normalize_forecast_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize forecast DataFrame columns to use short names.
+
+    Renames Centene_Capacity_Plan_* columns to short versions
+    (Main_LOB, State, Case_Type, Case_ID, Target_CPH).
+
+    Args:
+        df: DataFrame with potentially long column names
+
+    Returns:
+        DataFrame with normalized (short) column names
+    """
+    if df is None or df.empty:
+        return df
+
+    # Only rename columns that exist
+    rename_map = {k: v for k, v in FORECAST_COLUMN_MAPPING.items() if k in df.columns}
+
+    if rename_map:
+        df = df.rename(columns=rename_map)
+        logger.debug(f"Normalized columns: {list(rename_map.keys())} -> {list(rename_map.values())}")
+
+    return df
+
 
 def capture_forecast_snapshot(
     month: str,
@@ -116,6 +153,15 @@ def compare_forecast_snapshots(
         - Updates: calculated deltas (can be positive, negative, or zero)
     """
     modified_records = []
+
+    # Normalize after_df columns to match before_df column names
+    # after_df comes from preprocess_forecast_df() with long Centene_Capacity_Plan_* names
+    # before_df uses short names (Main_LOB, State, etc.)
+    after_df = _normalize_forecast_columns(after_df.copy())
+
+    # Log for debugging
+    logger.info(f"after_df columns after normalization: {list(after_df.columns)[:10]}...")
+    logger.info(f"after_df has {len(after_df)} records")
 
     # CASE 1: New upload (no previous data)
     if before_df is None or before_df.empty:
@@ -439,6 +485,8 @@ def create_forecast_upload_history_log(
             months_dict
         )
 
+        logger.info(f"compare_forecast_snapshots returned {total_modified} modified records")
+
         if total_modified == 0:
             logger.info(f"No changes detected for {month} {year}")
             return {
@@ -455,6 +503,8 @@ def create_forecast_upload_history_log(
         )
 
         changes = extract_specific_changes(modified_records, months_dict)
+        logger.info(f"extract_specific_changes generated {len(changes)} changes")
+
         summary_data = calculate_summary_data(modified_records, months_dict, month, year)
 
         # Create history log

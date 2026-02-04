@@ -189,6 +189,7 @@ def add_history_changes(
             })
 
         # Bulk insert
+        logger.info(f"Inserting {len(change_records)} HistoryChangeModel records for history_log_id {history_log_id}")
         df = pd.DataFrame(change_records)
         db_manager.save_to_db(df, replace=False)
 

@@ -1,7 +1,7 @@
 # LLM Forecast Data API Specification
 
-**Version:** 1.2
-**Last Updated:** 2026-01-30
+**Version:** 1.3
+**Last Updated:** 2026-02-02
 **Target Audience:** LLM tools, AI agents, chatbots, automated systems
 
 ---
@@ -23,13 +23,14 @@ The LLM Forecast Data endpoint provides comprehensive forecast data optimized fo
 
 ## Endpoints
 
-This API provides five endpoints:
+This API provides six endpoints:
 
 0. **`GET /api/llm/forecast/available-reports`** - Discover available forecast reports (use this first!)
 1. **`GET /api/llm/forecast/filter-options`** - Get available filter values for a specific report
 2. **`GET /api/llm/forecast`** - Get comprehensive forecast data
 3. **`GET /api/llm/fte-allocations`** - Get FTE allocation details for a specific forecast record
-4. **`POST /api/llm/forecast/update-target-cph`** - Update target CPH for forecast records
+4. **`GET /api/llm/available-ftes`** - Get unallocated (available) FTEs for allocation
+5. **`POST /api/llm/forecast/update-target-cph`** - Update target CPH for forecast records
 
 ### Recommended Workflow for LLMs
 
@@ -764,7 +765,155 @@ LLM: "For April 2025, you have 10 FTEs allocated..."
 
 ---
 
-## Endpoint 4: Update Target CPH
+## Endpoint 4: Available FTEs
+
+### Base Information
+
+- **URL**: `/api/llm/available-ftes`
+- **Method**: `GET`
+- **Purpose**: Get unallocated (available) FTEs for allocation based on filter criteria
+- **Authentication**: None (internal API)
+- **Content-Type**: `application/json`
+- **Cache TTL**: 60 seconds
+
+### Query Parameters
+
+| Parameter | Type | Required | Description | Example |
+|-----------|------|----------|-------------|---------|
+| `report_month` | string | Yes | Report month (full name) | `"March"` |
+| `report_year` | integer | Yes | Report year | `2025` |
+| `main_lob` | string | Yes | Main LOB filter | `"Amisys Medicaid Domestic"` |
+| `case_type` | string | Yes | Case type to match NewWorkType | `"Claims Processing"` |
+| `state` | string | Yes | State filter | `"LA"`, `"N/A"` |
+| `forecast_month` | string | No | Filter to specific month | `"Apr-25"` |
+
+### Success Response (200 OK)
+
+```json
+{
+  "success": true,
+  "report_month": "March",
+  "report_year": 2025,
+  "main_lob": "Amisys Medicaid Domestic",
+  "case_type": "Claims Processing",
+  "state": "LA",
+  "platform": "Amisys",
+  "locality": "Domestic",
+  "allocation_execution_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "total_available_count": 25,
+  "available_by_month": {
+    "Apr-25": {
+      "available_count": 5,
+      "ftes": [
+        {
+          "first_name": "John",
+          "last_name": "Smith",
+          "cn": "CN001",
+          "opid": "OP001",
+          "location": "Domestic",
+          "zip_code": "70001",
+          "city": "New Orleans",
+          "beeline_title": "Claims Processor",
+          "status": "Active",
+          "primary_platform": "Amisys",
+          "primary_market": "Medicaid",
+          "worktype": "Claims",
+          "lob": "Medicaid",
+          "supervisor_full_name": "Jane Doe",
+          "supervisor_cn_no": "CN100",
+          "user_status": "Active",
+          "part_of_production": "Yes",
+          "production_percentage": 1.0,
+          "new_work_type": "Claims Processing",
+          "state": "LA",
+          "centene_mail_id": "john.smith@centene.com",
+          "ntt_mail_id": "john.smith@ntt.com"
+        }
+      ]
+    },
+    "May-25": {
+      "available_count": 5,
+      "ftes": [...]
+    }
+  },
+  "forecast_months": ["Apr-25", "May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25"],
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+### Response Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `total_available_count` | integer | Total unallocated FTEs across all months |
+| `available_by_month` | object | Available FTEs grouped by forecast month label |
+| `available_by_month.{month}.available_count` | integer | Count of available FTEs for that month |
+| `available_by_month.{month}.ftes` | array | Full roster details for each available FTE |
+| `platform` | string | Extracted platform from main_lob |
+| `locality` | string | Extracted locality (Domestic/Global) |
+| `forecast_months` | array | List of available forecast month labels |
+
+### Error Responses
+
+#### 400 Bad Request - Missing Parameters
+
+```json
+{
+  "success": false,
+  "error": "main_lob is required",
+  "status_code": 400,
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+#### 404 Not Found - No Valid Allocation
+
+```json
+{
+  "success": false,
+  "error": "No valid allocation found for March 2025",
+  "message": "Please run allocation first before querying available FTEs",
+  "status_code": 404,
+  "report_month": "March",
+  "report_year": 2025,
+  "timestamp": "2025-01-27T10:30:00.000000Z"
+}
+```
+
+### Use Cases
+
+**1. Find Unallocated Resources**
+```
+User: "Who is available for Claims Processing in Louisiana that hasn't been allocated?"
+LLM: Calls /api/llm/available-ftes with the filters
+LLM: "There are 25 unallocated FTEs across all months: 5 in April, 5 in May..."
+```
+
+**2. Resource Planning**
+```
+User: "Show me available staff for April only"
+LLM: Calls /api/llm/available-ftes?forecast_month=Apr-25
+LLM: "For April 2025, you have 5 available FTEs: John Smith, Jane Doe..."
+```
+
+**3. Compare Allocated vs Available**
+```
+User: "How many more resources can we allocate to this case?"
+LLM: First calls /api/llm/fte-allocations to get allocated count
+LLM: Then calls /api/llm/available-ftes to get available count
+LLM: "Currently 15 FTEs are allocated, and 25 more are available for allocation"
+```
+
+### Important Notes
+
+- **Filtering Logic**: This endpoint finds roster FTEs that match the criteria (platform, locality, case_type, state) but are NOT in the FTEAllocationMappingModel for the given execution
+- **Case Type Matching**: Matches against the `NewWorkType` field in the roster (case-insensitive contains)
+- **State Matching**: For non-N/A states, checks if state is in the roster's State field (supports pipe-delimited)
+- **Full Roster Details**: Returns complete roster information for each available FTE for detailed analysis
+
+---
+
+## Endpoint 5: Update Target CPH
 
 ### Base Information
 
@@ -1596,6 +1745,30 @@ The system automatically parses `main_lob` into components:
 
 **Cache:** 60 seconds
 
+### Available FTEs Endpoint
+
+**URL:** `GET /api/llm/available-ftes?report_month={month}&report_year={year}&main_lob={lob}&case_type={type}&state={state}`
+
+**Required Parameters:**
+- `report_month` - Full month name (e.g., "March")
+- `report_year` - Year (e.g., 2025)
+- `main_lob` - Main LOB filter
+- `case_type` - Case type to match NewWorkType
+- `state` - State code filter
+
+**Optional Parameters:**
+- `forecast_month` - Filter to specific month (e.g., "Apr-25")
+
+**Returns:** Unallocated (available) FTEs grouped by forecast month
+- `total_available_count` - Total unallocated FTEs
+- `available_by_month` - FTE details per month with full roster info
+- `platform` - Extracted platform from main_lob
+- `locality` - Extracted locality (Domestic/Global)
+
+**Cache:** 60 seconds
+
+**Use Case:** Find roster FTEs that match criteria but haven't been allocated yet
+
 ### Update Target CPH Endpoint
 
 **URL:** `POST /api/llm/forecast/update-target-cph`
@@ -1627,6 +1800,17 @@ The system automatically parses `main_lob` into components:
 ---
 
 ## Changelog
+
+### Version 1.3 (2026-02-02)
+
+- **New Feature**: Added `/api/llm/available-ftes` endpoint for unallocated FTEs
+  - Query roster FTEs that match criteria but haven't been allocated
+  - Returns full roster details for each available FTE
+  - Grouped by forecast month with availability count
+  - Supports optional `forecast_month` filter for single-month queries
+  - Useful for resource planning and identifying available capacity
+- Updated endpoint count from 5 to 6 in Overview section
+- Added Quick Reference entry for available-ftes endpoint
 
 ### Version 1.2 (2026-01-30)
 
