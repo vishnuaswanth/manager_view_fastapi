@@ -1234,9 +1234,9 @@ class UpdateTargetCPHRequest(BaseModel):
     )
     new_target_cph: int = Field(
         ...,
-        gt=0,
+        ge=0,
         le=200,
-        description="New target CPH value (must be > 0 and <= 200)"
+        description="New target CPH value (must be >= 0 and <= 200)"
     )
     user_notes: Optional[str] = Field(
         default=None,

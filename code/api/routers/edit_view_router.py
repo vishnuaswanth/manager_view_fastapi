@@ -64,7 +64,7 @@ class ModifiedForecastRecord(BaseModel):
     main_lob: str = Field(min_length=1, description="Main Line of Business")
     state: str = Field(min_length=2, max_length=3, description="State code (2-letter) or 'N/A'")
     case_type: str = Field(min_length=1, description="Case Type")
-    target_cph: float = Field(gt=0, le=200, description="Target Cases Per Hour")
+    target_cph: float = Field(ge=0, le=200, description="Target Cases Per Hour")
     target_cph_change: float = Field(default=0, description="Change in Target CPH")
     modified_fields: List[str] = Field(min_items=1, description="List of modified field paths")
     months: Dict[str, MonthData] = Field(
@@ -95,8 +95,8 @@ class CPHRecord(BaseModel):
     id: str = Field(min_length=1, description="CPH record ID")
     lob: str = Field(min_length=1, description="Line of Business")
     case_type: str = Field(min_length=1, description="Case Type")
-    target_cph: float = Field(gt=0, le=200, description="Original Target CPH")
-    modified_target_cph: float = Field(gt=0, le=200, description="Modified Target CPH")
+    target_cph: float = Field(ge=0, le=200, description="Original Target CPH")
+    modified_target_cph: float = Field(ge=0, le=200, description="Modified Target CPH")
 
 
 # Define generic type variable for modified records

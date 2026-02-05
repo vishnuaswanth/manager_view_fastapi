@@ -112,7 +112,7 @@ class ModifiedRecordResponse(BaseModel):
     state: str = Field(min_length=1, description="State code")
     case_type: str = Field(min_length=1, description="Case type description")
     case_id: str = Field(min_length=1, description="Business case identifier (Centene_Capacity_Plan_Call_Type_ID, used for updates)")
-    target_cph: int = Field(gt=0, description="Target cases per hour")
+    target_cph: int = Field(ge=0, description="Target cases per hour")
     target_cph_change: int = Field(default=0, description="Change in target CPH (typically 0)")
     modified_fields: List[str] = Field(
         default_factory=list,
