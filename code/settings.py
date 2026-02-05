@@ -1,6 +1,7 @@
 import configparser
 import os
 import logging
+from urllib.parse import quote_plus
 
 # Get base directory
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -18,8 +19,8 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
-# Load config
-config = configparser.ConfigParser()
+# Load config (disable interpolation to allow % and other special characters in values)
+config = configparser.ConfigParser(interpolation=None)
 config.read(CONFIG_PATH)
 
 logger.info("Loaded configuration from %s", CONFIG_PATH)
@@ -38,8 +39,9 @@ OPTIONS = dict(config.items("options"))
 
 # URLs
 SQLITE_DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'test.db')}"
+# URL-encode user and password to handle special characters (@, %, /, :, #, etc.)
 MSSQL_DATABASE_URL = (
-    f"mssql+pyodbc://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
+    f"mssql+pyodbc://{quote_plus(MYSQL_USER)}:{quote_plus(MYSQL_PASSWORD)}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}"
     f"?driver={OPTIONS['driver'].replace(' ', '+')}"
 )
 

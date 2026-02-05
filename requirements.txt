@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+sqlalchemy
+sqlmodel
+pandas
+numpy
+openpyxl
+pydantic
+pyodbc
+python-multipart
+pytest
