@@ -65,7 +65,8 @@ else:
     raise ValueError(f"Invalid MODE: {MODE}. Must be DEBUG or PRODUCTION")
 
 # Override the sqlalchemy.url in alembic.ini with our dynamic URL
-config.set_main_option("sqlalchemy.url", db_url)
+# Escape % as %% for Alembic's config parser (it interprets % as interpolation)
+config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 # add your model's MetaData object here
 # for 'autogenerate' support
