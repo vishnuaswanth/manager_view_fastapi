@@ -15,6 +15,7 @@ from code.logics.db import (
     ProdTeamRosterModel,
     UploadDataTimeDetails,
     MonthConfigurationModel,
+    TargetCPHModel,
     AllocationExecutionModel,
     RawData
 )
@@ -108,6 +109,7 @@ MODEL_MAP = {
     "ProdTeamRoster": ProdTeamRosterModel,
     "UploadDataTimeDetails": UploadDataTimeDetails,
     "MonthConfiguration": MonthConfigurationModel,
+    "TargetCPH": TargetCPHModel,
     "AllocationExecution": AllocationExecutionModel,
     "RawData": RawData
 }

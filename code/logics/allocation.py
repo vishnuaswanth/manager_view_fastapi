@@ -185,6 +185,13 @@ class Calculations():
         # Cache for month configurations to avoid repeated DB queries
         self._config_cache: Dict[Tuple[str, int, str], Dict] = {}
 
+        # Load Target CPH configurations from database (single query)
+        # This provides O(1) lookup per row during allocation
+        from code.logics.target_cph_utils import get_all_target_cph_as_dict
+        self._target_cph_lookup: Dict[Tuple[str, str], float] = get_all_target_cph_as_dict()
+        logger.info(f"Loaded {len(self._target_cph_lookup)} Target CPH configurations from database")
+
+        # Fallback: Load from JSON blob if database is empty (for backward compatibility)
         calculations = get_calculations_data()
         self.month_data = calculations.get("month_data", pd.DataFrame)
         self.target_cph = calculations.get("target_cph", pd.DataFrame)
@@ -240,17 +247,43 @@ class Calculations():
 
 
     def get_target_cph(self, row):
+        """
+        Get Target CPH value for a given forecast row.
+
+        Uses database-backed lookup dict for O(1) performance per row.
+        Falls back to DataFrame lookup if database lookup is empty (backward compatibility).
+
+        Args:
+            row: DataFrame row with ('Centene Capacity plan', 'Main LOB') and
+                 ('Centene Capacity plan', 'Case type') columns
+
+        Returns:
+            Target CPH value, or 0 if not found
+        """
         lob = row[('Centene Capacity plan', 'Main LOB')]
         worktype = row[('Centene Capacity plan', 'Case type')]
         logger.debug(f"~~ ENTER get_target_cph: lob={lob!r}, worktype={worktype!r}")
+
+        # Primary lookup: Database-backed dict (O(1) lookup)
+        if self._target_cph_lookup:
+            key = (lob.strip().lower(), worktype.strip().lower())
+            target_cph = self._target_cph_lookup.get(key, None)
+            if target_cph is not None:
+                return target_cph
+
+        # Fallback: DataFrame lookup (backward compatibility for migration period)
         target_df = self.target_cph
-        # filtered_target_df = self.target_cph[(self.target_cph['Case type'].str.lower() == worktype.lower()) & (self.target_cph['Main LOB'].str.strip() == lob.strip())]
-        filtered_target_df = target_df[
-            (target_df['Main LOB'].str.strip().str.lower() == lob.strip().lower()) &
-            (target_df['Case type'].str.strip().str.lower() == worktype.strip().lower())
-        ]
-        # logger.debug(f"filtered target df head - {filtered_target_df.head()}")
-        return filtered_target_df['Target CPH'].iloc[0] if not filtered_target_df.empty else 0
+        if target_df is not None and not getattr(target_df, 'empty', True):
+            filtered_target_df = target_df[
+                (target_df['Main LOB'].str.strip().str.lower() == lob.strip().lower()) &
+                (target_df['Case type'].str.strip().str.lower() == worktype.strip().lower())
+            ]
+            if not filtered_target_df.empty:
+                return filtered_target_df['Target CPH'].iloc[0]
+
+        # Not found in either source
+        logger.warning(f"Target CPH not found for lob={lob!r}, worktype={worktype!r}, returning 0")
+        return 0
 
 
 

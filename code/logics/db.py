@@ -448,6 +448,46 @@ class MonthConfigurationModel(SQLModel, table=True):
         Index('idx_month_year', 'Month', 'Year'),
     )
 
+class TargetCPHModel(SQLModel, table=True):
+    """
+    Model for storing Target CPH (Cases Per Hour) configuration values.
+
+    Each record represents a unique combination of Main LOB and Case Type
+    with its associated Target CPH value. This data is used in allocation
+    logic for FTE calculations.
+
+    Example data:
+        - MainLOB: "Amisys Medicaid GLOBAL", CaseType: "FTC-Basic/Non MMP", TargetCPH: 12.0
+        - MainLOB: "Facets Medicare Domestic", CaseType: "Claims Processing", TargetCPH: 8.5
+
+    CPH values typically range from 3.0 to 17.0 based on complexity.
+    """
+    __tablename__ = "target_cph_configuration"
+
+    id: int | None = Field(default=None, primary_key=True)
+    MainLOB: str = Field(sa_column=Column(String(255), nullable=False))
+    CaseType: str = Field(sa_column=Column(String(255), nullable=False))
+    TargetCPH: float = Field(nullable=False)
+
+    # Audit fields
+    CreatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    CreatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now())
+    )
+    UpdatedBy: str = Field(sa_column=Column(String(100), nullable=False))
+    UpdatedDateTime: datetime = Field(
+        sa_column=Column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())
+    )
+
+    # Unique constraint and indexes for efficient lookups
+    __table_args__ = (
+        UniqueConstraint('MainLOB', 'CaseType', name='uix_target_cph'),
+        Index('idx_target_cph_lob', 'MainLOB'),
+        Index('idx_target_cph_casetype', 'CaseType'),
+        Index('idx_target_cph_lob_casetype', 'MainLOB', 'CaseType'),
+    )
+
+
 class AllocationExecutionModel(SQLModel, table=True):
     """
     Tracks every allocation process execution with complete audit trail.

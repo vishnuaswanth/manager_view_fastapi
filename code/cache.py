@@ -53,6 +53,19 @@ data_cache = TTLCache(max_size=64, ttl_seconds=60)
 # Keys: "month_config:v1:{month}:{year}:{work_type}"
 month_config_cache = TTLCache(max_size=20, ttl_seconds=900)
 
+
+# ============ Target CPH Configuration Caches ============
+
+# Target CPH configuration cache: Used by target CPH endpoints
+# 15 minutes TTL, max 20 entries
+# Keys: "target_cph:v1:{main_lob}:{case_type}"
+target_cph_cache = TTLCache(max_size=20, ttl_seconds=900)
+
+# Target CPH lookup cache: Used by allocation for batch lookups
+# 30 minutes TTL (since this data rarely changes), max 1 entry
+# Key: "target_cph_lookup:v1"
+target_cph_lookup_cache = TTLCache(max_size=1, ttl_seconds=1800)
+
 # Month mappings cache: Used by edit view utilities
 # 1 hour TTL (3600 seconds), max 20 entries
 # Keys: "month_mappings:v1:{month}:{year}"
@@ -183,6 +196,32 @@ def generate_execution_detail_cache_key(execution_id: str) -> str:
     """
     return f"allocation_execution_detail:v1:{execution_id}"
 
+
+def generate_target_cph_cache_key(
+    main_lob: str = None,
+    case_type: str = None
+) -> str:
+    """
+    Generate cache key for Target CPH configuration queries.
+
+    Args:
+        main_lob: Main LOB filter (optional)
+        case_type: Case Type filter (optional)
+
+    Returns:
+        Cache key string
+
+    Examples:
+        generate_target_cph_cache_key("Amisys", "FTC")
+        -> "target_cph:v1:Amisys:FTC"
+
+        generate_target_cph_cache_key()
+        -> "target_cph:v1::"
+    """
+    main_lob_part = main_lob or ""
+    case_type_part = case_type or ""
+    return f"target_cph:v1:{main_lob_part}:{case_type_part}"
+
 def get_ttl_for_execution_status(status: str) -> int:
     """
     Get cache TTL based on execution status.
@@ -302,6 +341,30 @@ def invalidate_execution_detail_cache(execution_id: str = None) -> bool:
         return False
 
 
+def invalidate_target_cph_cache() -> int:
+    """
+    Invalidate all Target CPH configuration cache entries.
+
+    Called when Target CPH configurations are created, updated, or deleted.
+    Also invalidates the lookup cache used by allocation.
+
+    Returns:
+        Number of cache entries invalidated
+    """
+    try:
+        # Clear Target CPH config cache entries
+        target_cph_cache.clear()
+
+        # Also clear the lookup cache used by allocation
+        target_cph_lookup_cache.clear()
+
+        logger.info(f"[Cache] Invalidated all Target CPH configuration cache entries")
+        return 0  # After clear, size is 0
+    except Exception as e:
+        logger.error(f"[Cache] Error invalidating Target CPH cache: {e}", exc_info=True)
+        return 0
+
+
 def clear_all_caches() -> dict:
     """
     Clear all caches across all routers.
@@ -316,6 +379,8 @@ def clear_all_caches() -> dict:
         - month_mappings_cache (month mappings)
         - allocation_list_cache (execution lists)
         - allocation_detail_cache (execution details)
+        - target_cph_cache (target CPH configurations)
+        - target_cph_lookup_cache (target CPH lookup for allocation)
 
     Returns:
         Dictionary with cache clearing statistics:
@@ -327,6 +392,8 @@ def clear_all_caches() -> dict:
             "month_mappings_cache": {"size": 0, "max_size": 20, "ttl_seconds": 3600},
             "allocation_list_cache": {"size": 0, "max_size": 50, "ttl_seconds": 30},
             "allocation_detail_cache": {"size": 0, "max_size": 100, "ttl_seconds": 5},
+            "target_cph_cache": {"size": 0, "max_size": 20, "ttl_seconds": 900},
+            "target_cph_lookup_cache": {"size": 0, "max_size": 1, "ttl_seconds": 1800},
             "cleared_at": "2025-01-15T10:30:00.123456",
             "message": "All caches cleared successfully"
         }
@@ -339,6 +406,8 @@ def clear_all_caches() -> dict:
         month_mappings_cache.clear()
         allocation_list_cache.clear()
         allocation_detail_cache.clear()
+        target_cph_cache.clear()
+        target_cph_lookup_cache.clear()
 
         cleared_at = datetime.now().isoformat()
 
@@ -349,7 +418,9 @@ def clear_all_caches() -> dict:
             f"month_config_cache: {month_config_cache.stats()}, "
             f"month_mappings_cache: {month_mappings_cache.stats()}, "
             f"allocation_list_cache: {allocation_list_cache.stats()}, "
-            f"allocation_detail_cache: {allocation_detail_cache.stats()}"
+            f"allocation_detail_cache: {allocation_detail_cache.stats()}, "
+            f"target_cph_cache: {target_cph_cache.stats()}, "
+            f"target_cph_lookup_cache: {target_cph_lookup_cache.stats()}"
         )
 
         return {
@@ -360,6 +431,8 @@ def clear_all_caches() -> dict:
             "month_mappings_cache": month_mappings_cache.stats(),
             "allocation_list_cache": allocation_list_cache.stats(),
             "allocation_detail_cache": allocation_detail_cache.stats(),
+            "target_cph_cache": target_cph_cache.stats(),
+            "target_cph_lookup_cache": target_cph_lookup_cache.stats(),
             "cleared_at": cleared_at,
             "message": "All caches cleared successfully"
         }
@@ -379,14 +452,18 @@ __all__ = [
     'month_mappings_cache',
     'allocation_list_cache',
     'allocation_detail_cache',
+    'target_cph_cache',
+    'target_cph_lookup_cache',
     'generate_month_config_cache_key',
     'generate_month_mappings_cache_key',
     'generate_execution_list_cache_key',
     'generate_execution_detail_cache_key',
+    'generate_target_cph_cache_key',
     'get_ttl_for_execution_status',
     'invalidate_month_config_cache',
     'invalidate_month_mappings_cache',
     'invalidate_execution_list_cache',
     'invalidate_execution_detail_cache',
+    'invalidate_target_cph_cache',
     'clear_all_caches'
 ]

@@ -25,6 +25,7 @@ from code.api.routers.manager_view_router import router as manager_view_router
 from code.api.routers.forecast_router import router as forecast_router
 from code.api.routers.allocation_router import router as allocation_router
 from code.api.routers.month_config_router import router as month_config_router
+from code.api.routers.target_cph_router import router as target_cph_router
 from code.api.routers.edit_view_router import router as edit_view_router
 from code.api.routers.history_router import router as history_router
 from code.api.routers.llm_router import router as llm_router
@@ -102,6 +103,7 @@ app.include_router(manager_view_router, tags=["Manager View"])
 app.include_router(forecast_router, tags=["Forecast Filters"])
 app.include_router(allocation_router, tags=["Allocation"])
 app.include_router(month_config_router, tags=["Month Configuration"])
+app.include_router(target_cph_router, prefix="/api/target-cph", tags=["Target CPH"])
 app.include_router(edit_view_router, tags=["Edit View"])
 app.include_router(history_router, tags=["History Log"])
 app.include_router(llm_router, tags=["LLM Tools"])
