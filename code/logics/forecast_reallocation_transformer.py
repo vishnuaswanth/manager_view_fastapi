@@ -389,56 +389,68 @@ def calculate_reallocation_preview(
                 0
             ) or 0)
 
-            # Get user-modified FTE Available
-            # Priority: 1) modified_fields extraction, 2) months dict, 3) original DB value
-            input_month_data = input_months.get(month_label, {})
-            if month_label in fte_changes_from_modified:
-                # New FTE value from modified_fields (preferred source)
-                new_fte_avail = fte_changes_from_modified[month_label]
-                logger.debug(f"Using FTE from modified_fields for {month_label}: {new_fte_avail}")
-            elif isinstance(input_month_data, dict):
-                new_fte_avail = int(input_month_data.get('fte_avail', orig_fte_avail))
-            else:
-                # input_month_data might be a Pydantic model
-                new_fte_avail = int(getattr(input_month_data, 'fte_avail', orig_fte_avail))
+            # Determine what changed for this record/month
+            target_cph_changed = (target_cph_change != 0)
+            fte_avail_changed_this_month = (month_label in fte_changes_from_modified)
 
-            # Debug logging - show all values used in calculation
+            # Debug logging
             logger.info(
                 f"[Reallocation Calc] {month_label} | work_type={work_type} | "
+                f"target_cph_changed={target_cph_changed}, fte_avail_changed={fte_avail_changed_this_month}"
+            )
+            logger.info(
+                f"[Reallocation Calc] {month_label} | "
                 f"config: WD={config.get('working_days')}, WH={config.get('work_hours')}, "
                 f"shrinkage={config.get('shrinkage')}, occupancy={config.get('occupancy')}"
             )
+
+            # === CASE 1: FTE Required ===
+            # Only recalculate if target_cph changed, otherwise keep original DB value
+            if target_cph_changed:
+                new_fte_req = calculate_fte_required(orig_forecast, config, new_target_cph)
+                fte_req_change = new_fte_req - orig_fte_req
+                logger.debug(f"[{month_label}] FTE Req recalculated: {orig_fte_req} -> {new_fte_req}")
+            else:
+                new_fte_req = orig_fte_req
+                fte_req_change = 0
+                logger.debug(f"[{month_label}] FTE Req unchanged: {new_fte_req}")
+
+            # === CASE 2: FTE Available ===
+            # Only change if user explicitly modified it for this month
+            if fte_avail_changed_this_month:
+                new_fte_avail = fte_changes_from_modified[month_label]
+                fte_avail_change = new_fte_avail - orig_fte_avail
+                logger.debug(f"[{month_label}] FTE Avail changed: {orig_fte_avail} -> {new_fte_avail}")
+            else:
+                new_fte_avail = orig_fte_avail
+                fte_avail_change = 0
+                logger.debug(f"[{month_label}] FTE Avail unchanged: {new_fte_avail}")
+
+            # === CASE 3: Capacity ===
+            # Recalculate only if EITHER target_cph OR fte_avail changed
+            if target_cph_changed or fte_avail_changed_this_month:
+                # Use the appropriate values based on what changed:
+                # - If only target_cph changed: use orig_fte_avail with new_target_cph
+                # - If only fte_avail changed: use new_fte_avail with original_target_cph
+                # - If both changed: use new_fte_avail with new_target_cph
+                calc_fte_avail = new_fte_avail  # Already set correctly above
+                calc_target_cph = new_target_cph  # Already set correctly above
+                new_capacity = calculate_capacity(calc_fte_avail, config, calc_target_cph)
+                capacity_change = int(new_capacity) - orig_capacity
+                logger.debug(
+                    f"[{month_label}] Capacity recalculated: {orig_capacity} -> {int(new_capacity)} "
+                    f"(fte_avail={calc_fte_avail}, target_cph={calc_target_cph})"
+                )
+            else:
+                new_capacity = orig_capacity
+                capacity_change = 0
+                logger.debug(f"[{month_label}] Capacity unchanged: {new_capacity}")
+
             logger.info(
                 f"[Reallocation Calc] {month_label} | "
-                f"orig_fte_avail={orig_fte_avail}, new_fte_avail={new_fte_avail}, "
-                f"orig_target_cph={original_target_cph}, new_target_cph={new_target_cph}"
+                f"orig: fte_req={orig_fte_req}, fte_avail={orig_fte_avail}, capacity={orig_capacity} | "
+                f"new: fte_req={new_fte_req}, fte_avail={new_fte_avail}, capacity={int(new_capacity)}"
             )
-
-            # Recalculate FTE Required based on new CPH
-            new_fte_req = calculate_fte_required(orig_forecast, config, new_target_cph)
-
-            # Recalculate Capacity based on new FTE Available and new CPH
-            new_capacity = calculate_capacity(new_fte_avail, config, new_target_cph)
-
-            # Manual calculation for verification
-            manual_capacity = (
-                new_fte_avail *
-                config.get('working_days', 21) *
-                config.get('work_hours', 9) *
-                (1 - config.get('shrinkage', 0.10)) *
-                new_target_cph
-            )
-
-            logger.info(
-                f"[Reallocation Calc] {month_label} | "
-                f"orig_capacity={orig_capacity}, new_capacity={new_capacity}, "
-                f"manual_verify={manual_capacity:.2f}"
-            )
-
-            # Calculate deltas
-            fte_req_change = new_fte_req - orig_fte_req
-            fte_avail_change = new_fte_avail - orig_fte_avail
-            capacity_change = int(new_capacity) - orig_capacity
 
             # Check if any field changed for this month
             has_changes = (
