@@ -187,8 +187,8 @@ class TestCalculateCapacity:
         result = calculate_capacity(0, config, 50.0)
         assert result == 0.0
 
-    def test_rounding_to_two_decimals(self):
-        """Test that result is rounded to 2 decimal places."""
+    def test_floor_to_integer(self):
+        """Test that result is floored to integer value."""
         config = {
             'working_days': 21,
             'work_hours': 9,
@@ -197,8 +197,8 @@ class TestCalculateCapacity:
         }
 
         result = calculate_capacity(3, config, 45.7)
-        # Should be rounded to 2 decimals
-        assert len(str(result).split('.')[-1]) <= 2
+        # Should be floored to integer (e.g., 1603.8 → 1603.0)
+        assert result == float(int(result))  # No fractional part
 
     def test_negative_fte_raises_error(self):
         """Test that negative fte_avail raises ValueError."""
@@ -212,8 +212,8 @@ class TestCalculateCapacity:
         with pytest.raises(ValueError, match="fte_avail cannot be negative"):
             calculate_capacity(-5, config, 50.0)
 
-    def test_zero_target_cph_raises_error(self):
-        """Test that zero target_cph raises ValueError."""
+    def test_zero_target_cph_returns_zero(self):
+        """Test that zero target_cph returns zero capacity."""
         config = {
             'working_days': 21,
             'work_hours': 9,
@@ -221,8 +221,8 @@ class TestCalculateCapacity:
             'occupancy': 0.95
         }
 
-        with pytest.raises(ValueError, match="target_cph must be positive"):
-            calculate_capacity(10, config, 0)
+        result = calculate_capacity(10, config, 0)
+        assert result == 0.0
 
     def test_missing_config_keys_raises_error(self):
         """Test that missing config keys raise ValueError."""

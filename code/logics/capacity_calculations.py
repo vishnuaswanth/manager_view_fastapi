@@ -125,7 +125,7 @@ def calculate_capacity(
         target_cph: Target Cases Per Hour (>= 0, if 0 returns 0.0)
 
     Returns:
-        Capacity (float, rounded to 2 decimal places)
+        Capacity (float, floored to integer value - e.g., 1603.8 → 1603.0)
         Returns 0.0 if fte_avail is 0 or target_cph is 0
 
     Raises:
@@ -182,8 +182,9 @@ def calculate_capacity(
             (1 - shrinkage) *
             target_cph
         )
-        # Round to 2 decimal places
-        return round(capacity, 2)
+        # Floor to integer (e.g., 1603.8 → 1603, 1603.996 → 1603)
+        # This ensures capacity is always rounded DOWN, not to nearest
+        return float(math.floor(capacity))
     except (OverflowError, ValueError) as e:
         logger.error(
             f"Error calculating Capacity: fte_avail={fte_avail}, config={config}, "

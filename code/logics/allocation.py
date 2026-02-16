@@ -1371,7 +1371,7 @@ def get_capacity(row, month, calculations: Calculations):
 
         logging.debug(f"FTE Avail for {month}: {fte_available}, work_type: {work_type}")
 
-        # Use centralized calculation utility (returns float, rounded to 2 decimals)
+        # Use centralized calculation utility (returns floored integer as float)
         capacity = calculate_capacity(int(fte_available), month_config, target_cph)
         return capacity
 

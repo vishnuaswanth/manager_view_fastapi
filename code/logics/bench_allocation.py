@@ -1881,7 +1881,7 @@ class BenchAllocator:
             # Cache hit
             config = self._month_config_cache[cache_key]
 
-        # Use centralized calculation utility (returns float, rounded to 2 decimals)
+        # Use centralized calculation utility (returns floored integer as float)
         capacity = calculate_capacity(fte_count, config, forecast_row.target_cph)
 
         return int(capacity)
