@@ -27,7 +27,13 @@ from code.logics.cph_update_transformer import (
 )
 from code.logics.config.change_types import (
     CHANGE_TYPE_BENCH_ALLOCATION,
-    CHANGE_TYPE_CPH_UPDATE
+    CHANGE_TYPE_CPH_UPDATE,
+    CHANGE_TYPE_FORECAST_REALLOCATION
+)
+from code.logics.forecast_reallocation_transformer import (
+    get_reallocation_filters,
+    get_reallocation_data,
+    calculate_reallocation_preview
 )
 from code.logics.core_utils import CoreUtils
 from code.api.dependencies import get_core_utils, get_logger
@@ -180,6 +186,58 @@ class CPHUpdateRequest(BaseUpdateRequest[ModifiedForecastRecord]):
     This ensures consistency across all forecast update operations.
     """
     pass
+
+
+# ============ Forecast Reallocation Pydantic Models ============
+
+class ForecastReallocationMonthInput(BaseModel):
+    """Month input for forecast reallocation preview request - includes fte_avail_change."""
+    forecast: int = Field(ge=0, description="Client forecast value")
+    fte_req: int = Field(ge=0, description="FTE Required")
+    fte_avail: int = Field(ge=0, description="FTE Available")
+    capacity: int = Field(ge=0, description="Capacity value")
+    fte_avail_change: int = Field(default=0, description="Change in FTE Available")
+
+    class Config:
+        extra = "forbid"
+
+
+class ForecastReallocationPreviewRecord(BaseModel):
+    """Record in forecast reallocation preview request."""
+    case_id: str = Field(min_length=1, description="Case/Forecast ID")
+    main_lob: str = Field(min_length=1, description="Main Line of Business")
+    state: str = Field(min_length=1, description="State code")
+    case_type: str = Field(min_length=1, description="Case Type")
+    target_cph: float = Field(ge=0, le=200, description="Target Cases Per Hour")
+    target_cph_change: float = Field(default=0, description="Change in Target CPH")
+    modified_fields: List[str] = Field(min_items=1, description="List of modified field paths")
+    months: Dict[str, ForecastReallocationMonthInput] = Field(
+        description="Month-specific data keyed by month label (e.g., 'Jun-25')"
+    )
+
+    class Config:
+        extra = "forbid"
+
+
+class ForecastReallocationPreviewRequest(BaseModel):
+    """Preview request for forecast reallocation operation."""
+    month: str = Field(min_length=1, description="Report month name")
+    year: int = Field(ge=2020, le=2050, description="Report year")
+    modified_records: List[ForecastReallocationPreviewRecord] = Field(
+        min_items=1,
+        description="List of records with modifications"
+    )
+
+
+class ForecastReallocationUpdateRequest(BaseUpdateRequest[ModifiedForecastRecord]):
+    """
+    Update request for forecast reallocation operation.
+
+    Uses ModifiedForecastRecord format (same as bench allocation and CPH update)
+    to accept the preview-calculated forecast changes.
+    user_notes is required per spec (max 500 chars).
+    """
+    user_notes: str = Field(..., max_length=500, description="User notes (required)")
 
 
 # ============ Bench Allocation Operation Configuration ============
@@ -745,3 +803,253 @@ async def update_target_cph(request: CPHUpdateRequest):
         Success response with update counts
     """
     return execute_update_operation(request, cph_update_operation, core_utils)
+
+
+# ============ Forecast Reallocation Operation Configuration ============
+
+def _perform_reallocation_update(
+    request: ForecastReallocationUpdateRequest,
+    modified_records_dict: List[Dict],
+    months_dict: Dict[str, str],
+    core_utils: CoreUtils
+) -> None:
+    """
+    Execute forecast reallocation updates using unified updater.
+
+    Args:
+        request: Forecast reallocation update request
+        modified_records_dict: Modified records as dict list
+        months_dict: Month index mapping
+        core_utils: CoreUtils instance
+
+    Returns:
+        None (void function)
+    """
+    update_forecast_from_modified_records(
+        modified_records_dict,
+        months_dict,
+        request.month,
+        request.year,
+        core_utils,
+        operation_type="forecast_reallocation"
+    )
+
+
+def _prepare_reallocation_history_records(
+    request: ForecastReallocationUpdateRequest,
+    modified_records_dict: List[Dict],
+    months_dict: Dict[str, str],
+    core_utils: CoreUtils
+) -> List[Dict]:
+    """
+    Prepare history records for forecast reallocation.
+
+    Forecast reallocation uses modified records directly without transformation.
+
+    Args:
+        request: Forecast reallocation update request
+        modified_records_dict: Modified records as dict list
+        months_dict: Month index mapping
+        core_utils: CoreUtils instance
+
+    Returns:
+        List of record dicts for history logging
+    """
+    return modified_records_dict
+
+
+def _format_reallocation_response(
+    update_result: None,
+    history_log_id: str,
+    request: ForecastReallocationUpdateRequest
+) -> Dict:
+    """
+    Format forecast reallocation success response.
+
+    Args:
+        update_result: Update operation result (None for reallocation)
+        history_log_id: UUID of created history log
+        request: Forecast reallocation update request
+
+    Returns:
+        Response dict with success flag, message, counts, and history ID
+    """
+    return {
+        "success": True,
+        "message": "Forecast reallocation updated successfully",
+        "records_updated": len(request.modified_records),
+        "history_log_id": history_log_id
+    }
+
+
+# Create forecast reallocation operation configuration
+forecast_reallocation_operation = UpdateOperation(
+    change_type=CHANGE_TYPE_FORECAST_REALLOCATION,
+    perform_update=_perform_reallocation_update,
+    prepare_history_records=_prepare_reallocation_history_records,
+    format_response=_format_reallocation_response
+)
+
+
+# ============ Endpoint 7: GET /api/edit-view/forecast-reallocation/filters/ (DEPRECATED) ============
+
+@router.get("/api/edit-view/forecast-reallocation/filters/")
+async def get_forecast_reallocation_filters(
+    month: str = Query(...),
+    year: int = Query(...)
+):
+    """
+    Get available filter options for forecast reallocation.
+
+    DEPRECATED: This endpoint is no longer used by the frontend UI.
+    Filter options are now extracted client-side from loaded data.
+    Kept for backward compatibility.
+
+    Args:
+        month: Report month name
+        year: Report year
+
+    Returns:
+        Dictionary with main_lobs, states, and case_types lists
+    """
+    try:
+        filters = get_reallocation_filters(month, year, core_utils)
+
+        return {
+            "success": True,
+            **filters
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "error": str(e)}
+        )
+    except Exception as e:
+        logger.error(f"Failed to get reallocation filters: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "error": "Failed to retrieve reallocation filters"}
+        )
+
+
+# ============ Endpoint 8: GET /api/edit-view/forecast-reallocation/data/ ============
+
+@router.get("/api/edit-view/forecast-reallocation/data/")
+async def get_forecast_reallocation_data(
+    month: str = Query(...),
+    year: int = Query(...),
+    main_lobs: Optional[List[str]] = Query(None, alias="main_lobs[]"),
+    states: Optional[List[str]] = Query(None, alias="states[]"),
+    case_types: Optional[List[str]] = Query(None, alias="case_types[]")
+):
+    """
+    Retrieve editable forecast records with 6-month data for reallocation.
+
+    Args:
+        month: Report month name
+        year: Report year
+        main_lobs: Optional list of Main LOB values to filter
+        states: Optional list of State codes to filter
+        case_types: Optional list of Case Type values to filter
+
+    Returns:
+        Dictionary with months mapping and data records
+    """
+    try:
+        months_dict, data, total = get_reallocation_data(
+            month,
+            year,
+            core_utils,
+            main_lobs=main_lobs,
+            states=states,
+            case_types=case_types
+        )
+
+        return {
+            "success": True,
+            "months": months_dict,
+            "data": data,
+            "total": total
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "error": str(e)}
+        )
+    except Exception as e:
+        logger.error(f"Failed to get reallocation data: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "error": "Failed to retrieve reallocation data"}
+        )
+
+
+# ============ Endpoint 9: POST /api/edit-view/forecast-reallocation/preview/ ============
+
+@router.post("/api/edit-view/forecast-reallocation/preview/", response_model=PreviewResponse)
+async def preview_forecast_reallocation(
+    request: ForecastReallocationPreviewRequest
+) -> PreviewResponse:
+    """
+    Preview forecast reallocation changes with recalculated FTE Required and Capacity.
+
+    Args:
+        request: Forecast reallocation preview request with modified records
+
+    Returns:
+        PreviewResponse: Validated Pydantic model with recalculated values
+    """
+    try:
+        # Validate request
+        if not request.modified_records:
+            raise HTTPException(
+                status_code=400,
+                detail={"success": False, "error": "No records provided for preview"}
+            )
+
+        # Convert Pydantic models to dicts for transformer functions
+        modified_records_dict = [record.model_dump() for record in request.modified_records]
+
+        # Calculate preview
+        preview_response = calculate_reallocation_preview(
+            request.month,
+            request.year,
+            modified_records_dict,
+            core_utils
+        )
+
+        return preview_response
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "error": str(e)}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to calculate reallocation preview: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"success": False, "error": "Failed to calculate reallocation preview"}
+        )
+
+
+# ============ Endpoint 10: POST /api/edit-view/forecast-reallocation/update/ ============
+
+@router.post("/api/edit-view/forecast-reallocation/update/")
+async def update_forecast_reallocation(request: ForecastReallocationUpdateRequest):
+    """
+    Apply forecast reallocation changes to forecast data.
+
+    Uses generic update handler with forecast reallocation configuration.
+
+    Args:
+        request: Forecast reallocation update request with modified records
+
+    Returns:
+        Success response with records updated count and history log ID
+    """
+    return execute_update_operation(request, forecast_reallocation_operation, core_utils)
