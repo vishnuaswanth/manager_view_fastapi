@@ -320,8 +320,16 @@ def calculate_reallocation_preview(
             continue
 
         # Get work type for config lookup
-        work_type = _get_work_type_from_main_lob(original.Centene_Capacity_Plan_Main_LOB)
+        # Use main_lob from input record if available, otherwise from DB
+        main_lob_for_work_type = input_record.get('main_lob') or original.Centene_Capacity_Plan_Main_LOB
+        work_type = _get_work_type_from_main_lob(main_lob_for_work_type)
         month_config = get_cached_month_config(work_type)
+
+        logger.info(
+            f"[Work Type Detection] case_id={case_id}, "
+            f"main_lob='{main_lob_for_work_type}', "
+            f"detected_work_type='{work_type}'"
+        )
 
         # Extract changes from modified_fields (frontend sends new values here)
         input_modified_fields = input_record.get('modified_fields', [])
@@ -388,12 +396,16 @@ def calculate_reallocation_preview(
                 # input_month_data might be a Pydantic model
                 new_fte_avail = int(getattr(input_month_data, 'fte_avail', orig_fte_avail))
 
-            # Debug logging
-            logger.debug(
-                f"[Reallocation Preview] {month_label}: "
+            # Debug logging - show all values used in calculation
+            logger.info(
+                f"[Reallocation Calc] {month_label} | work_type={work_type} | "
+                f"config: WD={config.get('working_days')}, WH={config.get('work_hours')}, "
+                f"shrinkage={config.get('shrinkage')}, occupancy={config.get('occupancy')}"
+            )
+            logger.info(
+                f"[Reallocation Calc] {month_label} | "
                 f"orig_fte_avail={orig_fte_avail}, new_fte_avail={new_fte_avail}, "
-                f"target_cph={new_target_cph}, "
-                f"config={config}"
+                f"orig_target_cph={original_target_cph}, new_target_cph={new_target_cph}"
             )
 
             # Recalculate FTE Required based on new CPH
@@ -402,10 +414,19 @@ def calculate_reallocation_preview(
             # Recalculate Capacity based on new FTE Available and new CPH
             new_capacity = calculate_capacity(new_fte_avail, config, new_target_cph)
 
-            # Debug logging for capacity calculation
-            logger.debug(
-                f"[Reallocation Preview] {month_label}: "
-                f"calculated new_capacity={new_capacity}, orig_capacity={orig_capacity}"
+            # Manual calculation for verification
+            manual_capacity = (
+                new_fte_avail *
+                config.get('working_days', 21) *
+                config.get('work_hours', 9) *
+                (1 - config.get('shrinkage', 0.10)) *
+                new_target_cph
+            )
+
+            logger.info(
+                f"[Reallocation Calc] {month_label} | "
+                f"orig_capacity={orig_capacity}, new_capacity={new_capacity}, "
+                f"manual_verify={manual_capacity:.2f}"
             )
 
             # Calculate deltas
