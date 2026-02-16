@@ -180,23 +180,43 @@ def get_month_config_for_forecast(
     return month_config
 
 
-def _get_work_type_from_main_lob(main_lob: str) -> str:
+def _get_work_type_from_main_lob(main_lob: str, case_type: str = None) -> str:
     """
-    Extract work type (Domestic/Global) from Main LOB string.
+    Extract work type (Domestic/Global) from Main LOB and/or case_type string.
+
+    Logic matches allocation.py:
+    1. Parse main_lob to extract locality component
+    2. Special case: OIC Volumes - check case_type for "domestic"
+    3. Otherwise: check extracted locality for "domestic"
+    4. Default: Global
 
     Args:
-        main_lob: Main LOB string (e.g., "Amisys Medicaid DOMESTIC", "Facets Medicare OFFSHORE")
+        main_lob: Main LOB string (e.g., "Amisys Medicaid DOMESTIC", "Amisys High Dollar")
+        case_type: Optional case_type string (used for OIC Volumes special case)
 
     Returns:
-        "Global" if main_lob contains OFFSHORE/GLOBAL (case-insensitive), otherwise "Domestic"
+        "Domestic" if domestic found in locality or case_type (for OIC), otherwise "Global"
     """
-    if not main_lob:
-        return "Domestic"
+    from code.logics.manager_view import parse_main_lob
 
-    main_lob_upper = main_lob.upper()
-    if "OFFSHORE" in main_lob_upper or "GLOBAL" in main_lob_upper:
-        return "Global"
-    return "Domestic"
+    # Parse main_lob to extract locality component
+    parsed_lob = parse_main_lob(main_lob)
+    lob_locality = parsed_lob.get('locality', '')
+
+    # SPECIAL CASE: OIC Volumes - locality determined from case_type column
+    is_oic_volumes = (
+        main_lob and
+        'oic' in str(main_lob).lower() and
+        'volumes' in str(main_lob).lower()
+    )
+
+    if is_oic_volumes:
+        # Check case_type for "domestic"
+        case_type_lower = str(case_type).lower() if case_type else ''
+        return 'Domestic' if 'domestic' in case_type_lower else 'Global'
+    else:
+        # Check extracted locality for "domestic"
+        return 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
 
 
 def calculate_cph_preview(
@@ -287,9 +307,10 @@ def calculate_cph_preview(
 
             # Calculate new FTE Required and Capacity for each affected record
             for forecast_row in forecast_records:
-                # Determine work_type from main_lob for correct month config
+                # Determine work_type from main_lob and case_type for correct month config
                 work_type = _get_work_type_from_main_lob(
-                    forecast_row.Centene_Capacity_Plan_Main_LOB
+                    forecast_row.Centene_Capacity_Plan_Main_LOB,
+                    forecast_row.Centene_Capacity_Plan_Case_Type
                 )
                 month_config = get_cached_month_config(work_type)
 
@@ -481,9 +502,10 @@ def update_forecast_from_cph_changes(
             new_cph = cph_record['modified_target_cph']
 
             for forecast_row in forecast_records:
-                # Determine work_type from main_lob for correct month config
+                # Determine work_type from main_lob and case_type for correct month config
                 work_type = _get_work_type_from_main_lob(
-                    forecast_row.Centene_Capacity_Plan_Main_LOB
+                    forecast_row.Centene_Capacity_Plan_Main_LOB,
+                    forecast_row.Centene_Capacity_Plan_Case_Type
                 )
                 month_config = get_cached_month_config(work_type)
 

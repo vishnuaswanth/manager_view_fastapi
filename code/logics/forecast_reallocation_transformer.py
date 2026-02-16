@@ -320,14 +320,16 @@ def calculate_reallocation_preview(
             continue
 
         # Get work type for config lookup
-        # Use main_lob from input record if available, otherwise from DB
+        # Use main_lob and case_type from input record if available, otherwise from DB
         main_lob_for_work_type = input_record.get('main_lob') or original.Centene_Capacity_Plan_Main_LOB
-        work_type = _get_work_type_from_main_lob(main_lob_for_work_type)
+        case_type_for_work_type = input_record.get('case_type') or original.Centene_Capacity_Plan_Case_Type
+        work_type = _get_work_type_from_main_lob(main_lob_for_work_type, case_type_for_work_type)
         month_config = get_cached_month_config(work_type)
 
         logger.info(
             f"[Work Type Detection] case_id={case_id}, "
             f"main_lob='{main_lob_for_work_type}', "
+            f"case_type='{case_type_for_work_type}', "
             f"detected_work_type='{work_type}'"
         )
 
