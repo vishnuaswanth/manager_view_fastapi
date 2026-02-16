@@ -339,14 +339,18 @@ def calculate_reallocation_preview(
 
         logger.debug(f"Extracted target_cph: {extracted_target_cph}, FTE changes: {fte_changes_from_modified}")
 
-        # Get new target CPH - prioritize extracted value from modified_fields
+        # Get new target CPH - ONLY use extracted value from modified_fields
+        # If target_cph was not modified, always use original DB value to avoid
+        # incorrect FTE Required recalculation
         original_target_cph = float(original.Centene_Capacity_Plan_Target_CPH or 0)
         if extracted_target_cph is not None:
             new_target_cph = extracted_target_cph
             logger.debug(f"Using target_cph from modified_fields: {new_target_cph}")
         else:
-            # Fall back to top-level target_cph field or original value
-            new_target_cph = float(input_record.get('target_cph', original_target_cph))
+            # target_cph was NOT modified - use original database value
+            # Do NOT use input_record.get('target_cph') as it may differ from DB
+            new_target_cph = original_target_cph
+            logger.debug(f"target_cph not modified, using original DB value: {new_target_cph}")
 
         target_cph_change = new_target_cph - original_target_cph
 
