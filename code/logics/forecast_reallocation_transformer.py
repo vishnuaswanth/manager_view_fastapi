@@ -265,7 +265,7 @@ def calculate_reallocation_preview(
             'months': {}
         }
         new_data = {
-            'target_cph': float(input_rec.get('target_cph', old_data['target_cph'])),
+            'target_cph': old_data['target_cph'],  # Start with DB value
             'months': {}
         }
 
@@ -281,9 +281,11 @@ def calculate_reallocation_preview(
             # Initialize new_data with old values
             new_data['months'][month_label] = old_data['months'][month_label].copy()
 
-        # Step 3: Validate target_cph change
+        # Step 3: Update target_cph only if change was reported
         input_target_cph_change = float(input_rec.get('target_cph_change', 0))
         if input_target_cph_change != 0:
+            new_data['target_cph'] = float(input_rec.get('target_cph', old_data['target_cph']))
+            # Validate: new - old should equal reported change
             calc_change = new_data['target_cph'] - old_data['target_cph']
             if abs(calc_change - input_target_cph_change) > 0.001:
                 raise ValueError(
@@ -291,7 +293,7 @@ def calculate_reallocation_preview(
                     f"reported={input_target_cph_change}, calculated={calc_change}"
                 )
 
-        target_cph_changed = (new_data['target_cph'] != old_data['target_cph'])
+        target_cph_changed = (input_target_cph_change != 0)
 
         # Step 4: Update fte_avail for each month from input
         input_months = input_rec.get('months', {})
@@ -325,18 +327,41 @@ def calculate_reallocation_preview(
                 )
 
         # Step 6: Calculate capacity for all 6 months
+        # Using correct target_cph (DB value if unchanged) ensures consistent results
+        logger.info(f"[Capacity Calc] Record: {key}, target_cph_changed={target_cph_changed}")
+        logger.info(f"[Capacity Calc] old_target_cph={old_data['target_cph']}, new_target_cph={new_data['target_cph']}")
+
         for month_idx, month_label in months_dict.items():
             config = month_config[month_idx]
-            new_data['months'][month_label]['capacity'] = int(calculate_capacity(
-                new_data['months'][month_label]['fte_avail'],
-                config,
-                new_data['target_cph']
-            ))
+            fte_avail = new_data['months'][month_label]['fte_avail']
+            target_cph = new_data['target_cph']
+
+            # Log inputs
+            logger.info(
+                f"[Capacity Calc] {month_label} INPUTS: "
+                f"fte_avail={fte_avail}, target_cph={target_cph}, "
+                f"working_days={config.get('working_days')}, "
+                f"work_hours={config.get('work_hours')}, "
+                f"shrinkage={config.get('shrinkage')}"
+            )
+
+            # Calculate
+            new_capacity = int(calculate_capacity(fte_avail, config, target_cph))
+            old_capacity = old_data['months'][month_label]['capacity']
+
+            # Log outputs
+            logger.info(
+                f"[Capacity Calc] {month_label} OUTPUT: "
+                f"old_capacity={old_capacity}, new_capacity={new_capacity}, "
+                f"diff={new_capacity - old_capacity}"
+            )
+
+            new_data['months'][month_label]['capacity'] = new_capacity
 
         # Step 7: Calculate changes and build response
         modified_fields = []
-
-        modified_fields.append("target_cph")
+        if target_cph_changed:
+            modified_fields.append("target_cph")
 
         month_data = {}
         for month_label in month_labels:
