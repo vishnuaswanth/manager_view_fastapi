@@ -197,50 +197,6 @@ def get_reallocation_data(
         return months_dict, data_records, total
 
 
-def _extract_changes_from_modified_fields(modified_fields: List) -> Tuple[Optional[float], Dict[str, int]]:
-    """
-    Extract target_cph and FTE available changes from modified_fields list.
-
-    The frontend sends modified_fields as objects:
-    - CPH change: {"field": "target_cph", "original_value": 3, "new_value": 5, "change": 2}
-    - FTE change: {"month_label": "May-25", "field": "fte_avail", "original_fte_avail": 4,
-                   "new_fte_avail": 7, "fte_avail_change": 3, "forecast": 1535}
-
-    Args:
-        modified_fields: List of modified field objects from frontend
-
-    Returns:
-        Tuple of (new_target_cph or None, dict mapping month_label to new_fte_avail)
-    """
-    new_target_cph = None
-    fte_changes = {}
-
-    for field_obj in modified_fields:
-        if isinstance(field_obj, dict):
-            field_name = field_obj.get('field', '')
-
-            if field_name == 'target_cph':
-                # Extract new CPH value
-                new_value = field_obj.get('new_value')
-                if new_value is not None:
-                    new_target_cph = float(new_value)
-                    logger.debug(f"Extracted target_cph change: {new_target_cph}")
-
-            elif field_name == 'fte_avail' and 'month_label' in field_obj:
-                # Extract FTE change for specific month
-                month_label = field_obj['month_label']
-                new_fte_avail = field_obj.get('new_fte_avail')
-                if new_fte_avail is not None:
-                    fte_changes[month_label] = int(new_fte_avail)
-                    logger.debug(f"Extracted FTE change: {month_label} -> {new_fte_avail}")
-
-        elif isinstance(field_obj, str):
-            # String format like "target_cph" or "May-25.fte_avail" - no value info
-            pass
-
-    return new_target_cph, fte_changes
-
-
 def calculate_reallocation_preview(
     month: str,
     year: int,
@@ -248,262 +204,181 @@ def calculate_reallocation_preview(
     core_utils: CoreUtils
 ) -> PreviewResponse:
     """
-    Calculate preview for forecast reallocation with recalculated FTE Required and Capacity.
+    Calculate preview for forecast reallocation.
 
-    Takes user-edited Target CPH and FTE Available values and recalculates:
-    - FTE Required: Based on forecast / (config * new CPH)
-    - Capacity: Based on new FTE Available * config * new CPH
-
-    Args:
-        month: Report month name (e.g., "April")
-        year: Report year (e.g., 2025)
-        modified_records: List of records with user modifications from frontend
-        core_utils: CoreUtils instance
-
-    Returns:
-        PreviewResponse: Validated Pydantic model with recalculated values
-
-    Raises:
-        ValueError: If no modified records provided or validation fails
+    Steps:
+    1. Get DB record for each modified record
+    2. Create old_data (from DB) and new_data (to update)
+    3. Update target_cph from modified record
+    4. Update fte_avail for each month from modified record
+    5. If target_cph changed, recalculate fte_required for all 6 months
+    6. Calculate capacity for all 6 months
+    7. Calculate changes by comparing old_data and new_data
     """
     if not modified_records:
         raise ValueError("No records provided for preview")
 
-    # Get month mappings
     months_dict = get_months_dict(month, year, core_utils)
+    month_labels = list(months_dict.values())  # ['May-25', 'Jun-25', ...]
 
-    # Cache month configs by work_type to avoid redundant DB calls
-    month_config_cache: Dict[str, Dict] = {}
+    # Cache month configs by work_type
+    config_cache: Dict[str, Dict] = {}
 
-    def get_cached_month_config(work_type: str) -> Dict:
-        """Get month config from cache or fetch from DB."""
-        if work_type not in month_config_cache:
-            month_config_cache[work_type] = get_month_config_for_forecast(
-                month, year, core_utils, work_type
-            )
-        return month_config_cache[work_type]
+    def get_config(work_type: str) -> Dict:
+        if work_type not in config_cache:
+            config_cache[work_type] = get_month_config_for_forecast(month, year, core_utils, work_type)
+        return config_cache[work_type]
 
-    # Get original values from database for comparison
-    db_manager = core_utils.get_db_manager(
-        ForecastModel,
-        limit=10000,
-        skip=0,
-        select_columns=None
-    )
-
-    # Build case_id to original record lookup
-    case_ids = [r.get('case_id') for r in modified_records if r.get('case_id')]
-
+    # Load all DB records for this month/year
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=10000, skip=0, select_columns=None)
     with db_manager.SessionLocal() as session:
-        original_records = session.query(ForecastModel).filter(
+        db_records = session.query(ForecastModel).filter(
             ForecastModel.Month == month,
-            ForecastModel.Year == year,
-            ForecastModel.Centene_Capacity_Plan_Call_Type_ID.in_(case_ids)
+            ForecastModel.Year == year
         ).all()
-
-        original_lookup = {
-            r.Centene_Capacity_Plan_Call_Type_ID: r for r in original_records
+        db_lookup = {
+            (r.Centene_Capacity_Plan_Main_LOB, r.Centene_Capacity_Plan_State, r.Centene_Capacity_Plan_Case_Type): r
+            for r in db_records
         }
 
     result_records = []
     total_fte_change = 0
     total_capacity_change = 0
 
-    for input_record in modified_records:
-        case_id = input_record.get('case_id')
-        if not case_id:
-            raise ValueError("Record missing case_id")
+    for input_rec in modified_records:
+        # Step 1: Get DB record
+        key = (input_rec.get('main_lob'), input_rec.get('state'), input_rec.get('case_type'))
+        if not all(key):
+            raise ValueError(f"Record missing required fields: {key}")
 
-        original = original_lookup.get(case_id)
-        if not original:
-            logger.warning(f"Original record not found for case_id {case_id}, skipping")
+        db_rec = db_lookup.get(key)
+        if not db_rec:
+            logger.warning(f"DB record not found for {key}, skipping")
             continue
 
-        # Get work type for config lookup
-        # Use main_lob and case_type from input record if available, otherwise from DB
-        main_lob_for_work_type = input_record.get('main_lob') or original.Centene_Capacity_Plan_Main_LOB
-        case_type_for_work_type = input_record.get('case_type') or original.Centene_Capacity_Plan_Case_Type
-        work_type = _get_work_type_from_main_lob(main_lob_for_work_type, case_type_for_work_type)
-        month_config = get_cached_month_config(work_type)
+        work_type = _get_work_type_from_main_lob(key[0], key[2])
+        month_config = get_config(work_type)
 
-        logger.info(
-            f"[Work Type Detection] case_id={case_id}, "
-            f"main_lob='{main_lob_for_work_type}', "
-            f"case_type='{case_type_for_work_type}', "
-            f"detected_work_type='{work_type}'"
-        )
+        # Step 2: Create old_data and new_data structures
+        old_data = {
+            'target_cph': float(db_rec.Centene_Capacity_Plan_Target_CPH or 0),
+            'months': {}
+        }
+        new_data = {
+            'target_cph': float(input_rec.get('target_cph', old_data['target_cph'])),
+            'months': {}
+        }
 
-        # Extract changes from modified_fields (frontend sends new values here)
-        input_modified_fields = input_record.get('modified_fields', [])
-        extracted_target_cph, fte_changes_from_modified = _extract_changes_from_modified_fields(input_modified_fields)
-
-        logger.debug(f"Extracted target_cph: {extracted_target_cph}, FTE changes: {fte_changes_from_modified}")
-
-        # Get new target CPH - ONLY use extracted value from modified_fields
-        # If target_cph was not modified, always use original DB value to avoid
-        # incorrect FTE Required recalculation
-        original_target_cph = float(original.Centene_Capacity_Plan_Target_CPH or 0)
-        if extracted_target_cph is not None:
-            new_target_cph = extracted_target_cph
-            logger.debug(f"Using target_cph from modified_fields: {new_target_cph}")
-        else:
-            # target_cph was NOT modified - use original database value
-            # Do NOT use input_record.get('target_cph') as it may differ from DB
-            new_target_cph = original_target_cph
-            logger.debug(f"target_cph not modified, using original DB value: {new_target_cph}")
-
-        target_cph_change = new_target_cph - original_target_cph
-
-        # Track modified fields for response (will include all fields for months with changes)
-        modified_fields = []
-        if target_cph_change != 0:
-            modified_fields.append("target_cph")
-
-        input_months = input_record.get('months', {})
-        month_data = {}
-
-        # Calculate for each month
+        # Populate old_data months from DB
         for month_idx, month_label in months_dict.items():
             suffix = month_idx.replace('month', '')
-            config = month_config[month_idx]
+            old_data['months'][month_label] = {
+                'forecast': int(getattr(db_rec, get_forecast_column_name('forecast', suffix), 0) or 0),
+                'fte_req': int(getattr(db_rec, get_forecast_column_name('fte_req', suffix), 0) or 0),
+                'fte_avail': int(getattr(db_rec, get_forecast_column_name('fte_avail', suffix), 0) or 0),
+                'capacity': int(getattr(db_rec, get_forecast_column_name('capacity', suffix), 0) or 0),
+            }
+            # Initialize new_data with old values
+            new_data['months'][month_label] = old_data['months'][month_label].copy()
 
-            # Get original values
-            orig_forecast = int(getattr(
-                original,
-                get_forecast_column_name('forecast', suffix),
-                0
-            ) or 0)
-            orig_fte_req = int(getattr(
-                original,
-                get_forecast_column_name('fte_req', suffix),
-                0
-            ) or 0)
-            orig_fte_avail = int(getattr(
-                original,
-                get_forecast_column_name('fte_avail', suffix),
-                0
-            ) or 0)
-            orig_capacity = int(getattr(
-                original,
-                get_forecast_column_name('capacity', suffix),
-                0
-            ) or 0)
-
-            # Determine what changed for this record/month
-            target_cph_changed = (target_cph_change != 0)
-            fte_avail_changed_this_month = (month_label in fte_changes_from_modified)
-
-            # Debug logging
-            logger.info(
-                f"[Reallocation Calc] {month_label} | work_type={work_type} | "
-                f"target_cph_changed={target_cph_changed}, fte_avail_changed={fte_avail_changed_this_month}"
-            )
-            logger.info(
-                f"[Reallocation Calc] {month_label} | "
-                f"config: WD={config.get('working_days')}, WH={config.get('work_hours')}, "
-                f"shrinkage={config.get('shrinkage')}, occupancy={config.get('occupancy')}"
-            )
-
-            # === CASE 1: FTE Required ===
-            # Only recalculate if target_cph changed, otherwise keep original DB value
-            if target_cph_changed:
-                new_fte_req = calculate_fte_required(orig_forecast, config, new_target_cph)
-                fte_req_change = new_fte_req - orig_fte_req
-                logger.debug(f"[{month_label}] FTE Req recalculated: {orig_fte_req} -> {new_fte_req}")
-            else:
-                new_fte_req = orig_fte_req
-                fte_req_change = 0
-                logger.debug(f"[{month_label}] FTE Req unchanged: {new_fte_req}")
-
-            # === CASE 2: FTE Available ===
-            # Only change if user explicitly modified it for this month
-            if fte_avail_changed_this_month:
-                new_fte_avail = fte_changes_from_modified[month_label]
-                fte_avail_change = new_fte_avail - orig_fte_avail
-                logger.debug(f"[{month_label}] FTE Avail changed: {orig_fte_avail} -> {new_fte_avail}")
-            else:
-                new_fte_avail = orig_fte_avail
-                fte_avail_change = 0
-                logger.debug(f"[{month_label}] FTE Avail unchanged: {new_fte_avail}")
-
-            # === CASE 3: Capacity ===
-            # Recalculate only if EITHER target_cph OR fte_avail changed
-            if target_cph_changed or fte_avail_changed_this_month:
-                # Use the appropriate values based on what changed:
-                # - If only target_cph changed: use orig_fte_avail with new_target_cph
-                # - If only fte_avail changed: use new_fte_avail with original_target_cph
-                # - If both changed: use new_fte_avail with new_target_cph
-                calc_fte_avail = new_fte_avail  # Already set correctly above
-                calc_target_cph = new_target_cph  # Already set correctly above
-                new_capacity = calculate_capacity(calc_fte_avail, config, calc_target_cph)
-                capacity_change = int(new_capacity) - orig_capacity
-                logger.debug(
-                    f"[{month_label}] Capacity recalculated: {orig_capacity} -> {int(new_capacity)} "
-                    f"(fte_avail={calc_fte_avail}, target_cph={calc_target_cph})"
+        # Step 3: Validate target_cph change
+        input_target_cph_change = float(input_rec.get('target_cph_change', 0))
+        if input_target_cph_change != 0:
+            calc_change = new_data['target_cph'] - old_data['target_cph']
+            if abs(calc_change - input_target_cph_change) > 0.001:
+                raise ValueError(
+                    f"target_cph_change mismatch for {key}: "
+                    f"reported={input_target_cph_change}, calculated={calc_change}"
                 )
+
+        target_cph_changed = (new_data['target_cph'] != old_data['target_cph'])
+
+        # Step 4: Update fte_avail for each month from input
+        input_months = input_rec.get('months', {})
+        for month_label in month_labels:
+            input_month = input_months.get(month_label, {})
+            if isinstance(input_month, dict):
+                new_fte_avail = int(input_month.get('fte_avail', old_data['months'][month_label]['fte_avail']))
+                input_fte_change = int(input_month.get('fte_avail_change', 0))
             else:
-                new_capacity = orig_capacity
-                capacity_change = 0
-                logger.debug(f"[{month_label}] Capacity unchanged: {new_capacity}")
+                new_fte_avail = int(getattr(input_month, 'fte_avail', old_data['months'][month_label]['fte_avail']))
+                input_fte_change = int(getattr(input_month, 'fte_avail_change', 0))
 
-            logger.info(
-                f"[Reallocation Calc] {month_label} | "
-                f"orig: fte_req={orig_fte_req}, fte_avail={orig_fte_avail}, capacity={orig_capacity} | "
-                f"new: fte_req={new_fte_req}, fte_avail={new_fte_avail}, capacity={int(new_capacity)}"
-            )
+            # Validate fte_avail change
+            if input_fte_change != 0:
+                calc_change = new_fte_avail - old_data['months'][month_label]['fte_avail']
+                if calc_change != input_fte_change:
+                    raise ValueError(
+                        f"fte_avail_change mismatch for {key} month {month_label}: "
+                        f"reported={input_fte_change}, calculated={calc_change}"
+                    )
 
-            # Check if any field changed for this month
-            has_changes = (
-                fte_req_change != 0 or
-                fte_avail_change != 0 or
-                capacity_change != 0
-            )
+            new_data['months'][month_label]['fte_avail'] = new_fte_avail
 
-            if has_changes:
-                # Option 1: Track ALL 4 fields for months with any change
-                fields_to_add = [
+        # Step 5: If target_cph changed, recalculate fte_required for all 6 months
+        if target_cph_changed:
+            for month_idx, month_label in months_dict.items():
+                config = month_config[month_idx]
+                forecast = old_data['months'][month_label]['forecast']
+                new_data['months'][month_label]['fte_req'] = calculate_fte_required(
+                    forecast, config, new_data['target_cph']
+                )
+
+        # Step 6: Calculate capacity for all 6 months
+        for month_idx, month_label in months_dict.items():
+            config = month_config[month_idx]
+            new_data['months'][month_label]['capacity'] = int(calculate_capacity(
+                new_data['months'][month_label]['fte_avail'],
+                config,
+                new_data['target_cph']
+            ))
+
+        # Step 7: Calculate changes and build response
+        modified_fields = []
+
+        modified_fields.append("target_cph")
+
+        month_data = {}
+        for month_label in month_labels:
+            old_m = old_data['months'][month_label]
+            new_m = new_data['months'][month_label]
+
+            fte_req_change = new_m['fte_req'] - old_m['fte_req']
+            fte_avail_change = new_m['fte_avail'] - old_m['fte_avail']
+            capacity_change = new_m['capacity'] - old_m['capacity']
+
+            if fte_req_change != 0 or fte_avail_change != 0 or capacity_change != 0:
+                modified_fields.extend([
                     f"{month_label}.forecast",
                     f"{month_label}.fte_req",
                     f"{month_label}.fte_avail",
                     f"{month_label}.capacity"
-                ]
-                for field in fields_to_add:
-                    if field not in modified_fields:
-                        modified_fields.append(field)
-
+                ])
                 total_fte_change += abs(fte_avail_change)
                 total_capacity_change += abs(capacity_change)
 
             month_data[month_label] = MonthDataResponse(
-                forecast=orig_forecast,
-                fte_req=new_fte_req,
-                fte_avail=new_fte_avail,
-                capacity=int(new_capacity),
-                forecast_change=0,  # Forecast doesn't change in reallocation
+                forecast=old_m['forecast'],
+                fte_req=new_m['fte_req'],
+                fte_avail=new_m['fte_avail'],
+                capacity=new_m['capacity'],
+                forecast_change=0,
                 fte_req_change=fte_req_change,
                 fte_avail_change=fte_avail_change,
                 capacity_change=capacity_change
             )
 
-        # Only include records with changes
         if modified_fields:
-            record_response = ModifiedRecordResponse(
-                main_lob=original.Centene_Capacity_Plan_Main_LOB,
-                state=original.Centene_Capacity_Plan_State,
-                case_type=original.Centene_Capacity_Plan_Case_Type,
-                case_id=case_id,
-                target_cph=int(new_target_cph),
-                target_cph_change=int(target_cph_change),
-                modified_fields=modified_fields,
+            result_records.append(ModifiedRecordResponse(
+                main_lob=db_rec.Centene_Capacity_Plan_Main_LOB,
+                state=db_rec.Centene_Capacity_Plan_State,
+                case_type=db_rec.Centene_Capacity_Plan_Case_Type,
+                case_id=db_rec.Centene_Capacity_Plan_Call_Type_ID,
+                target_cph=int(new_data['target_cph']),
+                target_cph_change=int(new_data['target_cph'] - old_data['target_cph']),
+                modified_fields=list(set(modified_fields)),  # Remove duplicates
                 months=month_data
-            )
-            result_records.append(record_response)
-
-    # Build summary
-    summary = SummaryResponse(
-        total_fte_change=total_fte_change,
-        total_capacity_change=total_capacity_change
-    )
+            ))
 
     return PreviewResponse(
         success=True,
@@ -512,6 +387,9 @@ def calculate_reallocation_preview(
         year=year,
         modified_records=result_records,
         total_modified=len(result_records),
-        summary=summary,
+        summary=SummaryResponse(
+            total_fte_change=total_fte_change,
+            total_capacity_change=total_capacity_change
+        ),
         message=f"Preview shows forecast impact of {len(result_records)} reallocation changes"
     )
