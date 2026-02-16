@@ -6,7 +6,7 @@ Forecast Reallocation feature (Edit View Sections 10-13).
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 from code.logics.db import ForecastModel
 from code.logics.core_utils import CoreUtils
 from code.logics.edit_view_utils import (
@@ -197,6 +197,50 @@ def get_reallocation_data(
         return months_dict, data_records, total
 
 
+def _extract_changes_from_modified_fields(modified_fields: List) -> Tuple[Optional[float], Dict[str, int]]:
+    """
+    Extract target_cph and FTE available changes from modified_fields list.
+
+    The frontend sends modified_fields as objects:
+    - CPH change: {"field": "target_cph", "original_value": 3, "new_value": 5, "change": 2}
+    - FTE change: {"month_label": "May-25", "field": "fte_avail", "original_fte_avail": 4,
+                   "new_fte_avail": 7, "fte_avail_change": 3, "forecast": 1535}
+
+    Args:
+        modified_fields: List of modified field objects from frontend
+
+    Returns:
+        Tuple of (new_target_cph or None, dict mapping month_label to new_fte_avail)
+    """
+    new_target_cph = None
+    fte_changes = {}
+
+    for field_obj in modified_fields:
+        if isinstance(field_obj, dict):
+            field_name = field_obj.get('field', '')
+
+            if field_name == 'target_cph':
+                # Extract new CPH value
+                new_value = field_obj.get('new_value')
+                if new_value is not None:
+                    new_target_cph = float(new_value)
+                    logger.debug(f"Extracted target_cph change: {new_target_cph}")
+
+            elif field_name == 'fte_avail' and 'month_label' in field_obj:
+                # Extract FTE change for specific month
+                month_label = field_obj['month_label']
+                new_fte_avail = field_obj.get('new_fte_avail')
+                if new_fte_avail is not None:
+                    fte_changes[month_label] = int(new_fte_avail)
+                    logger.debug(f"Extracted FTE change: {month_label} -> {new_fte_avail}")
+
+        elif isinstance(field_obj, str):
+            # String format like "target_cph" or "May-25.fte_avail" - no value info
+            pass
+
+    return new_target_cph, fte_changes
+
+
 def calculate_reallocation_preview(
     month: str,
     year: int,
@@ -213,11 +257,7 @@ def calculate_reallocation_preview(
     Args:
         month: Report month name (e.g., "April")
         year: Report year (e.g., 2025)
-        modified_records: List of records with user modifications:
-            [{"case_id": "...", "main_lob": "...", "state": "...", "case_type": "...",
-              "target_cph": 105.0, "target_cph_change": 5.0,
-              "modified_fields": ["target_cph", "Apr-25.fte_avail"],
-              "months": {"Apr-25": {"forecast": 12500, "fte_avail": 125, "fte_avail_change": 5, ...}}}]
+        modified_records: List of records with user modifications from frontend
         core_utils: CoreUtils instance
 
     Returns:
@@ -283,12 +323,24 @@ def calculate_reallocation_preview(
         work_type = _get_work_type_from_main_lob(original.Centene_Capacity_Plan_Main_LOB)
         month_config = get_cached_month_config(work_type)
 
-        # Get new target CPH
-        new_target_cph = float(input_record.get('target_cph', original.Centene_Capacity_Plan_Target_CPH or 0))
+        # Extract changes from modified_fields (frontend sends new values here)
+        input_modified_fields = input_record.get('modified_fields', [])
+        extracted_target_cph, fte_changes_from_modified = _extract_changes_from_modified_fields(input_modified_fields)
+
+        logger.debug(f"Extracted target_cph: {extracted_target_cph}, FTE changes: {fte_changes_from_modified}")
+
+        # Get new target CPH - prioritize extracted value from modified_fields
         original_target_cph = float(original.Centene_Capacity_Plan_Target_CPH or 0)
+        if extracted_target_cph is not None:
+            new_target_cph = extracted_target_cph
+            logger.debug(f"Using target_cph from modified_fields: {new_target_cph}")
+        else:
+            # Fall back to top-level target_cph field or original value
+            new_target_cph = float(input_record.get('target_cph', original_target_cph))
+
         target_cph_change = new_target_cph - original_target_cph
 
-        # Track modified fields (will include all fields for months with changes)
+        # Track modified fields for response (will include all fields for months with changes)
         modified_fields = []
         if target_cph_change != 0:
             modified_fields.append("target_cph")
@@ -323,15 +375,38 @@ def calculate_reallocation_preview(
                 0
             ) or 0)
 
-            # Get user-modified FTE Available (from input or use original)
+            # Get user-modified FTE Available
+            # Priority: 1) modified_fields extraction, 2) months dict, 3) original DB value
             input_month_data = input_months.get(month_label, {})
-            new_fte_avail = int(input_month_data.get('fte_avail', orig_fte_avail))
+            if month_label in fte_changes_from_modified:
+                # New FTE value from modified_fields (preferred source)
+                new_fte_avail = fte_changes_from_modified[month_label]
+                logger.debug(f"Using FTE from modified_fields for {month_label}: {new_fte_avail}")
+            elif isinstance(input_month_data, dict):
+                new_fte_avail = int(input_month_data.get('fte_avail', orig_fte_avail))
+            else:
+                # input_month_data might be a Pydantic model
+                new_fte_avail = int(getattr(input_month_data, 'fte_avail', orig_fte_avail))
+
+            # Debug logging
+            logger.debug(
+                f"[Reallocation Preview] {month_label}: "
+                f"orig_fte_avail={orig_fte_avail}, new_fte_avail={new_fte_avail}, "
+                f"target_cph={new_target_cph}, "
+                f"config={config}"
+            )
 
             # Recalculate FTE Required based on new CPH
             new_fte_req = calculate_fte_required(orig_forecast, config, new_target_cph)
 
             # Recalculate Capacity based on new FTE Available and new CPH
             new_capacity = calculate_capacity(new_fte_avail, config, new_target_cph)
+
+            # Debug logging for capacity calculation
+            logger.debug(
+                f"[Reallocation Preview] {month_label}: "
+                f"calculated new_capacity={new_capacity}, orig_capacity={orig_capacity}"
+            )
 
             # Calculate deltas
             fte_req_change = new_fte_req - orig_fte_req
