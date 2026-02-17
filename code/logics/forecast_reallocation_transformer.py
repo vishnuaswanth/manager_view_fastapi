@@ -359,11 +359,10 @@ def calculate_reallocation_preview(
             new_data['months'][month_label]['capacity'] = new_capacity
 
         # Step 7: Calculate changes and build response
-        modified_fields = []
-        if target_cph_changed:
-            modified_fields.append("target_cph")
-
+        # First pass: calculate all changes and check if any change exists
         month_data = {}
+        has_any_change = target_cph_changed
+
         for month_label in month_labels:
             old_m = old_data['months'][month_label]
             new_m = new_data['months'][month_label]
@@ -373,12 +372,7 @@ def calculate_reallocation_preview(
             capacity_change = new_m['capacity'] - old_m['capacity']
 
             if fte_req_change != 0 or fte_avail_change != 0 or capacity_change != 0:
-                modified_fields.extend([
-                    f"{month_label}.forecast",
-                    f"{month_label}.fte_req",
-                    f"{month_label}.fte_avail",
-                    f"{month_label}.capacity"
-                ])
+                has_any_change = True
                 total_fte_change += abs(fte_avail_change)
                 total_capacity_change += abs(capacity_change)
 
@@ -392,6 +386,20 @@ def calculate_reallocation_preview(
                 fte_avail_change=fte_avail_change,
                 capacity_change=capacity_change
             )
+
+        # If any change exists, include all fields for all 6 months
+        modified_fields = []
+        if has_any_change:
+            if target_cph_changed:
+                modified_fields.append("target_cph")
+            # Add all 6 months' fields for complete row data in history log
+            for month_label in month_labels:
+                modified_fields.extend([
+                    f"{month_label}.forecast",
+                    f"{month_label}.fte_req",
+                    f"{month_label}.fte_avail",
+                    f"{month_label}.capacity"
+                ])
 
         if modified_fields:
             result_records.append(ModifiedRecordResponse(
