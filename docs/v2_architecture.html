@@ -369,74 +369,84 @@ ORM --> DB</pre>
 
                 <div class="diagram-card">
                     <h4>1. High-Level Data Flow</h4>
-                    <pre class="mermaid">graph TB
-ROSTER[Roster File] --> UPLOAD[Upload Router]
-FORECAST[Forecast File] --> UPLOAD
-CONFIG[Month Config] --> UPLOAD
-UPLOAD --> MIGRATION[Data Migration]
-MIGRATION --> RESOURCE[ResourceModel]
-WEEKGEN[Week Config Generator] --> WEEKCONFIG[WeekConfiguration]
-RESOURCE --> ASSIGN[WeeklyAssignments]
-WEEKCONFIG --> ASSIGN
-ASSIGN --> SUMMARY[MonthlySummary]
-SUMMARY --> POWERBI[PowerBI]
-SUMMARY --> DASHBOARD[JS Dashboard]
-SUMMARY --> EXCEL[Excel Export]</pre>
+                    <div class="mermaid">
+graph TB
+    ROSTER[Roster File] --> UPLOAD[Upload Router]
+    FORECAST[Forecast File] --> UPLOAD
+    CONFIG[Month Config] --> UPLOAD
+    UPLOAD --> MIGRATION[Data Migration]
+    MIGRATION --> RESOURCE[ResourceModel]
+    WEEKGEN[Week Config Generator] --> WEEKCONFIG[WeekConfiguration]
+    RESOURCE --> ASSIGN[WeeklyAssignments]
+    WEEKCONFIG --> ASSIGN
+    ASSIGN --> SUMMARY[MonthlySummary]
+    SUMMARY --> POWERBI[PowerBI]
+    SUMMARY --> DASHBOARD[JS Dashboard]
+    SUMMARY --> EXCEL[Excel Export]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>2. Capacity Calculation Flow</h4>
-                    <pre class="mermaid">graph LR
-PROD[Production Percent] --> CALC[Calculate Capacity]
-DAYS[Working Days] --> CALC
-HOURS[Work Hours] --> CALC
-SHRINK[Shrinkage] --> CALC
-CPH[Target CPH] --> CALC
-CALC --> WEEKLY[Weekly Capacity]
-WEEKLY --> MONTHLY[Monthly Capacity]</pre>
+                    <div class="mermaid">
+graph LR
+    PROD[Production Percent] --> CALC[Calculate Capacity]
+    DAYS[Working Days] --> CALC
+    HOURS[Work Hours] --> CALC
+    SHRINK[Shrinkage] --> CALC
+    CPH[Target CPH] --> CALC
+    CALC --> WEEKLY[Weekly Capacity]
+    WEEKLY --> MONTHLY[Monthly Capacity]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>3. Report Generation Flow</h4>
-                    <pre class="mermaid">graph TD
-START[Generate Report] --> GET_DATA[Get Summary and Assignments]
-GET_DATA --> SPLIT[Split Actual vs Placeholder]
-SPLIT --> TIERS[Calculate Tier Breakdown]
-TIERS --> FORMAT{Output Format}
-FORMAT -->|PowerBI| FLAT[Flatten to Table]
-FORMAT -->|Dashboard| NEST[Nest to JSON]
-FLAT --> PBI_OUT[PowerBI Report]
-NEST --> JS_OUT[Dashboard JSON]</pre>
+                    <div class="mermaid">
+graph TD
+    START[Generate Report] --> GET_DATA[Get Summary and Assignments]
+    GET_DATA --> SPLIT[Split Actual vs Placeholder]
+    SPLIT --> TIERS[Calculate Tier Breakdown]
+    TIERS --> FORMAT{Output Format}
+    FORMAT -->|PowerBI| FLAT[Flatten to Table]
+    FORMAT -->|Dashboard| NEST[Nest to JSON]
+    FLAT --> PBI_OUT[PowerBI Report]
+    NEST --> JS_OUT[Dashboard JSON]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>4. Data Migration Flow</h4>
-                    <pre class="mermaid">graph TD
-START[Start Migration] --> CREATE[Create V2 Tables]
-CREATE --> SEED1[Seed Capacity Tiers]
-SEED1 --> SEED2[Seed Policies]
-SEED2 --> READ[Read Existing Roster]
-READ --> MAP[Map Fields]
-MAP --> SAVE1[Save Resources]
-SAVE1 --> ALLOC[Read Allocations]
-ALLOC --> CONVERT[Convert to Weekly]
-CONVERT --> SAVE2[Save Assignments]
-SAVE2 --> VERIFY[Verify Integrity]
-VERIFY --> DONE[Migration Complete]</pre>
+                    <div class="mermaid">
+graph TD
+    START[Start Migration] --> CREATE[Create V2 Tables]
+    CREATE --> SEED1[Seed Capacity Tiers]
+    SEED1 --> SEED2[Seed Policies]
+    SEED2 --> READ[Read Existing Roster]
+    READ --> MAP[Map Fields]
+    MAP --> SAVE1[Save Resources]
+    SAVE1 --> ALLOC[Read Allocations]
+    ALLOC --> CONVERT[Convert to Weekly]
+    CONVERT --> SAVE2[Save Assignments]
+    SAVE2 --> VERIFY[Verify Integrity]
+    VERIFY --> DONE[Migration Complete]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>5. Week Configuration Generation</h4>
-                    <pre class="mermaid">graph TD
-START[Start] --> INPUT[Input Month and Year]
-INPUT --> GET[Get MonthConfiguration]
-GET --> CALC[Calculate ISO Weeks]
-CALC --> LOOP[For Each Week]
-LOOP --> CREATE[Create WeekConfig]
-CREATE --> DATES[Set Start and End Dates]
-DATES --> PARAMS[Set Working Days etc]
-PARAMS --> SAVE[Save to Database]
-SAVE --> END[Done]</pre>
+                    <div class="mermaid">
+graph TD
+    START[Start] --> INPUT[Input Month and Year]
+    INPUT --> GET[Get MonthConfiguration]
+    GET --> CALC[Calculate ISO Weeks]
+    CALC --> LOOP[For Each Week]
+    LOOP --> CREATE[Create WeekConfig]
+    CREATE --> DATES[Set Start and End Dates]
+    DATES --> PARAMS[Set Working Days etc]
+    PARAMS --> SAVE[Save to Database]
+    SAVE --> END[Done]
+                    </div>
                 </div>
             </div>
         </div>
@@ -448,51 +458,57 @@ SAVE --> END[Done]</pre>
 
                 <div class="diagram-card">
                     <h4>Allocation Process Flow</h4>
-                    <pre class="mermaid">graph TD
-START((Start)) --> FORECAST[Get Forecast Demands]
-START --> RESOURCES[Get Available Resources]
-START --> CONFIG[Get Week Configuration]
-RESOURCES --> CHECK{Check Availability}
-CHECK -->|Available| SKILLS[Match Skills]
-CHECK -->|Not Available| SKIP[Skip Resource]
-SKILLS --> FILTER[Filter Eligible]
-FORECAST --> MATCH[Match Resources to Demands]
-FILTER --> MATCH
-MATCH --> CALC[Calculate Weekly Capacity]
-CALC --> ASSIGN[Create Assignment Records]
-ASSIGN --> SUMMARY[Create Monthly Summary]
-SUMMARY --> GAP[Calculate Capacity Gap]
-GAP --> DONE((End))</pre>
+                    <div class="mermaid">
+graph TD
+    START((Start)) --> FORECAST[Get Forecast Demands]
+    START --> RESOURCES[Get Available Resources]
+    START --> CONFIG[Get Week Configuration]
+    RESOURCES --> CHECK{Check Availability}
+    CHECK -->|Available| SKILLS[Match Skills]
+    CHECK -->|Not Available| SKIP[Skip Resource]
+    SKILLS --> FILTER[Filter Eligible]
+    FORECAST --> MATCH[Match Resources to Demands]
+    FILTER --> MATCH
+    MATCH --> CALC[Calculate Weekly Capacity]
+    CALC --> ASSIGN[Create Assignment Records]
+    ASSIGN --> SUMMARY[Create Monthly Summary]
+    SUMMARY --> GAP[Calculate Capacity Gap]
+    GAP --> DONE((End))
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Availability Window Check</h4>
-                    <pre class="mermaid">graph TD
-START((Start)) --> GET[Get Resource]
-GET --> FROM{available_from set}
-FROM -->|No| UNTIL{available_until set}
-FROM -->|Yes| FROM_DATE{week_start >= available_from}
-FROM_DATE -->|Yes| UNTIL
-FROM_DATE -->|No| NOT_AVAIL((Not Available))
-UNTIL -->|No| AVAIL((Available))
-UNTIL -->|Yes| UNTIL_DATE{week_end <= available_until}
-UNTIL_DATE -->|Yes| AVAIL
-UNTIL_DATE -->|No| NOT_AVAIL</pre>
+                    <div class="mermaid">
+graph TD
+    START((Start)) --> GET[Get Resource]
+    GET --> FROM{available_from set}
+    FROM -->|No| UNTIL{available_until set}
+    FROM -->|Yes| FROM_DATE{week_start >= available_from}
+    FROM_DATE -->|Yes| UNTIL
+    FROM_DATE -->|No| NOT_AVAIL((Not Available))
+    UNTIL -->|No| AVAIL((Available))
+    UNTIL -->|Yes| UNTIL_DATE{week_end <= available_until}
+    UNTIL_DATE -->|Yes| AVAIL
+    UNTIL_DATE -->|No| NOT_AVAIL
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Resource Matching Logic</h4>
-                    <pre class="mermaid">graph LR
-D1[Demand Platform] --> MATCH{All Match}
-D2[Demand Location] --> MATCH
-D3[Demand State] --> MATCH
-D4[Demand Skills] --> MATCH
-R1[Resource Platform] --> MATCH
-R2[Resource Location] --> MATCH
-R3[Resource StateList] --> MATCH
-R4[Resource Skills] --> MATCH
-MATCH -->|Yes| OK[Eligible]
-MATCH -->|No| NO[Not Eligible]</pre>
+                    <div class="mermaid">
+graph LR
+    D1[Demand Platform] --> MATCH{All Match}
+    D2[Demand Location] --> MATCH
+    D3[Demand State] --> MATCH
+    D4[Demand Skills] --> MATCH
+    R1[Resource Platform] --> MATCH
+    R2[Resource Location] --> MATCH
+    R3[Resource StateList] --> MATCH
+    R4[Resource Skills] --> MATCH
+    MATCH -->|Yes| OK[Eligible]
+    MATCH -->|No| NO[Not Eligible]
+                    </div>
                 </div>
             </div>
         </div>
@@ -504,61 +520,67 @@ MATCH -->|No| NO[Not Eligible]</pre>
 
                 <div class="diagram-card">
                     <h4>Layered Architecture</h4>
-                    <pre class="mermaid">graph TB
-WEB[Web Dashboard] --> ROUTERS[FastAPI Routers]
-PBI[PowerBI] --> ROUTERS
-DOCS[API Docs] --> ROUTERS
-ROUTERS --> ALLOC[Allocation Service]
-ROUTERS --> CAPACITY[Capacity Calculator]
-ROUTERS --> AVAIL[Availability Service]
-ROUTERS --> POLICY[Policy Service]
-ALLOC --> ORM[SQLModel ORM]
-CAPACITY --> ORM
-AVAIL --> ORM
-POLICY --> ORM
-ORM --> MSSQL[(MSSQL Production)]
-ORM --> SQLITE[(SQLite Development)]</pre>
+                    <div class="mermaid">
+graph TB
+    WEB[Web Dashboard] --> ROUTERS[FastAPI Routers]
+    PBI[PowerBI] --> ROUTERS
+    DOCS[API Docs] --> ROUTERS
+    ROUTERS --> ALLOC[Allocation Service]
+    ROUTERS --> CAPACITY[Capacity Calculator]
+    ROUTERS --> AVAIL[Availability Service]
+    ROUTERS --> POLICY[Policy Service]
+    ALLOC --> ORM[SQLModel ORM]
+    CAPACITY --> ORM
+    AVAIL --> ORM
+    POLICY --> ORM
+    ORM --> MSSQL[(MSSQL Production)]
+    ORM --> SQLITE[(SQLite Development)]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Database Schema Overview</h4>
-                    <pre class="mermaid">erDiagram
-ResourceModel ||--o{ WeeklyResourceAssignment : assigned_to
-ProductionCapacityTier ||--o{ WeeklyResourceAssignment : tier
-WeekConfiguration ||--o{ WeeklyResourceAssignment : week
-WeeklyResourceAssignment }o--|| MonthlyCapacitySummary : aggregates
-AvailabilityPolicy ||--o{ ResourceModel : governs
-ResourceModel {
-    int id
-    string cn
-    string resource_type
-    date available_from
-    date available_until
-}
-WeeklyResourceAssignment {
-    int id
-    int year
-    int week_number
-    string resource_cn
-    float production_percentage
-}
-MonthlyCapacitySummary {
-    int id
-    int actual_fte_count
-    int placeholder_fte_count
-    float capacity_gap
-}</pre>
+                    <div class="mermaid">
+erDiagram
+    ResourceModel ||--o{ WeeklyResourceAssignment : assigned_to
+    ProductionCapacityTier ||--o{ WeeklyResourceAssignment : tier
+    WeekConfiguration ||--o{ WeeklyResourceAssignment : week
+    WeeklyResourceAssignment }o--|| MonthlyCapacitySummary : aggregates
+    AvailabilityPolicy ||--o{ ResourceModel : governs
+    ResourceModel {
+        int id
+        string cn
+        string resource_type
+        date available_from
+        date available_until
+    }
+    WeeklyResourceAssignment {
+        int id
+        int year
+        int week_number
+        string resource_cn
+        float production_percentage
+    }
+    MonthlyCapacitySummary {
+        int id
+        int actual_fte_count
+        int placeholder_fte_count
+        float capacity_gap
+    }
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Deployment Architecture</h4>
-                    <pre class="mermaid">graph TB
-DEV_MODE[MODE DEBUG] --> DEV_APP[FastAPI App Dev]
-DEV_APP --> DEV_DB[(SQLite)]
-PROD_MODE[MODE PRODUCTION] --> PROD_APP[FastAPI Uvicorn]
-PROD_APP --> PROD_DB[(MSSQL Server)]
-WEB[Web Browser] --> PROD_APP
-PBI[PowerBI] --> PROD_APP</pre>
+                    <div class="mermaid">
+graph TB
+    DEV_MODE[MODE DEBUG] --> DEV_APP[FastAPI App Dev]
+    DEV_APP --> DEV_DB[(SQLite)]
+    PROD_MODE[MODE PRODUCTION] --> PROD_APP[FastAPI Uvicorn]
+    PROD_APP --> PROD_DB[(MSSQL Server)]
+    WEB[Web Browser] --> PROD_APP
+    PBI[PowerBI] --> PROD_APP
+                    </div>
                 </div>
             </div>
         </div>
@@ -570,36 +592,40 @@ PBI[PowerBI] --> PROD_APP</pre>
 
                 <div class="diagram-card">
                     <h4>API Routes</h4>
-                    <pre class="mermaid">graph TD
-ROOT[/api/v2] --> RESOURCES[/resources]
-ROOT --> ASSIGNMENTS[/assignments]
-ROOT --> POLICIES[/policies]
-ROOT --> TIERS[/capacity-tiers]
-ROOT --> REPORTS[/reports]
-ROOT --> ALLOCATION[/allocation]
-RESOURCES --> R1[GET List]
-RESOURCES --> R2[POST Create]
-RESOURCES --> R3[POST placeholders]
-RESOURCES --> R4[POST convert]
-REPORTS --> REP1[GET powerbi]
-REPORTS --> REP2[GET dashboard]
-ALLOCATION --> AL1[POST execute]
-ALLOCATION --> AL2[GET preview]</pre>
+                    <div class="mermaid">
+graph TD
+    ROOT[/api/v2] --> RESOURCES[/resources]
+    ROOT --> ASSIGNMENTS[/assignments]
+    ROOT --> POLICIES[/policies]
+    ROOT --> TIERS[/capacity-tiers]
+    ROOT --> REPORTS[/reports]
+    ROOT --> ALLOCATION[/allocation]
+    RESOURCES --> R1[GET List]
+    RESOURCES --> R2[POST Create]
+    RESOURCES --> R3[POST placeholders]
+    RESOURCES --> R4[POST convert]
+    REPORTS --> REP1[GET powerbi]
+    REPORTS --> REP2[GET dashboard]
+    ALLOCATION --> AL1[POST execute]
+    ALLOCATION --> AL2[GET preview]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Component Architecture</h4>
-                    <pre class="mermaid">graph LR
-R1[resource_router] --> S3[availability_utils]
-R2[assignment_router] --> S1[allocation_v2]
-R3[policy_router] --> S4[policy_utils]
-R4[reports_router] --> S2[capacity_calc]
-S1 --> S2
-S1 --> S3
-S3 --> S4
-S1 --> M1[ResourceModel]
-S1 --> M2[WeeklyAssignment]
-S2 --> M3[MonthlySummary]</pre>
+                    <div class="mermaid">
+graph LR
+    R1[resource_router] --> S3[availability_utils]
+    R2[assignment_router] --> S1[allocation_v2]
+    R3[policy_router] --> S4[policy_utils]
+    R4[reports_router] --> S2[capacity_calc]
+    S1 --> S2
+    S1 --> S3
+    S3 --> S4
+    S1 --> M1[ResourceModel]
+    S1 --> M2[WeeklyAssignment]
+    S2 --> M3[MonthlySummary]
+                    </div>
                 </div>
             </div>
         </div>
