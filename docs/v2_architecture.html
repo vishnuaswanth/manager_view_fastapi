@@ -275,39 +275,41 @@
 
                 <div class="diagram-card">
                     <h4>System Architecture Overview</h4>
-                    <pre class="mermaid">graph TB
-subgraph Clients[Client Layer]
-    BROWSER[Web Browser]
-    POWERBI[PowerBI]
-    EXCEL_CLIENT[Excel]
-end
-subgraph API[API Layer FastAPI]
-    GATEWAY[API Gateway]
-    subgraph Routers[Routers]
-        RESOURCE_R[Resource]
-        ASSIGN_R[Assignment]
-        POLICY_R[Policy]
-        REPORT_R[Reports]
-        ALLOC_R[Allocation]
+                    <div class="mermaid">
+graph TB
+    subgraph Clients[Client Layer]
+        BROWSER[Web Browser]
+        POWERBI[PowerBI]
+        EXCEL_CLIENT[Excel]
     end
-end
-subgraph Logic[Business Logic Layer]
-    ALLOC_SVC[Allocation Service]
-    CAPACITY_SVC[Capacity Calculator]
-    AVAIL_SVC[Availability Service]
-    POLICY_SVC[Policy Service]
-end
-subgraph Data[Data Layer]
-    ORM[SQLModel ORM]
-    DB[Database]
-end
-BROWSER --> GATEWAY
-POWERBI --> GATEWAY
-EXCEL_CLIENT --> GATEWAY
-GATEWAY --> Routers
-Routers --> Logic
-Logic --> ORM
-ORM --> DB</pre>
+    subgraph API[API Layer FastAPI]
+        GATEWAY[API Gateway]
+        subgraph Routers[Routers]
+            RESOURCE_R[Resource]
+            ASSIGN_R[Assignment]
+            POLICY_R[Policy]
+            REPORT_R[Reports]
+            ALLOC_R[Allocation]
+        end
+    end
+    subgraph Logic[Business Logic Layer]
+        ALLOC_SVC[Allocation Service]
+        CAPACITY_SVC[Capacity Calculator]
+        AVAIL_SVC[Availability Service]
+        POLICY_SVC[Policy Service]
+    end
+    subgraph Data[Data Layer]
+        ORM[SQLModel ORM]
+        DB[Database]
+    end
+    BROWSER --> GATEWAY
+    POWERBI --> GATEWAY
+    EXCEL_CLIENT --> GATEWAY
+    GATEWAY --> Routers
+    Routers --> Logic
+    Logic --> ORM
+    ORM --> DB
+                    </div>
                 </div>
 
                 <div class="info-grid">
@@ -637,74 +639,82 @@ graph LR
 
                 <div class="diagram-card">
                     <h4>Resource Creation with Availability Window</h4>
-                    <pre class="mermaid">sequenceDiagram
-participant User
-participant API
-participant Service
-participant DB
-User->>API: POST /api/v2/resources
-API->>Service: Validate Availability
-Service->>DB: Query Policies
-DB-->>Service: Policy Values
-Service-->>API: Validation Result
-alt Valid
-    API->>DB: Insert Resource
-    DB-->>API: Created
-    API-->>User: 201 Created
-else Invalid
-    API-->>User: 400 Bad Request
-end</pre>
+                    <div class="mermaid">
+sequenceDiagram
+    participant User
+    participant API
+    participant Service
+    participant DB
+    User->>API: POST /api/v2/resources
+    API->>Service: Validate Availability
+    Service->>DB: Query Policies
+    DB-->>Service: Policy Values
+    Service-->>API: Validation Result
+    alt Valid
+        API->>DB: Insert Resource
+        DB-->>API: Created
+        API-->>User: 201 Created
+    else Invalid
+        API-->>User: 400 Bad Request
+    end
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Execute Allocation Flow</h4>
-                    <pre class="mermaid">sequenceDiagram
-participant User
-participant API
-participant Alloc
-participant DB
-User->>API: POST /api/v2/allocation/execute
-API->>Alloc: Execute Allocation
-Alloc->>DB: Get Demands
-DB-->>Alloc: Forecast Records
-Alloc->>DB: Get Resources
-DB-->>Alloc: Resources
-Alloc->>Alloc: Match and Calculate
-Alloc->>DB: Create Assignments
-Alloc->>DB: Compute Summary
-Alloc-->>API: Complete
-API-->>User: 200 OK</pre>
+                    <div class="mermaid">
+sequenceDiagram
+    participant User
+    participant API
+    participant Alloc
+    participant DB
+    User->>API: POST /api/v2/allocation/execute
+    API->>Alloc: Execute Allocation
+    Alloc->>DB: Get Demands
+    DB-->>Alloc: Forecast Records
+    Alloc->>DB: Get Resources
+    DB-->>Alloc: Resources
+    Alloc->>Alloc: Match and Calculate
+    Alloc->>DB: Create Assignments
+    Alloc->>DB: Compute Summary
+    Alloc-->>API: Complete
+    API-->>User: 200 OK
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Convert Placeholder to Actual</h4>
-                    <pre class="mermaid">sequenceDiagram
-participant User
-participant API
-participant Service
-participant DB
-User->>API: POST /resources/TBH-001/convert
-API->>DB: Get Placeholder
-DB-->>API: Placeholder Record
-API->>Service: Convert Placeholder
-Service->>DB: Create Actual Resource
-Service->>DB: Transfer Assignments
-Service->>DB: Update replaced_by_cn
-Service-->>API: Conversion Complete
-API-->>User: 200 OK</pre>
+                    <div class="mermaid">
+sequenceDiagram
+    participant User
+    participant API
+    participant Service
+    participant DB
+    User->>API: POST /resources/TBH-001/convert
+    API->>DB: Get Placeholder
+    DB-->>API: Placeholder Record
+    API->>Service: Convert Placeholder
+    Service->>DB: Create Actual Resource
+    Service->>DB: Transfer Assignments
+    Service->>DB: Update replaced_by_cn
+    Service-->>API: Conversion Complete
+    API-->>User: 200 OK
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>User Workflow Summary</h4>
-                    <pre class="mermaid">graph LR
-P1[Upload Roster] --> P2[Create Placeholders]
-P2 --> P3[Set Week Targets]
-P3 --> E1[Run Allocation]
-E1 --> E2[Review Assignments]
-E2 --> E3[Adjust Tiers]
-E3 --> R1[Generate Reports]
-R1 --> R2[Export to PowerBI]
-R1 --> R3[View Dashboard]</pre>
+                    <div class="mermaid">
+graph LR
+    P1[Upload Roster] --> P2[Create Placeholders]
+    P2 --> P3[Set Week Targets]
+    P3 --> E1[Run Allocation]
+    E1 --> E2[Review Assignments]
+    E2 --> E3[Adjust Tiers]
+    E3 --> R1[Generate Reports]
+    R1 --> R2[Export to PowerBI]
+    R1 --> R3[View Dashboard]
+                    </div>
                 </div>
             </div>
         </div>
@@ -716,44 +726,48 @@ R1 --> R3[View Dashboard]</pre>
 
                 <div class="diagram-card">
                     <h4>Policy System Architecture</h4>
-                    <pre class="mermaid">graph TB
-DEFAULTS[Default Values] --> POLICY_DB[AvailabilityPolicyModel]
-POLICY_DB --> CAT_AVAIL[Availability Category]
-POLICY_DB --> CAT_ALLOC[Allocation Category]
-POLICY_DB --> CAT_REPORT[Reporting Category]
-CAT_AVAIL --> P1[ENFORCE_AVAILABLE_FROM]
-CAT_AVAIL --> P2[ENFORCE_AVAILABLE_UNTIL]
-CAT_ALLOC --> P3[ALLOW_OVER_ALLOCATION]
-CAT_ALLOC --> P4[AUTO_CREATE_PLACEHOLDERS]
-CAT_REPORT --> P5[INCLUDE_PLACEHOLDERS]
-P1 --> AVAIL[Availability Check]
-P2 --> AVAIL
-P3 --> ALLOC[Allocation Engine]
-P4 --> ALLOC
-P5 --> REPORT[Report Generator]</pre>
+                    <div class="mermaid">
+graph TB
+    DEFAULTS[Default Values] --> POLICY_DB[AvailabilityPolicyModel]
+    POLICY_DB --> CAT_AVAIL[Availability Category]
+    POLICY_DB --> CAT_ALLOC[Allocation Category]
+    POLICY_DB --> CAT_REPORT[Reporting Category]
+    CAT_AVAIL --> P1[ENFORCE_AVAILABLE_FROM]
+    CAT_AVAIL --> P2[ENFORCE_AVAILABLE_UNTIL]
+    CAT_ALLOC --> P3[ALLOW_OVER_ALLOCATION]
+    CAT_ALLOC --> P4[AUTO_CREATE_PLACEHOLDERS]
+    CAT_REPORT --> P5[INCLUDE_PLACEHOLDERS]
+    P1 --> AVAIL[Availability Check]
+    P2 --> AVAIL
+    P3 --> ALLOC[Allocation Engine]
+    P4 --> ALLOC
+    P5 --> REPORT[Report Generator]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Update Policy Sequence</h4>
-                    <pre class="mermaid">sequenceDiagram
-participant Admin
-participant API
-participant Router
-participant DB
-Admin->>API: PUT /policies/ALLOW_OVER_ALLOCATION
-API->>Router: Forward Request
-Router->>DB: Get Policy
-DB-->>Router: Current Policy
-Router->>Router: Validate Value Type
-alt Valid
-    Router->>DB: Update Policy
-    DB-->>Router: Updated
-    Router-->>API: 200 OK
-    API-->>Admin: Success
-else Invalid
-    Router-->>API: 400 Bad Request
-    API-->>Admin: Error
-end</pre>
+                    <div class="mermaid">
+sequenceDiagram
+    participant Admin
+    participant API
+    participant Router
+    participant DB
+    Admin->>API: PUT /policies/ALLOW_OVER_ALLOCATION
+    API->>Router: Forward Request
+    Router->>DB: Get Policy
+    DB-->>Router: Current Policy
+    Router->>Router: Validate Value Type
+    alt Valid
+        Router->>DB: Update Policy
+        DB-->>Router: Updated
+        Router-->>API: 200 OK
+        API-->>Admin: Success
+    else Invalid
+        Router-->>API: 400 Bad Request
+        API-->>Admin: Error
+    end
+                    </div>
                 </div>
             </div>
         </div>
@@ -765,54 +779,60 @@ end</pre>
 
                 <div class="diagram-card">
                     <h4>Placeholder Lifecycle</h4>
-                    <pre class="mermaid">graph TD
-CREATE[Create Placeholder TBH-001] --> SKILLS[Set Skills and Platform]
-SKILLS --> AVAIL[Set Availability Window]
-AVAIL --> ASSIGN[Assign to Demand]
-ASSIGN --> TIER[Set Production Tier]
-TIER --> CALC[Calculate Planned Capacity]
-CALC -.-> HIRE[New Hire Onboarded]
-HIRE --> CONVERT[Convert to Actual Resource]
-CONVERT --> TRANSFER[Transfer Assignments]
-TRANSFER --> LINK[Link via replaced_by_cn]
-LINK --> ACTUAL[Actual Resource CN12345]
-ACTUAL --> TRACK[Track Real Capacity]</pre>
+                    <div class="mermaid">
+graph TD
+    CREATE[Create Placeholder TBH-001] --> SKILLS[Set Skills and Platform]
+    SKILLS --> AVAIL[Set Availability Window]
+    AVAIL --> ASSIGN[Assign to Demand]
+    ASSIGN --> TIER[Set Production Tier]
+    TIER --> CALC[Calculate Planned Capacity]
+    CALC -.-> HIRE[New Hire Onboarded]
+    HIRE --> CONVERT[Convert to Actual Resource]
+    CONVERT --> TRANSFER[Transfer Assignments]
+    TRANSFER --> LINK[Link via replaced_by_cn]
+    LINK --> ACTUAL[Actual Resource CN12345]
+    ACTUAL --> TRACK[Track Real Capacity]
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Create Placeholders Batch</h4>
-                    <pre class="mermaid">sequenceDiagram
-participant User
-participant API
-participant Policy
-participant DB
-User->>API: POST /resources/placeholders
-API->>Policy: Get MAX_PLACEHOLDERS
-Policy-->>API: 100
-alt count exceeds MAX
-    API-->>User: 400 Bad Request
-else count OK
-    API->>Policy: Get PLACEHOLDER_PREFIX
-    Policy-->>API: TBH-
-    API->>DB: Generate and Insert Placeholders
-    DB-->>API: Created
-    API-->>User: 201 Created
-end</pre>
+                    <div class="mermaid">
+sequenceDiagram
+    participant User
+    participant API
+    participant Policy
+    participant DB
+    User->>API: POST /resources/placeholders
+    API->>Policy: Get MAX_PLACEHOLDERS
+    Policy-->>API: 100
+    alt count exceeds MAX
+        API-->>User: 400 Bad Request
+    else count OK
+        API->>Policy: Get PLACEHOLDER_PREFIX
+        Policy-->>API: TBH-
+        API->>DB: Generate and Insert Placeholders
+        DB-->>API: Created
+        API-->>User: 201 Created
+    end
+                    </div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Capacity Tier System</h4>
-                    <pre class="mermaid">graph TB
-T100[100% Full Production] --> FTE[FTE Count]
-T75[75% Final Ramp] --> FTE
-T50[50% Mid Ramp] --> EQUIV[FTE Equivalent]
-T25[25% Early Ramp] --> EQUIV
-ACTUAL[Actual Resources] --> T100
-ACTUAL --> T75
-PLACEHOLDER[Placeholders] --> T50
-PLACEHOLDER --> T25
-FTE --> CAPACITY[Total Capacity]
-EQUIV --> CAPACITY</pre>
+                    <div class="mermaid">
+graph TB
+    T100[100% Full Production] --> FTE[FTE Count]
+    T75[75% Final Ramp] --> FTE
+    T50[50% Mid Ramp] --> EQUIV[FTE Equivalent]
+    T25[25% Early Ramp] --> EQUIV
+    ACTUAL[Actual Resources] --> T100
+    ACTUAL --> T75
+    PLACEHOLDER[Placeholders] --> T50
+    PLACEHOLDER --> T25
+    FTE --> CAPACITY[Total Capacity]
+    EQUIV --> CAPACITY
+                    </div>
                 </div>
             </div>
         </div>
