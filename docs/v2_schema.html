@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2 Data Schema - Weekly Capacity Tracking</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            padding: 20px 40px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: #fff;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            font-size: 14px;
+            color: #a0a0a0;
+        }
+
+        .container {
+            padding: 30px;
+            max-width: 100%;
+            overflow-x: auto;
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+
+        .legend-new { background: #4ade80; }
+        .legend-existing { background: #60a5fa; }
+        .legend-core { background: #f472b6; }
+        .legend-summary { background: #fbbf24; }
+
+        .diagram-container {
+            background: #fff;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            overflow-x: auto;
+        }
+
+        .mermaid {
+            display: flex;
+            justify-content: center;
+        }
+
+        .table-info {
+            margin-top: 30px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .table-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .table-card.new {
+            border-left: 4px solid #4ade80;
+        }
+
+        .table-card.existing {
+            border-left: 4px solid #60a5fa;
+        }
+
+        .table-card.core {
+            border-left: 4px solid #f472b6;
+        }
+
+        .table-card h3 {
+            font-size: 16px;
+            color: #fff;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .table-card h3 span.badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: 500;
+        }
+
+        .badge-new { background: #4ade80; color: #000; }
+        .badge-existing { background: #60a5fa; color: #000; }
+        .badge-core { background: #f472b6; color: #000; }
+
+        .table-card p {
+            font-size: 13px;
+            color: #a0a0a0;
+            line-height: 1.6;
+        }
+
+        .table-card ul {
+            margin-top: 10px;
+            padding-left: 20px;
+        }
+
+        .table-card li {
+            font-size: 12px;
+            color: #808080;
+            margin-bottom: 4px;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 30px;
+            color: #606060;
+            font-size: 12px;
+        }
+
+        @media (max-width: 768px) {
+            .header {
+                padding: 15px 20px;
+            }
+            .container {
+                padding: 15px;
+            }
+            .legend {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>V2 Data Schema - Weekly Capacity & Multi-Group Resource Tracking</h1>
+        <p>Entity Relationship Diagram showing new V2 tables and their relationships with existing V1 tables</p>
+    </div>
+
+    <div class="container">
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-color legend-new"></div>
+                <span>New Configuration Tables</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color legend-existing"></div>
+                <span>Existing V1 Tables (Reference)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color legend-core"></div>
+                <span>Core Transactional Table</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color legend-summary"></div>
+                <span>Aggregated Summary Table</span>
+            </div>
+        </div>
+
+        <div class="diagram-container">
+            <div class="mermaid">
+erDiagram
+    %% Configuration Tables
+    ProductionCapacityTierModel {
+        int id PK
+        string tier_name UK
+        float capacity_percentage
+        string description
+        bool is_active
+        int display_order
+    }
+
+    WeekConfigurationModel {
+        int id PK
+        int year
+        int week_number
+        date week_start_date
+        date week_end_date
+        string month
+        string work_type
+        int working_days
+        float work_hours
+        float occupancy
+        float shrinkage
+    }
+
+    ResourceModel {
+        int id PK
+        string cn UK
+        string resource_type
+        string display_name
+        string first_name
+        string last_name
+        string opid
+        string primary_platform
+        string location
+        string state_list
+        string skills
+        bool is_active
+        date hire_date
+        int created_for_week
+        int created_for_year
+        string replaced_by_cn
+        datetime replaced_at
+    }
+
+    ForecastModel {
+        int id PK
+        string Main_LOB
+        string State
+        string Case_Type
+        string Call_Type_ID
+        int Target_CPH
+        int Forecast_Month1_6
+        int FTE_Required_Month1_6
+        int FTE_Avail_Month1_6
+        int Capacity_Month1_6
+        string Month
+        int Year
+    }
+
+    MonthConfigurationModel {
+        int id PK
+        string Month
+        int Year
+        string WorkType
+        int WorkingDays
+        float Occupancy
+        float Shrinkage
+        float WorkHours
+    }
+
+    TargetCPHModel {
+        int id PK
+        string MainLOB
+        string CaseType
+        float TargetCPH
+    }
+
+    WeeklyResourceAssignmentModel {
+        int id PK
+        int year
+        int week_number
+        string report_month
+        int report_year
+        int forecast_month_index
+        string resource_cn FK
+        string demand_main_lob
+        string demand_state
+        string demand_case_type
+        int capacity_tier_id FK
+        float production_percentage
+        float weekly_capacity
+        string assignment_type
+        bool is_active
+    }
+
+    MonthlyCapacitySummaryModel {
+        int id PK
+        string report_month
+        int report_year
+        int forecast_month_index
+        string forecast_month
+        string main_lob
+        string state
+        string case_type
+        int total_forecast
+        int total_fte_count
+        int actual_fte_count
+        int placeholder_fte_count
+        float total_fte_equivalent
+        float actual_fte_equivalent
+        float placeholder_fte_equivalent
+        float total_capacity
+        float capacity_gap
+        string tier_breakdown
+    }
+
+    ResourceModel ||--o{ WeeklyResourceAssignmentModel : "assigned_to"
+    ProductionCapacityTierModel ||--o{ WeeklyResourceAssignmentModel : "defines_tier"
+    WeekConfigurationModel ||--o{ WeeklyResourceAssignmentModel : "week_config"
+    ForecastModel ||--o{ WeeklyResourceAssignmentModel : "demand"
+    WeeklyResourceAssignmentModel }o--|| MonthlyCapacitySummaryModel : "aggregates"
+    MonthConfigurationModel ||--o{ WeekConfigurationModel : "generates"
+    TargetCPHModel ||--o{ WeeklyResourceAssignmentModel : "cph_ref"
+    ForecastModel ||--o{ MonthlyCapacitySummaryModel : "forecast_src"
+            </div>
+        </div>
+
+        <div class="table-info">
+            <div class="table-card new">
+                <h3>ProductionCapacityTierModel <span class="badge badge-new">NEW</span></h3>
+                <p>Defines standard production capacity tiers for resources at different ramp stages.</p>
+                <ul>
+                    <li>100% - Full Production</li>
+                    <li>75% - Final Ramp Stage</li>
+                    <li>50% - Mid Ramp</li>
+                    <li>25% - Early Ramp/Training</li>
+                </ul>
+            </div>
+
+            <div class="table-card new">
+                <h3>WeekConfigurationModel <span class="badge badge-new">NEW</span></h3>
+                <p>Week-level configuration for capacity calculations. Auto-generated from MonthConfigurationModel or manually set.</p>
+                <ul>
+                    <li>ISO week number (1-53)</li>
+                    <li>Working days per week</li>
+                    <li>Work hours, occupancy, shrinkage</li>
+                </ul>
+            </div>
+
+            <div class="table-card new">
+                <h3>ResourceModel <span class="badge badge-new">NEW</span></h3>
+                <p>Master resource table supporting both actual people and placeholder/tentative resources for future planning.</p>
+                <ul>
+                    <li><strong>resource_type:</strong> "actual" (real people) or "placeholder" (TBH-001, TBH-002)</li>
+                    <li><strong>display_name:</strong> "John Smith" or "Planned Hire - Claims"</li>
+                    <li>CN# as unique identifier (actual: CN12345, placeholder: TBH-001)</li>
+                    <li>Platform, location, skills (required for both types)</li>
+                    <li>Placeholder conversion: replaced_by_cn tracks when converted to actual</li>
+                </ul>
+            </div>
+
+            <div class="table-card core">
+                <h3>WeeklyResourceAssignmentModel <span class="badge badge-core">CORE</span></h3>
+                <p>Core transactional table - tracks weekly assignment of resources (actual + placeholder) to demands with production percentage.</p>
+                <ul>
+                    <li><strong>Unique constraint:</strong> One assignment per resource per week</li>
+                    <li>Works with both actual resources and placeholders</li>
+                    <li>Links to capacity tier (100%, 75%, 50%, 25%)</li>
+                    <li>Calculated weekly capacity (same formula for both types)</li>
+                    <li>Soft delete for history tracking</li>
+                </ul>
+            </div>
+
+            <div class="table-card new">
+                <h3>MonthlyCapacitySummaryModel <span class="badge badge-new">NEW</span></h3>
+                <p>Pre-aggregated monthly capacity for fast reporting. Computed from weekly assignments with actual vs placeholder breakdown.</p>
+                <ul>
+                    <li>Sum of weekly capacities</li>
+                    <li>FTE counts: total, actual, placeholder</li>
+                    <li>FTE equivalent: total, actual, placeholder</li>
+                    <li>Tier breakdown (JSON with actual/placeholder split per tier)</li>
+                    <li>Capacity gap calculation</li>
+                </ul>
+            </div>
+
+            <div class="table-card existing">
+                <h3>ForecastModel <span class="badge badge-existing">EXISTING</span></h3>
+                <p>Existing V1 forecast table - provides demand data for allocations.</p>
+                <ul>
+                    <li>6 months of forecast data</li>
+                    <li>FTE Required/Available</li>
+                    <li>Capacity calculations</li>
+                </ul>
+            </div>
+
+            <div class="table-card existing">
+                <h3>MonthConfigurationModel <span class="badge badge-existing">EXISTING</span></h3>
+                <p>Existing month-level configuration. Used to generate WeekConfigurationModel.</p>
+                <ul>
+                    <li>Working days per month</li>
+                    <li>Occupancy and shrinkage rates</li>
+                    <li>Per work type (Domestic/Global)</li>
+                </ul>
+            </div>
+
+            <div class="table-card existing">
+                <h3>TargetCPHModel <span class="badge badge-existing">EXISTING</span></h3>
+                <p>Target Cases Per Hour configuration by LOB and Case Type.</p>
+                <ul>
+                    <li>Used in capacity calculations</li>
+                    <li>Ranges from 3.0 to 17.0</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>V2 Implementation Proposal - Weekly Capacity & Multi-Group Resource Tracking</p>
+        <p>Generated: <span id="date"></span></p>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            er: {
+                diagramPadding: 20,
+                layoutDirection: 'TB',
+                minEntityWidth: 100,
+                minEntityHeight: 75,
+                entityPadding: 15,
+                stroke: '#333',
+                fill: '#f9f9f9',
+                fontSize: 12,
+                useMaxWidth: true
+            },
+            themeVariables: {
+                primaryColor: '#4ade80',
+                primaryTextColor: '#1a1a2e',
+                primaryBorderColor: '#22c55e',
+                lineColor: '#64748b',
+                secondaryColor: '#60a5fa',
+                tertiaryColor: '#f472b6'
+            }
+        });
+
+        document.getElementById('date').textContent = new Date().toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+    </script>
+</body>
+</html>

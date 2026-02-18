@@ -1,0 +1,161 @@
+erDiagram
+    %% ========================================
+    %% V2 DATA SCHEMA - Weekly Capacity Tracking
+    %% ========================================
+
+    %% Configuration Tables (Rarely Changed)
+    ProductionCapacityTierModel {
+        int id PK
+        string tier_name UK "e.g., Full Production, 75% Ramp"
+        float capacity_percentage "0.0 - 1.0"
+        string description
+        bool is_active
+        int display_order
+    }
+
+    WeekConfigurationModel {
+        int id PK
+        int year
+        int week_number "ISO week 1-53"
+        date week_start_date
+        date week_end_date
+        string month "Parent month name"
+        string work_type "Domestic or Global"
+        int working_days "Typically 5"
+        float work_hours "e.g., 9"
+        float occupancy "e.g., 0.95"
+        float shrinkage "e.g., 0.10"
+    }
+
+    %% Master Data Tables
+    ResourceModel {
+        int id PK
+        string cn UK "Unique identifier CN# or TBH-001"
+        string resource_type "actual or placeholder"
+        string display_name "John Smith or Planned Hire"
+        string first_name "NULL for placeholders"
+        string last_name "NULL for placeholders"
+        string opid "NULL for placeholders"
+        string primary_platform "Amisys or Facets"
+        string location "Domestic or Global"
+        string state_list "Pipe-delimited FL|GA|TX"
+        string skills "Comma-separated case types"
+        bool is_active
+        date hire_date "NULL for placeholders"
+        int created_for_week "Placeholder: week created for"
+        int created_for_year "Placeholder: year created for"
+        string replaced_by_cn "When converted to actual"
+        datetime replaced_at "When converted"
+        datetime created_datetime
+        datetime updated_datetime
+    }
+
+    %% Existing V1 Tables (Reference)
+    ForecastModel {
+        int id PK
+        string Centene_Capacity_Plan_Main_LOB
+        string Centene_Capacity_Plan_State
+        string Centene_Capacity_Plan_Case_Type
+        string Centene_Capacity_Plan_Call_Type_ID
+        int Centene_Capacity_Plan_Target_CPH
+        int Client_Forecast_Month1_to_6
+        int FTE_Required_Month1_to_6
+        int FTE_Avail_Month1_to_6
+        int Capacity_Month1_to_6
+        string Month
+        int Year
+    }
+
+    MonthConfigurationModel {
+        int id PK
+        string Month
+        int Year
+        string WorkType "Domestic or Global"
+        int WorkingDays
+        float Occupancy
+        float Shrinkage
+        float WorkHours
+    }
+
+    TargetCPHModel {
+        int id PK
+        string MainLOB
+        string CaseType
+        float TargetCPH
+    }
+
+    %% Core Transactional Table
+    WeeklyResourceAssignmentModel {
+        int id PK
+        int year
+        int week_number "ISO week"
+        string report_month
+        int report_year
+        int forecast_month_index "1-6"
+        string resource_cn FK "Links to ResourceModel"
+        string demand_main_lob "Links to ForecastModel"
+        string demand_state
+        string demand_case_type
+        int capacity_tier_id FK "Links to ProductionCapacityTierModel"
+        float production_percentage "0.0 - 1.0"
+        float weekly_capacity "Calculated output"
+        string assignment_type "primary, bench, manual"
+        string assigned_by
+        datetime assigned_datetime
+        bool is_active
+        datetime deallocated_datetime
+        string deallocated_by
+    }
+
+    %% Aggregated Summary Table
+    MonthlyCapacitySummaryModel {
+        int id PK
+        string report_month
+        int report_year
+        int forecast_month_index "1-6"
+        string forecast_month
+        int forecast_year
+        string main_lob
+        string state
+        string case_type
+        int total_forecast
+        int total_fte_count "Unique resources"
+        int actual_fte_count "Actual resources only"
+        int placeholder_fte_count "Placeholder resources"
+        float total_fte_equivalent "Sum of production %"
+        float actual_fte_equivalent "Actual only"
+        float placeholder_fte_equivalent "Placeholder only"
+        float total_capacity "Sum of weekly capacity"
+        int fte_required
+        float capacity_gap "capacity - forecast"
+        string tier_breakdown "JSON with actual/placeholder split"
+        datetime computed_datetime
+    }
+
+    %% ========================================
+    %% RELATIONSHIPS
+    %% ========================================
+
+    %% Resource assignments reference resources
+    ResourceModel ||--o{ WeeklyResourceAssignmentModel : "assigned_to"
+
+    %% Assignments use capacity tiers
+    ProductionCapacityTierModel ||--o{ WeeklyResourceAssignmentModel : "defines_capacity"
+
+    %% Assignments reference week configuration
+    WeekConfigurationModel ||--o{ WeeklyResourceAssignmentModel : "week_config"
+
+    %% Assignments reference forecast demand
+    ForecastModel ||--o{ WeeklyResourceAssignmentModel : "demand_reference"
+
+    %% Monthly summary aggregates from weekly assignments
+    WeeklyResourceAssignmentModel }o--|| MonthlyCapacitySummaryModel : "aggregates_to"
+
+    %% Week config derives from month config
+    MonthConfigurationModel ||--o{ WeekConfigurationModel : "generates"
+
+    %% Target CPH used in capacity calculations
+    TargetCPHModel ||--o{ WeeklyResourceAssignmentModel : "cph_reference"
+
+    %% Monthly summary references forecast
+    ForecastModel ||--o{ MonthlyCapacitySummaryModel : "forecast_source"
