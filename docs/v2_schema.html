@@ -71,6 +71,7 @@
         .legend-existing { background: #60a5fa; }
         .legend-core { background: #f472b6; }
         .legend-summary { background: #fbbf24; }
+        .legend-policy { background: #a78bfa; }
 
         .diagram-container {
             background: #fff;
@@ -111,6 +112,10 @@
             border-left: 4px solid #f472b6;
         }
 
+        .table-card.policy {
+            border-left: 4px solid #a78bfa;
+        }
+
         .table-card h3 {
             font-size: 16px;
             color: #fff;
@@ -130,6 +135,7 @@
         .badge-new { background: #4ade80; color: #000; }
         .badge-existing { background: #60a5fa; color: #000; }
         .badge-core { background: #f472b6; color: #000; }
+        .badge-policy { background: #a78bfa; color: #000; }
 
         .table-card p {
             font-size: 13px;
@@ -146,6 +152,10 @@
             font-size: 12px;
             color: #808080;
             margin-bottom: 4px;
+        }
+
+        .table-card li strong {
+            color: #c0c0c0;
         }
 
         .footer {
@@ -180,6 +190,10 @@
             <div class="legend-item">
                 <div class="legend-color legend-new"></div>
                 <span>New Configuration Tables</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color legend-policy"></div>
+                <span>Policy Configuration (NEW)</span>
             </div>
             <div class="legend-item">
                 <div class="legend-color legend-existing"></div>
@@ -222,6 +236,18 @@ erDiagram
         float shrinkage
     }
 
+    AvailabilityPolicyModel {
+        int id PK
+        string policy_key UK
+        string policy_value
+        string value_type
+        string description
+        string category
+        bool is_active
+        datetime created_datetime
+        datetime updated_datetime
+    }
+
     ResourceModel {
         int id PK
         string cn UK
@@ -236,6 +262,8 @@ erDiagram
         string skills
         bool is_active
         date hire_date
+        date available_from
+        date available_until
         int created_for_week
         int created_for_year
         string replaced_by_cn
@@ -322,6 +350,7 @@ erDiagram
     MonthConfigurationModel ||--o{ WeekConfigurationModel : "generates"
     TargetCPHModel ||--o{ WeeklyResourceAssignmentModel : "cph_ref"
     ForecastModel ||--o{ MonthlyCapacitySummaryModel : "forecast_src"
+    AvailabilityPolicyModel ||--o{ ResourceModel : "governs"
             </div>
         </div>
 
@@ -347,12 +376,25 @@ erDiagram
                 </ul>
             </div>
 
+            <div class="table-card policy">
+                <h3>AvailabilityPolicyModel <span class="badge badge-policy">NEW</span></h3>
+                <p>Configurable business policies that control system behavior without code changes. Policies are organized by category.</p>
+                <ul>
+                    <li><strong>availability:</strong> ENFORCE_AVAILABLE_FROM, ENFORCE_AVAILABLE_UNTIL, DEFAULT_AVAILABILITY_DAYS</li>
+                    <li><strong>allocation:</strong> ALLOW_OVER_ALLOCATION, AUTO_CREATE_PLACEHOLDERS, PLACEHOLDER_PREFIX</li>
+                    <li><strong>reporting:</strong> INCLUDE_PLACEHOLDERS_IN_REPORTS, SEPARATE_PLACEHOLDER_COLUMNS</li>
+                    <li>Value types: boolean, integer, string, float</li>
+                </ul>
+            </div>
+
             <div class="table-card new">
                 <h3>ResourceModel <span class="badge badge-new">NEW</span></h3>
-                <p>Master resource table supporting both actual people and placeholder/tentative resources for future planning.</p>
+                <p>Master resource table supporting actual people, placeholder/tentative resources, and availability windows for planning.</p>
                 <ul>
                     <li><strong>resource_type:</strong> "actual" (real people) or "placeholder" (TBH-001, TBH-002)</li>
                     <li><strong>display_name:</strong> "John Smith" or "Planned Hire - Claims"</li>
+                    <li><strong>available_from:</strong> First date resource can be allocated (e.g., start date)</li>
+                    <li><strong>available_until:</strong> Last date resource can be allocated (e.g., end date, departure)</li>
                     <li>CN# as unique identifier (actual: CN12345, placeholder: TBH-001)</li>
                     <li>Platform, location, skills (required for both types)</li>
                     <li>Placeholder conversion: replaced_by_cn tracks when converted to actual</li>
@@ -361,12 +403,13 @@ erDiagram
 
             <div class="table-card core">
                 <h3>WeeklyResourceAssignmentModel <span class="badge badge-core">CORE</span></h3>
-                <p>Core transactional table - tracks weekly assignment of resources (actual + placeholder) to demands with production percentage.</p>
+                <p>Core transactional table - tracks weekly assignment of resources (actual + placeholder) to demands with production percentage. Respects availability windows.</p>
                 <ul>
                     <li><strong>Unique constraint:</strong> One assignment per resource per week</li>
                     <li>Works with both actual resources and placeholders</li>
                     <li>Links to capacity tier (100%, 75%, 50%, 25%)</li>
                     <li>Calculated weekly capacity (same formula for both types)</li>
+                    <li>Validates resource availability window before assignment</li>
                     <li>Soft delete for history tracking</li>
                 </ul>
             </div>
@@ -416,6 +459,7 @@ erDiagram
 
     <div class="footer">
         <p>V2 Implementation Proposal - Weekly Capacity & Multi-Group Resource Tracking</p>
+        <p>Version 3.0 - Includes Availability Windows and Policy Configuration</p>
         <p>Generated: <span id="date"></span></p>
     </div>
 

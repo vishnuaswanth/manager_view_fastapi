@@ -1,34 +1,189 @@
 # V2 Implementation Proposal: Weekly Capacity & Multi-Group Resource Tracking
 
-## Overview
+---
 
-This document outlines the proposed implementation for enhancing the forecast system to support:
-- Multiple resource groups with varying production capacities (100%, 75%, 50%, etc.)
-- Week-by-week capacity tracking that aggregates to monthly values
-- **Placeholder/Tentative resources** for future planning (TBH-001, TBH-002, etc.)
-- Flexible resource assignment and reallocation
-- Enhanced reporting for PowerBI and JavaScript dashboards
+# PART A: Management Overview
+
+*Quick read for stakeholders - Key decisions, assumptions, and business policies*
 
 ---
 
-## Confirmed Design Decisions
+## Executive Summary
 
-Based on user feedback, the following design decisions are **confirmed**:
+This V2 implementation enhances the Centene Forecasting system to support:
 
-| Decision | Choice | Impact |
-|----------|--------|--------|
-| Production % Changes | Week-level granularity | Percentage applies for the whole week, changes take effect at week boundaries |
-| Resource Assignment | Single assignment per resource per week | Unique constraint: (resource_cn, year, week_number) |
-| Dashboard Formats | Support both PowerBI (flat) and JavaScript (nested JSON) | Dual endpoint formats for reporting |
-| Placeholder Resources | Supported | TBH-001 style placeholders that can be converted to actual people |
+| Feature | Benefit |
+|---------|---------|
+| **Week-by-week capacity tracking** | Granular planning that aggregates to monthly values |
+| **Multiple production capacity tiers** | Track resources at 100%, 75%, 50%, 25% productivity |
+| **Placeholder/Tentative resources** | Plan future hires (TBH-001, TBH-002) before actual people are hired |
+| **Resource availability windows** | Define when resources become available and when they leave |
+| **Configurable business policies** | System adapts to changing business rules without code changes |
+| **Dual reporting formats** | PowerBI (flat tables) and JavaScript dashboards (nested JSON) |
 
 ---
 
-## 1. New Database Models
+## Key Decisions & Rationale
+
+| # | Decision | Choice | Rationale |
+|---|----------|--------|-----------|
+| 1 | **Production % Granularity** | Week-level | Percentage applies for the whole week; changes take effect at week boundaries. Simpler than daily tracking while still capturing ramp progression. |
+| 2 | **Resource Assignment Constraint** | One assignment per resource per week | Unique constraint `(resource_cn, year, week_number)` prevents double-booking and simplifies capacity calculations. |
+| 3 | **Placeholder Support** | TBH-001 style placeholders | Enables forward planning with tentative resources that convert to actual people when hired. |
+| 4 | **Availability Window** | `available_from` and `available_until` dates | Resources auto-exclude from allocation outside their availability window. Handles start dates, end dates, and leaves. |
+| 5 | **Policy Configuration** | Database-driven policies | Business rules stored in `AvailabilityPolicyModel` allow behavior changes without code deployment. |
+| 6 | **Report Formats** | Dual format support | PowerBI needs flat tables; JavaScript dashboards need nested JSON. Both include actual vs placeholder breakdown. |
+
+---
+
+## Assumptions
+
+| # | Assumption | Impact if Wrong | Mitigation |
+|---|------------|-----------------|------------|
+| A1 | Week boundaries align with ISO weeks (Monday-Sunday) | Capacity calculations would be inconsistent | Week start/end dates stored explicitly in `WeekConfigurationModel` |
+| A2 | Resources work for a single demand per week | Cannot split a person across multiple demands in same week | Constraint enforced at database level; business process handles exceptions |
+| A3 | Placeholder resources have same skills/platform requirements as actual resources | Allocation matching would fail when placeholders convert | Required fields enforced on placeholder creation |
+| A4 | Capacity tiers are finite and predefined (100%, 75%, 50%, 25%) | Missed productivity levels | Tiers are configurable via `ProductionCapacityTierModel` |
+| A5 | Availability dates are known at resource creation time | Resources may be allocated outside their valid period | Default policy: resources available indefinitely if dates not set |
+| A6 | Month configuration exists before week configuration is generated | Week config generation would fail | Validation check before generation; fallback to defaults |
+
+---
+
+## Policies (Configurable Business Rules)
+
+Policies are stored in `AvailabilityPolicyModel` and control system behavior:
+
+### Policy: Availability Window Enforcement
+
+| Policy Key | Default Value | Description |
+|------------|---------------|-------------|
+| `ENFORCE_AVAILABLE_FROM` | `true` | When `true`, resources cannot be allocated before their `available_from` date |
+| `ENFORCE_AVAILABLE_UNTIL` | `true` | When `true`, resources cannot be allocated after their `available_until` date |
+| `DEFAULT_AVAILABILITY_DAYS` | `365` | Days a resource is available if no `available_until` is set (from hire/creation date) |
+| `PLACEHOLDER_DEFAULT_WEEKS` | `26` | Default number of weeks a placeholder is valid for |
+
+### Policy: Allocation Behavior
+
+| Policy Key | Default Value | Description |
+|------------|---------------|-------------|
+| `ALLOW_OVER_ALLOCATION` | `false` | When `true`, allows allocating more FTEs than forecast requires |
+| `AUTO_CREATE_PLACEHOLDERS` | `true` | When using set-week-targets API, automatically create placeholders to fill gaps |
+| `PLACEHOLDER_PREFIX` | `TBH-` | Prefix for auto-generated placeholder CNs (e.g., TBH-001) |
+| `MAX_PLACEHOLDERS_PER_REQUEST` | `100` | Maximum placeholders that can be created in a single request |
+
+### Policy: Reporting
+
+| Policy Key | Default Value | Description |
+|------------|---------------|-------------|
+| `INCLUDE_PLACEHOLDERS_IN_REPORTS` | `true` | When `true`, placeholder resources appear in capacity reports |
+| `SEPARATE_PLACEHOLDER_COLUMNS` | `true` | When `true`, reports have separate columns for actual vs placeholder counts |
+
+### Example Policy Usage
+
+```python
+# Check if resource is available for a given week
+def is_resource_available(resource: ResourceModel, week_start: date, week_end: date) -> bool:
+    policy = get_policy("ENFORCE_AVAILABLE_FROM")
+
+    if policy.value == "true" and resource.available_from:
+        if week_start < resource.available_from:
+            return False
+
+    policy = get_policy("ENFORCE_AVAILABLE_UNTIL")
+
+    if policy.value == "true" and resource.available_until:
+        if week_end > resource.available_until:
+            return False
+
+    return True
+```
+
+---
+
+## Availability Window Feature
+
+### Overview
+
+The **Availability Window** feature allows defining when a resource is available for allocation:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `available_from` | `date` | First date the resource can be allocated (e.g., start date, return from leave) |
+| `available_until` | `date` | Last date the resource can be allocated (e.g., last day, planned departure) |
+
+### Use Cases
+
+| Scenario | `available_from` | `available_until` |
+|----------|------------------|-------------------|
+| New hire starting May 1 | `2025-05-01` | `NULL` (indefinite) |
+| Contractor ending July 31 | `NULL` (already available) | `2025-07-31` |
+| Temp worker June 1-30 | `2025-06-01` | `2025-06-30` |
+| Resource on leave April 15-30 | Create separate record or use custom logic | |
+| Placeholder for Q3 planning | `2025-07-01` | `2025-09-30` |
+
+### Behavior Rules
+
+1. **NULL `available_from`**: Resource is available immediately (no start restriction)
+2. **NULL `available_until`**: Resource is available indefinitely (no end restriction)
+3. **Both NULL**: Resource is always available (current behavior, backward compatible)
+4. **Allocation outside window**: Resource is excluded from allocation matching
+5. **Reports**: Can filter by "currently available" vs "all resources"
+
+---
+
+## Visual Summary: Data Flow
+
+```
+Forecast Demand                    Resource Pool
+     |                                  |
+     v                                  v
++----------------+            +------------------+
+| ForecastModel  |            | ResourceModel    |
+| - demand data  |            | - actual/placeholder
+| - 6 months     |            | - availability window
++----------------+            | - skills/platform
+     |                        +------------------+
+     |                                  |
+     +----------+  Allocation  +--------+
+                |   Engine     |
+                v              v
+       +------------------------+
+       | WeeklyResourceAssignment|
+       | - resource_cn          |
+       | - demand reference     |
+       | - capacity tier (%)    |
+       | - week context         |
+       +------------------------+
+                |
+                | Aggregation
+                v
+       +------------------------+
+       | MonthlyCapacitySummary |
+       | - actual counts        |
+       | - placeholder counts   |
+       | - tier breakdown       |
+       +------------------------+
+                |
+        +-------+-------+
+        |               |
+        v               v
+   PowerBI          JavaScript
+   (flat)           (nested JSON)
+```
+
+---
+
+# PART B: Developer Guide
+
+*Detailed technical specifications for implementation*
+
+---
+
+## 1. Data Models
 
 ### 1.1 WeekConfigurationModel
 
-**Purpose:** Store week-level configuration for capacity calculations (working days, hours, occupancy, shrinkage per week).
+**Purpose:** Store week-level configuration for capacity calculations.
 
 ```python
 class WeekConfigurationModel(SQLModel, table=True):
@@ -53,14 +208,14 @@ class WeekConfigurationModel(SQLModel, table=True):
 
 ### 1.2 ProductionCapacityTierModel
 
-**Purpose:** Define standard production capacity tiers (100%, 75%, 50%, etc.).
+**Purpose:** Define standard production capacity tiers.
 
 ```python
 class ProductionCapacityTierModel(SQLModel, table=True):
     __tablename__ = "production_capacity_tier"
 
     id: int = Field(primary_key=True)
-    tier_name: str                            # "Full Production", "75% Ramp", "50% Ramp", "Training"
+    tier_name: str                            # "Full Production", "75% Ramp", etc.
     capacity_percentage: float                # 1.0, 0.75, 0.50, 0.25
     description: str
     is_active: bool = True
@@ -70,6 +225,7 @@ class ProductionCapacityTierModel(SQLModel, table=True):
 ```
 
 **Default Tiers (seeded on startup):**
+
 | Tier Name | Percentage | Description |
 |-----------|------------|-------------|
 | Full Production | 100% | Fully ramped resources |
@@ -79,9 +235,47 @@ class ProductionCapacityTierModel(SQLModel, table=True):
 
 ---
 
-### 1.3 ResourceModel (with Placeholder Support)
+### 1.3 AvailabilityPolicyModel (NEW)
 
-**Purpose:** Master resource table supporting both **actual people** and **placeholder/tentative resources** for future planning.
+**Purpose:** Store configurable business policies for availability and allocation behavior.
+
+```python
+class AvailabilityPolicyModel(SQLModel, table=True):
+    __tablename__ = "availability_policy"
+
+    id: int = Field(primary_key=True)
+    policy_key: str                           # Unique policy identifier
+    policy_value: str                         # Value (string, parsed as needed)
+    value_type: str                           # "boolean", "integer", "string", "float"
+    description: str                          # Human-readable description
+    category: str                             # "availability", "allocation", "reporting"
+    is_active: bool = True
+    created_datetime: datetime
+    updated_datetime: datetime
+
+    # Unique: policy_key
+```
+
+**Default Policies (seeded on startup):**
+
+| policy_key | policy_value | value_type | category |
+|------------|--------------|------------|----------|
+| `ENFORCE_AVAILABLE_FROM` | `true` | boolean | availability |
+| `ENFORCE_AVAILABLE_UNTIL` | `true` | boolean | availability |
+| `DEFAULT_AVAILABILITY_DAYS` | `365` | integer | availability |
+| `PLACEHOLDER_DEFAULT_WEEKS` | `26` | integer | availability |
+| `ALLOW_OVER_ALLOCATION` | `false` | boolean | allocation |
+| `AUTO_CREATE_PLACEHOLDERS` | `true` | boolean | allocation |
+| `PLACEHOLDER_PREFIX` | `TBH-` | string | allocation |
+| `MAX_PLACEHOLDERS_PER_REQUEST` | `100` | integer | allocation |
+| `INCLUDE_PLACEHOLDERS_IN_REPORTS` | `true` | boolean | reporting |
+| `SEPARATE_PLACEHOLDER_COLUMNS` | `true` | boolean | reporting |
+
+---
+
+### 1.4 ResourceModel (with Placeholder & Availability Support)
+
+**Purpose:** Master resource table supporting actual people, placeholders, and availability windows.
 
 ```python
 class ResourceModel(SQLModel, table=True):
@@ -90,7 +284,7 @@ class ResourceModel(SQLModel, table=True):
     id: int = Field(primary_key=True)
     cn: str                                   # "CN12345" (actual) or "TBH-001" (placeholder)
 
-    # Resource type - KEY FIELD
+    # Resource type
     resource_type: str                        # "actual" | "placeholder"
     display_name: str                         # "John Smith" or "Planned Hire - Claims"
 
@@ -99,7 +293,7 @@ class ResourceModel(SQLModel, table=True):
     last_name: Optional[str]
     opid: Optional[str]
 
-    # Skills and capabilities (REQUIRED for both types - used for matching)
+    # Skills and capabilities (REQUIRED for both types)
     primary_platform: str                     # "Amisys", "Facets"
     location: str                             # "Domestic", "Global"
     state_list: str                           # Pipe-delimited: "FL|GA|TX"
@@ -108,6 +302,10 @@ class ResourceModel(SQLModel, table=True):
     # Current status
     is_active: bool = True
     hire_date: Optional[date]                 # NULL for placeholders
+
+    # AVAILABILITY WINDOW (NEW)
+    available_from: Optional[date]            # First date resource can be allocated
+    available_until: Optional[date]           # Last date resource can be allocated
 
     # Placeholder-specific fields
     created_for_week: Optional[int]           # Week this placeholder was created for
@@ -124,15 +322,16 @@ class ResourceModel(SQLModel, table=True):
 
 **Key Points:**
 - `resource_type="actual"`: Real people with CN numbers (e.g., CN12345)
-- `resource_type="placeholder"`: Tentative/planned resources (e.g., TBH-001, TBH-002)
-- Placeholders have the same skills/platform/location as actual resources (required for allocation matching)
-- When a placeholder is converted to an actual person, `replaced_by_cn` tracks the link
+- `resource_type="placeholder"`: Tentative/planned resources (e.g., TBH-001)
+- `available_from`: Resource cannot be allocated before this date
+- `available_until`: Resource cannot be allocated after this date
+- Both availability fields are optional; NULL means no restriction
 
 ---
 
-### 1.4 WeeklyResourceAssignmentModel
+### 1.5 WeeklyResourceAssignmentModel
 
-**Purpose:** Weekly assignment of resources (actual + placeholder) to demands with capacity tracking. This is the core transactional table.
+**Purpose:** Weekly assignment of resources to demands with capacity tracking.
 
 ```python
 class WeeklyResourceAssignmentModel(SQLModel, table=True):
@@ -148,9 +347,9 @@ class WeeklyResourceAssignmentModel(SQLModel, table=True):
     forecast_month_index: int                 # Which of the 6 forecast months (1-6)
 
     # Resource reference
-    resource_cn: str                          # FK to ResourceModel.cn (actual or placeholder)
+    resource_cn: str                          # FK to ResourceModel.cn
 
-    # Demand reference (composite key to ForecastModel)
+    # Demand reference
     demand_main_lob: str
     demand_state: str
     demand_case_type: str
@@ -159,7 +358,7 @@ class WeeklyResourceAssignmentModel(SQLModel, table=True):
     capacity_tier_id: int                     # FK to ProductionCapacityTierModel
     production_percentage: float              # Actual percentage (0.0-1.0)
 
-    # Calculated values (denormalized for query performance)
+    # Calculated values
     weekly_capacity: float                    # Calculated weekly output
 
     # Assignment metadata
@@ -167,25 +366,19 @@ class WeeklyResourceAssignmentModel(SQLModel, table=True):
     assigned_by: str
     assigned_datetime: datetime
 
-    # Soft delete for history
+    # Soft delete
     is_active: bool = True
     deallocated_datetime: datetime = None
     deallocated_by: str = None
 
-    # UNIQUE: (resource_cn, year, week_number) - one assignment per resource per week
+    # UNIQUE: (resource_cn, year, week_number)
 ```
-
-**Key Design Decision (Confirmed):**
-- One assignment per resource per week (no split assignments)
-- Production percentage applies for entire week
-- Changes take effect at week boundaries
-- Works identically for actual and placeholder resources
 
 ---
 
-### 1.5 MonthlyCapacitySummaryModel (with Actual/Placeholder Breakdown)
+### 1.6 MonthlyCapacitySummaryModel
 
-**Purpose:** Pre-aggregated monthly capacity (materialized view pattern for fast reporting).
+**Purpose:** Pre-aggregated monthly capacity for fast reporting.
 
 ```python
 class MonthlyCapacitySummaryModel(SQLModel, table=True):
@@ -197,7 +390,7 @@ class MonthlyCapacitySummaryModel(SQLModel, table=True):
     report_month: str
     report_year: int
     forecast_month_index: int                 # 1-6
-    forecast_month: str                       # Actual month name
+    forecast_month: str
     forecast_year: int
 
     # Demand identification
@@ -205,22 +398,22 @@ class MonthlyCapacitySummaryModel(SQLModel, table=True):
     state: str
     case_type: str
 
-    # Aggregated metrics (sum of weekly values)
-    total_forecast: int                       # From ForecastModel
-    total_fte_count: int                      # Count of unique resources (actual + placeholder)
-    actual_fte_count: int                     # Count of actual resources only
-    placeholder_fte_count: int                # Count of placeholder resources only
+    # Aggregated metrics
+    total_forecast: int
+    total_fte_count: int                      # Actual + placeholder
+    actual_fte_count: int
+    placeholder_fte_count: int
     total_fte_equivalent: float               # Sum of production_percentage
-    actual_fte_equivalent: float              # Actual resources only
-    placeholder_fte_equivalent: float         # Placeholder resources only
-    total_capacity: float                     # Sum of weekly_capacity
+    actual_fte_equivalent: float
+    placeholder_fte_equivalent: float
+    total_capacity: float
 
     # Derived metrics
-    fte_required: int                         # Calculated from forecast
-    capacity_gap: float                       # capacity - forecast
+    fte_required: int
+    capacity_gap: float
 
-    # Breakdown by capacity tier (JSON with actual/placeholder split)
-    tier_breakdown: str                       # JSON (see format below)
+    # Breakdown
+    tier_breakdown: str                       # JSON with actual/placeholder split
 
     # Computed timestamp
     computed_datetime: datetime
@@ -249,18 +442,26 @@ class MonthlyCapacitySummaryModel(SQLModel, table=True):
 
 ---
 
-## 2. New API Endpoints
+## 2. API Endpoints
 
 ### 2.1 Resource Management (`/api/v2/resources`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v2/resources` | List resources with filters (platform, location, active, resource_type) |
+| GET | `/api/v2/resources` | List resources with filters (platform, location, active, resource_type, available_for_date) |
 | GET | `/api/v2/resources/{cn}` | Get single resource by CN |
 | POST | `/api/v2/resources` | Create new actual resource |
-| PUT | `/api/v2/resources/{cn}` | Update resource details |
+| PUT | `/api/v2/resources/{cn}` | Update resource details (including availability window) |
 | DELETE | `/api/v2/resources/{cn}` | Deactivate resource (soft delete) |
 | POST | `/api/v2/resources/bulk-import` | Import from roster file |
+
+**New Query Parameter: `available_for_date`**
+```
+GET /api/v2/resources?available_for_date=2025-06-15
+```
+Returns only resources where:
+- `available_from` is NULL or <= 2025-06-15
+- `available_until` is NULL or >= 2025-06-15
 
 ### 2.2 Placeholder Resource Management (`/api/v2/resources/placeholders`)
 
@@ -279,24 +480,9 @@ class MonthlyCapacitySummaryModel(SQLModel, table=True):
     "location": "Domestic",
     "skills": "Claims Processing",
     "state_list": "FL|GA|TX",
-    "display_name_prefix": "Planned Hire - Claims"
-}
-```
-
-**Response:**
-```json
-{
-    "created": ["TBH-001", "TBH-002", "TBH-003", "TBH-004", "TBH-005"]
-}
-```
-
-**Convert Placeholder Request:**
-```json
-{
-    "actual_cn": "CN12345",
-    "first_name": "John",
-    "last_name": "Smith",
-    "transfer_assignments": true
+    "display_name_prefix": "Planned Hire - Claims",
+    "available_from": "2025-06-01",
+    "available_until": "2025-12-31"
 }
 ```
 
@@ -304,80 +490,21 @@ class MonthlyCapacitySummaryModel(SQLModel, table=True):
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v2/assignments` | List assignments with filters (week, resource, demand) |
+| GET | `/api/v2/assignments` | List assignments with filters |
 | GET | `/api/v2/assignments/{id}` | Get single assignment |
-| POST | `/api/v2/assignments` | Create assignment (assign resource to demand) |
-| PUT | `/api/v2/assignments/{id}` | Update assignment (change production %) |
+| POST | `/api/v2/assignments` | Create assignment (validates availability window) |
+| PUT | `/api/v2/assignments/{id}` | Update assignment |
 | DELETE | `/api/v2/assignments/{id}` | Deallocate (soft delete) |
 | POST | `/api/v2/assignments/bulk` | Bulk assign resources |
-| POST | `/api/v2/assignments/bulk-placeholders` | Bulk assign placeholders to demand |
 
-### 2.4 Auto-Generation: Set Week Targets (`/api/v2/assignments/set-week-targets`)
+### 2.4 Policy Management (`/api/v2/policies`)
 
-**Purpose:** User enters target headcount per tier, system auto-creates placeholders to fill gaps.
-
-**Request:**
-```json
-{
-    "week_number": 12,
-    "year": 2025,
-    "forecast_month_index": 3,
-    "demand_main_lob": "Amisys Medicaid Domestic",
-    "demand_state": "FL",
-    "demand_case_type": "Claims Processing",
-    "targets": [
-        {"capacity_tier_id": 1, "target_count": 25},
-        {"capacity_tier_id": 2, "target_count": 15},
-        {"capacity_tier_id": 3, "target_count": 10}
-    ]
-}
-```
-
-**Response:**
-```json
-{
-    "week_number": 12,
-    "demand": "Amisys Medicaid Domestic / FL / Claims Processing",
-    "results": [
-        {
-            "tier": "100%",
-            "target": 25,
-            "actual_existing": 20,
-            "placeholders_existing": 0,
-            "placeholders_created": 5,
-            "final_total": 25
-        },
-        {
-            "tier": "75%",
-            "target": 15,
-            "actual_existing": 8,
-            "placeholders_existing": 0,
-            "placeholders_created": 7,
-            "final_total": 15
-        },
-        {
-            "tier": "50%",
-            "target": 10,
-            "actual_existing": 3,
-            "placeholders_existing": 0,
-            "placeholders_created": 7,
-            "final_total": 10
-        }
-    ],
-    "placeholders_created": ["TBH-001", "TBH-002", "...", "TBH-019"]
-}
-```
-
-**Auto-Generation Logic:**
-1. Get current assignments for week/demand
-2. Group by capacity tier
-3. For each tier:
-   - Count actual + existing placeholders
-   - If count < target: create new placeholders
-   - If count > target: deactivate excess placeholders (FIFO, never deactivate actual resources)
-4. Return summary
-
-**Important:** If target is below actual resource count, system returns warning and does not deactivate actual resources.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/v2/policies` | List all policies |
+| GET | `/api/v2/policies/{policy_key}` | Get single policy |
+| PUT | `/api/v2/policies/{policy_key}` | Update policy value |
+| POST | `/api/v2/policies/reset` | Reset all policies to defaults |
 
 ### 2.5 Capacity Tier Management (`/api/v2/capacity-tiers`)
 
@@ -400,31 +527,25 @@ class MonthlyCapacitySummaryModel(SQLModel, table=True):
 
 | Method | Endpoint | Description | Format |
 |--------|----------|-------------|--------|
-| GET | `/api/v2/reports/powerbi/monthly-summary` | Monthly summary flat table | PowerBI (flat) |
-| GET | `/api/v2/reports/powerbi/weekly-detail` | Weekly detail flat table | PowerBI (flat) |
-| GET | `/api/v2/reports/powerbi/resource-assignments` | Resource assignments flat | PowerBI (flat) |
-| GET | `/api/v2/reports/dashboard/hierarchy` | Hierarchical data | JavaScript (nested JSON) |
-| GET | `/api/v2/reports/dashboard/charts-data` | Chart-ready data | JavaScript (nested JSON) |
-| GET | `/api/v2/reports/capacity-by-tier` | Breakdown by production % | Both formats |
-| GET | `/api/v2/reports/comparison` | Current vs prior month | Both formats |
-
-**All reports include actual vs placeholder breakdown.**
+| GET | `/api/v2/reports/powerbi/monthly-summary` | Monthly summary flat table | PowerBI |
+| GET | `/api/v2/reports/powerbi/weekly-detail` | Weekly detail flat table | PowerBI |
+| GET | `/api/v2/reports/dashboard/hierarchy` | Hierarchical data | JavaScript |
+| GET | `/api/v2/reports/dashboard/charts-data` | Chart-ready data | JavaScript |
+| GET | `/api/v2/reports/capacity-by-tier` | Breakdown by production % | Both |
 
 ### 2.8 Allocation V2 (`/api/v2/allocation`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/v2/allocation/execute` | Run allocation with tier awareness |
+| POST | `/api/v2/allocation/execute` | Run allocation (respects availability windows) |
 | GET | `/api/v2/allocation/preview` | Preview allocation without committing |
 | POST | `/api/v2/allocation/rebalance` | Rebalance existing assignments |
 
 ---
 
-## 3. Capacity Calculation Logic
+## 3. Core Logic
 
 ### 3.1 Weekly Capacity Formula
-
-**Same formula for both actual and placeholder resources:**
 
 ```python
 def calculate_weekly_capacity(
@@ -446,12 +567,71 @@ def calculate_weekly_capacity(
         target_cph
     )
 
-# Examples:
-# Actual resource CN12345 at 100%: 1.0 × 5 × 9 × 0.9 × 12.5 = 506.25
-# Placeholder TBH-001 at 75%: 0.75 × 5 × 9 × 0.9 × 12.5 = 379.69
+# Example: Resource at 100% production
+# 1.0 * 5 * 9 * 0.9 * 12.5 = 506.25 cases/week
 ```
 
-### 3.2 Monthly Capacity Aggregation
+### 3.2 Availability Window Check
+
+```python
+def is_resource_available_for_week(
+    resource: ResourceModel,
+    week_start: date,
+    week_end: date
+) -> bool:
+    """
+    Check if resource is available for the entire week.
+    Respects availability policies from AvailabilityPolicyModel.
+    """
+    # Get policies
+    enforce_from = get_policy_bool("ENFORCE_AVAILABLE_FROM", default=True)
+    enforce_until = get_policy_bool("ENFORCE_AVAILABLE_UNTIL", default=True)
+
+    # Check available_from
+    if enforce_from and resource.available_from:
+        if week_start < resource.available_from:
+            return False
+
+    # Check available_until
+    if enforce_until and resource.available_until:
+        if week_end > resource.available_until:
+            return False
+
+    return True
+```
+
+### 3.3 Resource Matching with Availability
+
+```python
+def get_available_resources_for_demand(
+    demand: ForecastModel,
+    week_start: date,
+    week_end: date,
+    include_placeholders: bool = True
+) -> List[ResourceModel]:
+    """
+    Get resources matching demand criteria AND available for the week.
+    """
+    query = session.query(ResourceModel).filter(
+        ResourceModel.primary_platform == demand.platform,
+        ResourceModel.location == demand.locality,
+        ResourceModel.is_active == True
+    )
+
+    if not include_placeholders:
+        query = query.filter(ResourceModel.resource_type == "actual")
+
+    # Filter by availability window
+    resources = []
+    for resource in query.all():
+        if is_resource_available_for_week(resource, week_start, week_end):
+            if demand.state in resource.state_list.split("|"):
+                resources.append(resource)
+
+    return resources
+```
+
+### 3.4 Monthly Aggregation
 
 ```python
 def calculate_monthly_capacity(
@@ -474,47 +654,11 @@ def calculate_monthly_capacity(
     return total_capacity
 ```
 
-### 3.3 Tier Breakdown Calculation (with Actual/Placeholder Split)
-
-```python
-def calculate_tier_breakdown(
-    assignments: List[WeeklyResourceAssignment],
-    resources: Dict[str, ResourceModel],
-    tiers: List[ProductionCapacityTier]
-) -> Dict:
-    """
-    Count resources by capacity tier with actual/placeholder split.
-    """
-    breakdown = {"tiers": [], "totals": {}}
-
-    for tier in tiers:
-        tier_assignments = [a for a in assignments if a.capacity_tier_id == tier.id]
-        actual_count = sum(1 for a in tier_assignments if resources[a.resource_cn].resource_type == "actual")
-        placeholder_count = sum(1 for a in tier_assignments if resources[a.resource_cn].resource_type == "placeholder")
-
-        breakdown["tiers"].append({
-            "tier_name": tier.tier_name,
-            "percentage": tier.capacity_percentage,
-            "actual": actual_count,
-            "placeholder": placeholder_count,
-            "total": actual_count + placeholder_count
-        })
-
-    # Calculate totals
-    breakdown["totals"] = {
-        "actual_headcount": sum(t["actual"] for t in breakdown["tiers"]),
-        "placeholder_headcount": sum(t["placeholder"] for t in breakdown["tiers"]),
-        "total_headcount": sum(t["total"] for t in breakdown["tiers"])
-    }
-
-    return breakdown
-```
-
 ---
 
-## 4. Report Format Examples
+## 4. Report Formats
 
-### 4.1 PowerBI Format (Flat Table with Actual/Placeholder Columns)
+### 4.1 PowerBI Format (Flat Table)
 
 ```json
 {
@@ -531,15 +675,12 @@ def calculate_tier_breakdown(
   "rows": [
     ["Amisys Medicaid Domestic", "Claims Processing", "FL", "May-25", 5000,
      47, 30, 17, 37.0, 28.5, 8.5, 4800, -200,
-     15, 0, 8, 4, 5, 8, 2, 5],
-    ["Amisys Medicaid Domestic", "Claims Processing", "FL", "Jun-25", 5200,
-     50, 32, 18, 40.0, 30.0, 10.0, 5100, -100,
-     18, 0, 8, 4, 4, 10, 2, 4]
+     15, 0, 8, 4, 5, 8, 2, 5]
   ]
 }
 ```
 
-### 4.2 JavaScript Dashboard Format (Nested JSON with Actual/Placeholder)
+### 4.2 JavaScript Dashboard Format (Nested JSON)
 
 ```json
 {
@@ -567,184 +708,176 @@ def calculate_tier_breakdown(
       "children": [...]
     }
   ],
-  "months": ["May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25", "Oct-25"],
-  "chart_series": {
-    "forecast_trend": [50000, 52000, 54000, 53000, 51000, 50000],
-    "capacity_trend": [48000, 50000, 52000, 52000, 51000, 50000],
-    "actual_capacity_trend": [40000, 42000, 44000, 45000, 45000, 45000],
-    "placeholder_capacity_trend": [8000, 8000, 8000, 7000, 6000, 5000]
-  }
+  "months": ["May-25", "Jun-25", "Jul-25", "Aug-25", "Sep-25", "Oct-25"]
 }
 ```
 
 ---
 
-## 5. Week-by-Week Planning Example
+## 5. File Structure
 
-**Scenario:** Planning for Month 3 (June 2025) - 4 weeks
-
-```
-Week 1 (June 2-6):
-  - Actual resources: 20 at 100%
-  - Placeholders: 0
-  - Total capacity: 20 × 100% = 20.0 FTE equivalent
-
-Week 2 (June 9-13):
-  - Actual resources: 20 at 100%
-  - Placeholders: 5 at 50% (new hires starting)
-  - Total capacity: 20 + 2.5 = 22.5 FTE equivalent
-
-Week 3 (June 16-20):
-  - Actual resources: 20 at 100%
-  - Placeholders: 5 at 75% (ramping up)
-  - Total capacity: 20 + 3.75 = 23.75 FTE equivalent
-
-Week 4 (June 23-27):
-  - Actual resources: 20 at 100%
-  - Placeholders: 5 at 100% (fully ramped) + 3 at 50% (more hires)
-  - Total capacity: 20 + 5 + 1.5 = 26.5 FTE equivalent
-
-Monthly Total: Sum of all weekly capacities
-```
-
----
-
-## 6. File Structure
-
-### 6.1 New Files to Create
+### 5.1 New Files to Create
 
 ```
 code/
 ├── logics/
-│   ├── models_v2.py                  # V2 database models (with placeholder support)
+│   ├── models_v2.py                  # V2 database models
 │   ├── capacity_calculations_v2.py   # Weekly/monthly capacity logic
-│   ├── placeholder_utils.py          # Placeholder creation, conversion, auto-generation
+│   ├── placeholder_utils.py          # Placeholder creation, conversion
+│   ├── availability_utils.py         # Availability window checks (NEW)
+│   ├── policy_utils.py               # Policy retrieval helpers (NEW)
 │   ├── allocation_v2.py              # V2 allocation algorithm
 │   └── aggregation_utils.py          # Monthly aggregation helpers
 ├── api/
 │   └── routers/
 │       ├── resource_router_v2.py     # Resource + Placeholder CRUD
-│       ├── assignment_router_v2.py   # Assignment CRUD + set-week-targets
+│       ├── assignment_router_v2.py   # Assignment CRUD
 │       ├── capacity_tier_router.py   # Tier management
+│       ├── policy_router_v2.py       # Policy management (NEW)
 │       ├── week_config_router.py     # Week configuration
-│       └── reports_router_v2.py      # V2 reporting endpoints (PowerBI + JS)
+│       └── reports_router_v2.py      # V2 reporting endpoints
 └── tests/
     ├── test_capacity_calculations_v2.py
+    ├── test_availability_utils.py    # NEW
+    ├── test_policy_utils.py          # NEW
     ├── test_placeholder_utils.py
     ├── test_allocation_v2.py
     └── test_reports_v2.py
 ```
 
-### 6.2 Modified Files
+### 5.2 Modified Files
 
 | File | Changes |
 |------|---------|
 | `code/main.py` | Register V2 routers with `/api/v2` prefix |
-| `code/logics/db.py` | Add V2 models (or import from models_v2.py) |
+| `code/logics/db.py` | Add V2 models or import from models_v2.py |
 | `code/api/dependencies.py` | Add V2 dependencies if needed |
 
 ---
 
-## 7. Migration Strategy
+## 6. Migration Strategy
 
-### 7.1 Data Migration
+### 6.1 Data Migration
 
 1. **ResourceModel**: Import from existing `ProdTeamRosterModel`
    - Map CN, names, platform, location, state, skills
    - Set `resource_type = "actual"` for all imported
-   - Set is_active based on PartofProduction
+   - Set `available_from = hire_date` if available
+   - Set `available_until = NULL` (indefinite)
 
-2. **WeeklyResourceAssignmentModel**: Import from existing `FTEAllocationMappingModel`
+2. **WeeklyResourceAssignmentModel**: Import from existing allocations
    - Convert monthly allocations to weekly
    - Initially set all to 100% production tier
 
-3. **MonthlyCapacitySummaryModel**: Compute from existing ForecastModel + new assignments
-   - Set `placeholder_fte_count = 0` initially
+3. **AvailabilityPolicyModel**: Seed default policies
 
-### 7.2 Rollout Phases
+### 6.2 Rollout Phases
 
-| Phase | Duration | Description |
-|-------|----------|-------------|
-| Phase 1 | Week 1-2 | Create V2 tables, seed tiers, write migration scripts, implement placeholder utils |
-| Phase 2 | Week 3-4 | Implement core calculation logic (with actual/placeholder split), unit tests |
-| Phase 3 | Week 5-6 | Create V2 API endpoints including set-week-targets |
-| Phase 4 | Week 7-8 | Implement reporting endpoints (PowerBI + JS formats) |
-| Phase 5 | Week 9-10 | Integration testing, bug fixes |
+| Phase | Description |
+|-------|-------------|
+| Phase 1 | Create tables, seed tiers & policies, migration scripts |
+| Phase 2 | Core calculation logic, availability checks, unit tests |
+| Phase 3 | API endpoints including policy management |
+| Phase 4 | Reporting endpoints (PowerBI + JS formats) |
+| Phase 5 | Integration testing, bug fixes |
+
+---
+
+## 7. Verification Steps
+
+### 7.1 Database Verification
+
+```sql
+-- Verify tables created
+SELECT table_name FROM information_schema.tables WHERE table_name LIKE '%v2%';
+
+-- Verify default policies seeded
+SELECT * FROM availability_policy;
+
+-- Verify default tiers seeded
+SELECT * FROM production_capacity_tier;
+```
+
+### 7.2 API Verification
+
+```bash
+# Test resource creation with availability window
+curl -X POST /api/v2/resources -d '{
+  "cn": "CN12345",
+  "resource_type": "actual",
+  "available_from": "2025-05-01",
+  "available_until": null,
+  ...
+}'
+
+# Test policy retrieval
+curl GET /api/v2/policies
+
+# Test availability filter
+curl GET /api/v2/resources?available_for_date=2025-06-15
+```
+
+### 7.3 Availability Window Verification
+
+```python
+# Test case: Resource with future availability
+resource = ResourceModel(
+    cn="CN12345",
+    available_from=date(2025, 6, 1),
+    available_until=None
+)
+
+# Should return False (week before availability)
+assert not is_resource_available_for_week(resource, date(2025, 5, 26), date(2025, 6, 1))
+
+# Should return True (week after availability starts)
+assert is_resource_available_for_week(resource, date(2025, 6, 2), date(2025, 6, 8))
+```
 
 ---
 
 ## 8. Implementation Checklist
 
-### Phase 1: Foundation (Weeks 1-2)
+### Phase 1: Foundation
 - [ ] Create WeekConfigurationModel
 - [ ] Create ProductionCapacityTierModel
-- [ ] Create ResourceModel (with resource_type: actual/placeholder)
-- [ ] Create WeeklyResourceAssignmentModel (with unique constraint)
-- [ ] Create MonthlyCapacitySummaryModel (with actual/placeholder breakdown)
-- [ ] Seed default capacity tiers (100%, 75%, 50%, 25%)
-- [ ] Implement placeholder CN generator (TBH-001, TBH-002, etc.)
-- [ ] Write migration script for existing roster data
+- [ ] Create AvailabilityPolicyModel (NEW)
+- [ ] Create ResourceModel (with availability fields)
+- [ ] Create WeeklyResourceAssignmentModel
+- [ ] Create MonthlyCapacitySummaryModel
+- [ ] Seed default capacity tiers
+- [ ] Seed default policies (NEW)
+- [ ] Write migration script for existing data
 
-### Phase 2: Core Logic (Weeks 3-4)
-- [ ] Implement weekly capacity calculation (same for actual + placeholder)
-- [ ] Implement monthly aggregation (sum of weeks)
-- [ ] Implement tier breakdown calculation (with actual/placeholder split)
-- [ ] Implement placeholder creation logic
-- [ ] Implement placeholder-to-actual conversion logic
-- [ ] Implement auto-generation logic (set-week-targets)
+### Phase 2: Core Logic
+- [ ] Implement weekly capacity calculation
+- [ ] Implement availability window checks (NEW)
+- [ ] Implement policy retrieval helpers (NEW)
+- [ ] Implement monthly aggregation
+- [ ] Implement tier breakdown calculation
+- [ ] Implement placeholder creation/conversion
 - [ ] Unit tests for all calculations
 
-### Phase 3: API Development (Weeks 5-6)
-- [ ] Resource CRUD endpoints (actual resources)
-- [ ] Placeholder resource endpoints (create, list, convert)
-- [ ] Assignment CRUD endpoints (with single-assignment validation)
-- [ ] Bulk placeholder assignment endpoint
-- [ ] Set-week-targets endpoint (auto-generation)
+### Phase 3: API Development
+- [ ] Resource CRUD endpoints (with availability)
+- [ ] Placeholder resource endpoints
+- [ ] Policy management endpoints (NEW)
+- [ ] Assignment CRUD endpoints
 - [ ] Week config endpoints
 - [ ] Capacity tier endpoints
 - [ ] API tests
 
-### Phase 4: Reporting (Weeks 7-8)
-- [ ] PowerBI flat format endpoints (with actual/placeholder columns)
+### Phase 4: Reporting
+- [ ] PowerBI flat format endpoints
 - [ ] JavaScript nested JSON endpoints
-- [ ] Monthly summary with tier breakdown (actual vs placeholder)
-- [ ] Prior month comparison
-- [ ] Excel export with placeholder indicators
+- [ ] Monthly summary with tier breakdown
+- [ ] Excel export
 
-### Phase 5: Integration (Weeks 9-10)
+### Phase 5: Integration
 - [ ] Manager view V2 integration
 - [ ] End-to-end testing
 - [ ] Performance optimization
 - [ ] Documentation
-- [ ] User acceptance testing
-
----
-
-## 9. Approval Checklist
-
-Please review and confirm:
-
-- [ ] Database models structure is acceptable (including placeholder support)
-- [ ] API endpoint design is acceptable (including set-week-targets)
-- [ ] Capacity calculation formulas are correct (same for actual/placeholder)
-- [ ] Report formats meet requirements (actual/placeholder breakdown)
-- [ ] Migration strategy is acceptable
-- [ ] Auto-generation logic is acceptable
-
----
-
-## Next Steps
-
-Once approved, I will:
-
-1. Create V2 database models in `code/logics/models_v2.py`
-2. Implement placeholder utilities in `code/logics/placeholder_utils.py`
-3. Implement capacity calculation functions
-4. Create API routers for V2 endpoints
-5. Add reporting endpoints (both formats)
-6. Register routers in main.py
-7. Write unit tests
-8. Create migration scripts
 
 ---
 
@@ -753,10 +886,11 @@ Once approved, I will:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-02-18 | Initial proposal |
-| 2.0 | 2026-02-18 | Added placeholder/tentative resource support, auto-generation API, actual/placeholder breakdown in reports, confirmed design decisions |
+| 2.0 | 2026-02-18 | Added placeholder support, actual/placeholder breakdown |
+| 3.0 | 2026-02-18 | Added availability window feature, policy configuration, restructured document with Management Overview + Developer Guide |
 
 ---
 
-*Document Version: 2.0*
+*Document Version: 3.0*
 *Created: 2026-02-18*
 *Last Updated: 2026-02-18*

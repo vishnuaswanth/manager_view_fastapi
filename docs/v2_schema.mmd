@@ -27,6 +27,19 @@ erDiagram
         float shrinkage "e.g., 0.10"
     }
 
+    %% NEW: Policy Configuration Table
+    AvailabilityPolicyModel {
+        int id PK
+        string policy_key UK "Unique policy identifier"
+        string policy_value "Value as string"
+        string value_type "boolean, integer, string, float"
+        string description "Human-readable description"
+        string category "availability, allocation, reporting"
+        bool is_active
+        datetime created_datetime
+        datetime updated_datetime
+    }
+
     %% Master Data Tables
     ResourceModel {
         int id PK
@@ -42,6 +55,8 @@ erDiagram
         string skills "Comma-separated case types"
         bool is_active
         date hire_date "NULL for placeholders"
+        date available_from "First date resource can be allocated"
+        date available_until "Last date resource can be allocated"
         int created_for_week "Placeholder: week created for"
         int created_for_year "Placeholder: year created for"
         string replaced_by_cn "When converted to actual"
@@ -159,3 +174,6 @@ erDiagram
 
     %% Monthly summary references forecast
     ForecastModel ||--o{ MonthlyCapacitySummaryModel : "forecast_source"
+
+    %% Policies influence resource availability checks (logical, not FK)
+    AvailabilityPolicyModel ||--o{ ResourceModel : "governs_availability"
