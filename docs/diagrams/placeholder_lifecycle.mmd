@@ -1,0 +1,39 @@
+%% V2 Architecture - Placeholder Lifecycle
+
+graph TD
+    subgraph Creation[1. Creation Phase]
+        CREATE[Create Placeholder TBH-001]
+        SET_SKILLS[Set Skills/Platform/Location]
+        SET_AVAIL[Set Availability Window]
+    end
+
+    subgraph Planning[2. Planning Phase]
+        ASSIGN_DEMAND[Assign to Demand]
+        SET_TIER[Set Production Tier]
+        CALC_PLAN[Calculate Planned Capacity]
+    end
+
+    subgraph Conversion[3. Conversion Phase]
+        HIRE[New Hire Onboarded]
+        CONVERT[Convert Placeholder to Actual]
+        TRANSFER[Transfer Assignments]
+        LINK[Link via replaced_by_cn]
+    end
+
+    subgraph Active[4. Active Resource]
+        ACTUAL[Actual Resource CN12345]
+        TRACK[Track Real Capacity]
+    end
+
+    CREATE --> SET_SKILLS
+    SET_SKILLS --> SET_AVAIL
+    SET_AVAIL --> ASSIGN_DEMAND
+    ASSIGN_DEMAND --> SET_TIER
+    SET_TIER --> CALC_PLAN
+
+    CALC_PLAN -.->|Hire Happens| HIRE
+    HIRE --> CONVERT
+    CONVERT --> TRANSFER
+    TRANSFER --> LINK
+    LINK --> ACTUAL
+    ACTUAL --> TRACK

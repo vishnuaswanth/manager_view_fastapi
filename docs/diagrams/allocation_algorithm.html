@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2 Fair Allocation Algorithm - Flowcharts</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .header h1 { margin: 0 0 10px 0; font-size: 32px; }
+        .header p { margin: 0; opacity: 0.9; font-size: 16px; }
+        .toc {
+            background: rgba(255,255,255,0.05);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+        .toc h3 { margin: 0 0 15px 0; color: #667eea; }
+        .toc a { color: #4ade80; text-decoration: none; display: block; padding: 5px 0; }
+        .toc a:hover { color: #22c55e; }
+        .diagram-section {
+            background: rgba(255,255,255,0.03);
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .diagram-section h2 {
+            color: #667eea;
+            margin: 0 0 10px 0;
+            font-size: 24px;
+        }
+        .diagram-section .description {
+            color: #a0a0a0;
+            margin-bottom: 20px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .diagram-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+        .diagram-card h3 {
+            color: #333;
+            margin: 0 0 20px 0;
+            font-size: 18px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .mermaid { text-align: center; }
+        .complexity-box {
+            background: rgba(102, 126, 234, 0.1);
+            border: 1px solid #667eea;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        .complexity-box h4 { margin: 0 0 10px 0; color: #667eea; }
+        .complexity-box code {
+            background: rgba(0,0,0,0.3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .formula-box {
+            background: #1e3a5f;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: monospace;
+            font-size: 14px;
+            color: #4ade80;
+        }
+        .example-box {
+            background: rgba(74, 222, 128, 0.1);
+            border: 1px solid #4ade80;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 20px;
+        }
+        .example-box h4 { margin: 0 0 10px 0; color: #4ade80; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        th { color: #667eea; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>V2 Fair Allocation Algorithm</h1>
+        <p>Detailed flowcharts for proportional resource allocation with O(r × d × log(rd)) complexity</p>
+    </div>
+
+    <div class="toc">
+        <h3>Table of Contents</h3>
+        <a href="#main-flow">1. Main Allocation Flow</a>
+        <a href="#eligibility-gate">2. Eligibility Gate (Misfit Prevention)</a>
+        <a href="#locality-policy">3. Locality Policy (Dynamic Configuration)</a>
+        <a href="#ideal-fte">4. Ideal FTE Calculation</a>
+        <a href="#exclusive">5. Exclusive Resource Allocation</a>
+        <a href="#scoring">6. Scoring Algorithm</a>
+        <a href="#multi-skilled">7. Multi-Skilled Resource Decision</a>
+        <a href="#remainder">8. Remainder Distribution</a>
+        <a href="#complexity">9. Complexity Analysis</a>
+    </div>
+
+    <!-- Section 1: Main Flow -->
+    <div id="main-flow" class="diagram-section">
+        <h2>1. Main Allocation Flow</h2>
+        <p class="description">
+            The allocation runs in 5 phases: Initialization → Ideal FTE Calculation → Exclusive Allocation → Scored Allocation → Remainder Distribution.
+            Each phase builds on the previous, ensuring fair distribution while maintaining O(r × d × log(rd)) time complexity.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Weekly Allocation Pipeline</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Phase0[Phase 0: Initialization]
+        START([Start Week Allocation]) --> LOAD_RES[Load Available Resources]
+        LOAD_RES --> BUILD_IDX[Build Resource Indices]
+        BUILD_IDX --> LOAD_DEM[Load Demands with Forecast]
+        LOAD_DEM --> ELIG_GATE[Build Eligibility Matrix]
+    end
+
+    subgraph Phase1[Phase 1: Calculate Targets]
+        ELIG_GATE --> SUM_FORE[Sum Total Forecast]
+        SUM_FORE --> CALC_IDEAL[Calculate Ideal FTE per Demand]
+    end
+
+    subgraph Phase2[Phase 2: Exclusive Allocation]
+        CALC_IDEAL --> FIND_EXCL[Find Single-Option Resources]
+        FIND_EXCL --> ALLOC_EXCL[Allocate to Only Matching Demand]
+        ALLOC_EXCL --> UPDATE1[Update Gaps]
+    end
+
+    subgraph Phase3[Phase 3: Scored Allocation]
+        UPDATE1 --> BUILD_HEAP[Build Score Priority Queue]
+        BUILD_HEAP --> PROCESS[Process Heap - Highest Score First]
+        PROCESS --> UPDATE2[Update Allocations and Gaps]
+    end
+
+    subgraph Phase4[Phase 4: Remainder]
+        UPDATE2 --> REMAIN{Unallocated Resources?}
+        REMAIN -->|Yes| LRM[Largest Remainder Method]
+        REMAIN -->|No| PERSIST
+        LRM --> PERSIST[Persist to Database]
+    end
+
+    PERSIST --> DONE([Return Result])
+
+    style Phase0 fill:#e8f5e9
+    style Phase1 fill:#e3f2fd
+    style Phase2 fill:#fff3e0
+    style Phase3 fill:#fce4ec
+    style Phase4 fill:#f3e5f5
+    style ELIG_GATE fill:#fff9c4
+</pre>
+        </div>
+
+        <div class="complexity-box">
+            <h4>Time Complexity per Phase</h4>
+            <table>
+                <tr><th>Phase</th><th>Complexity</th><th>Operations (500 resources, 100 demands)</th></tr>
+                <tr><td>Initialization</td><td><code>O(r + r×s)</code></td><td>~2,500</td></tr>
+                <tr><td>Ideal FTE</td><td><code>O(d)</code></td><td>~100</td></tr>
+                <tr><td>Exclusive</td><td><code>O(r)</code></td><td>~500</td></tr>
+                <tr><td>Scored</td><td><code>O(r×d×log(rd))</code></td><td>~800,000</td></tr>
+                <tr><td>Remainder</td><td><code>O(d log d)</code></td><td>~700</td></tr>
+            </table>
+            <p><strong>Total: ~800,000 operations ≈ 1ms at 1B ops/sec</strong></p>
+        </div>
+    </div>
+
+    <!-- Section 2: Eligibility Gate -->
+    <div id="eligibility-gate" class="diagram-section">
+        <h2>2. Eligibility Gate (Misfit Prevention)</h2>
+        <p class="description">
+            The Eligibility Gate is a critical pre-scoring filter that guarantees only valid resource-demand pairs are ever considered for allocation.
+            This prevents misfit allocations such as wrong platform, missing skill, or incompatible state assignments.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Eligibility Gate Flow</h3>
+<pre class="mermaid">
+graph TD
+    START([Check Resource-Demand Pair]) --> CHECK1{Platform Match?}
+
+    CHECK1 -->|R.platform == D.platform| CHECK2{Skill Match?}
+    CHECK1 -->|Mismatch| REJECT1[REJECT: Platform Error]
+
+    CHECK2 -->|D.case_type in R.skills| CHECK3{State Compatible?}
+    CHECK2 -->|Missing Skill| REJECT2[REJECT: Skill Error]
+
+    CHECK3 -->|D.state in R.states| PASS[ELIGIBLE - Add to Matrix]
+    CHECK3 -->|N/A in R.states| PASS
+    CHECK3 -->|No Match| REJECT3[REJECT: State Error]
+
+    REJECT1 --> NEXT([Next Pair])
+    REJECT2 --> NEXT
+    REJECT3 --> NEXT
+    PASS --> NEXT
+
+    style PASS fill:#c8e6c9
+    style REJECT1 fill:#ffcdd2
+    style REJECT2 fill:#ffcdd2
+    style REJECT3 fill:#ffcdd2
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Three Mandatory Checks</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Gate[Eligibility Gate]
+        C1[CHECK 1: Platform]
+        C2[CHECK 2: Skill]
+        C3[CHECK 3: State]
+    end
+
+    INPUT[/Resource R + Demand D/] --> C1
+    C1 -->|Pass| C2
+    C2 -->|Pass| C3
+    C3 -->|Pass| OUTPUT[/Eligible Pair/]
+
+    C1 -->|Fail| REJECT[Rejected]
+    C2 -->|Fail| REJECT
+    C3 -->|Fail| REJECT
+
+    style Gate fill:#fff3e0
+    style OUTPUT fill:#c8e6c9
+    style REJECT fill:#ffcdd2
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Eligibility Matrix Construction</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Input[Input Data]
+        RES[500 Resources]
+        DEM[100 Demands]
+    end
+
+    subgraph Process[Gate Processing]
+        LOOP[For Each R × D Pair]
+        GATE[Apply 3 Checks]
+    end
+
+    subgraph Output[Sparse Matrix]
+        VALID[Valid Pairs Only]
+        R2D[Resource → Demands Map]
+        D2R[Demand → Resources Map]
+    end
+
+    RES --> LOOP
+    DEM --> LOOP
+    LOOP --> GATE
+    GATE -->|Pass| VALID
+    GATE -->|Fail| DISCARD[Discarded]
+    VALID --> R2D
+    VALID --> D2R
+
+    style VALID fill:#c8e6c9
+    style DISCARD fill:#ffcdd2
+</pre>
+        </div>
+
+        <div class="example-box">
+            <h4>Example: Misfit Prevention</h4>
+            <table>
+                <tr><th>Resource</th><th>Platform</th><th>Skills</th><th>States</th><th>D1 (Amisys/FTC/FL)</th><th>D2 (Facets/Claims/TX)</th></tr>
+                <tr><td>R001</td><td>Amisys</td><td>{FTC}</td><td>{FL, GA}</td><td style="color:#4ade80">ELIGIBLE</td><td style="color:#f87171">Platform mismatch</td></tr>
+                <tr><td>R002</td><td>Amisys</td><td>{ADJ}</td><td>{FL}</td><td style="color:#f87171">Skill mismatch</td><td style="color:#f87171">Platform mismatch</td></tr>
+                <tr><td>R003</td><td>Facets</td><td>{Claims}</td><td>{TX}</td><td style="color:#f87171">Platform mismatch</td><td style="color:#4ade80">ELIGIBLE</td></tr>
+                <tr><td>R004</td><td>Amisys</td><td>{FTC}</td><td>{CA}</td><td style="color:#f87171">State mismatch</td><td style="color:#f87171">Platform mismatch</td></tr>
+            </table>
+            <p><strong>Result:</strong> Only R001→D1 and R003→D2 pairs enter the scoring phase. Misfits are impossible.</p>
+        </div>
+
+        <div class="complexity-box">
+            <h4>Eligibility Gate Guarantees</h4>
+            <table>
+                <tr><th>Guarantee</th><th>How It's Enforced</th></tr>
+                <tr><td>No platform misfits</td><td>Gate rejects if <code>R.platform != D.platform</code></td></tr>
+                <tr><td>No skill misfits</td><td>Gate rejects if <code>D.case_type not in R.skills</code></td></tr>
+                <tr><td>No state misfits</td><td>Gate rejects if state incompatible</td></tr>
+                <tr><td>Performance</td><td><code>O(r × d)</code> one-time cost, then <code>O(eligible)</code> per iteration</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Section 3: Locality Policy -->
+    <div id="locality-policy" class="diagram-section">
+        <h2>3. Locality Policy (Dynamic Configuration)</h2>
+        <p class="description">
+            <strong>V2 introduces dynamic locality determination</strong> via configurable policy rules stored in the database.
+            Locality (Domestic/Global) determines working days calendars, configuration parameters, and resource eligibility.
+            Rules are evaluated in priority order - first matching rule wins.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Locality Determination Flow</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Input[Input]
+        MAIN_LOB[Main_LOB: 'Amisys Medicaid Domestic']
+        WORKTYPE[WorkType: 'COB Domestic']
+    end
+
+    subgraph PolicyEngine[Policy Rule Engine]
+        LOAD[Load Active Rules from DB]
+        LOAD --> SORT[Sort by Priority Ascending]
+        SORT --> ITER{For Each Rule}
+
+        ITER -->|Rule: OIC Volumes| OIC_CHECK{Contains 'OIC Volumes'?}
+        OIC_CHECK -->|No| NEXT1[Next Rule]
+        OIC_CHECK -->|Yes| FALLBACK[Check Fallback Field]
+
+        NEXT1 --> DOM_CHECK{Contains 'domestic'?}
+        DOM_CHECK -->|Yes| DOM_RESULT[Return 'Domestic']
+        DOM_CHECK -->|No| GLOB_CHECK{Contains 'global'?}
+        GLOB_CHECK -->|Yes| GLOB_RESULT[Return 'Global']
+        GLOB_CHECK -->|No| NEXT2[Next Rule...]
+
+        FALLBACK --> FB_CHECK{WorkType contains 'domestic'?}
+        FB_CHECK -->|Yes| DOM_RESULT
+        FB_CHECK -->|No| GLOB_RESULT
+    end
+
+    MAIN_LOB --> LOAD
+    WORKTYPE --> FALLBACK
+
+    subgraph Output[Output]
+        DOM_RESULT --> LOCALITY[Locality: 'Domestic']
+        GLOB_RESULT --> LOCALITY2[Locality: 'Global']
+    end
+
+    style PolicyEngine fill:#e8f5e9
+    style FALLBACK fill:#fff9c4
+    style DOM_RESULT fill:#4ade80
+    style GLOB_RESULT fill:#60a5fa
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Policy Rule Evaluation Order</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Rules[Policy Rules - Sorted by Priority]
+        R1[Priority 5: OIC Volumes Special]
+        R2[Priority 10: Domestic Keyword]
+        R3[Priority 10: Global Keyword]
+        R4[Priority 15: Parenthesized Variants]
+        R5[Priority 20: Onshore/Offshore]
+    end
+
+    R1 --> R2 --> R3 --> R4 --> R5
+
+    subgraph MatchTypes[Match Types]
+        MT1[contains - case-insensitive substring]
+        MT2[exact - case-sensitive exact match]
+        MT3[regex - regular expression]
+        MT4[startswith/endswith - prefix/suffix]
+    end
+
+    style R1 fill:#fce4ec
+    style R2 fill:#e8f5e9
+    style R3 fill:#e3f2fd
+</pre>
+        </div>
+
+        <div class="example-box">
+            <h4>Example Policy Rules (Default)</h4>
+            <table>
+                <tr><th>Priority</th><th>Rule Name</th><th>Pattern</th><th>Match Type</th><th>Result</th><th>Fallback</th></tr>
+                <tr><td>5</td><td>oic_volumes_special</td><td>OIC Volumes</td><td>contains</td><td style="color:#f59e0b">NULL</td><td>worktype → domestic</td></tr>
+                <tr><td>10</td><td>domestic_keyword</td><td>domestic</td><td>contains</td><td style="color:#4ade80">Domestic</td><td>-</td></tr>
+                <tr><td>10</td><td>global_keyword</td><td>global</td><td>contains</td><td style="color:#60a5fa">Global</td><td>-</td></tr>
+                <tr><td>15</td><td>domestic_parens</td><td>(domestic)</td><td>contains</td><td style="color:#4ade80">Domestic</td><td>-</td></tr>
+                <tr><td>15</td><td>global_parens</td><td>(global)</td><td>contains</td><td style="color:#60a5fa">Global</td><td>-</td></tr>
+                <tr><td>20</td><td>onshore_keyword</td><td>onshore</td><td>contains</td><td style="color:#4ade80">Domestic</td><td>-</td></tr>
+                <tr><td>20</td><td>offshore_keyword</td><td>offshore</td><td>contains</td><td style="color:#60a5fa">Global</td><td>-</td></tr>
+            </table>
+        </div>
+
+        <div class="complexity-box">
+            <h4>Locality Policy Benefits</h4>
+            <table>
+                <tr><th>Benefit</th><th>Description</th></tr>
+                <tr><td>Dynamic Configuration</td><td>Rules stored in DB, changeable without code deploy</td></tr>
+                <tr><td>Priority Order</td><td>Special cases (OIC Volumes) handled first</td></tr>
+                <tr><td>Fallback Logic</td><td>Secondary field check when primary is ambiguous</td></tr>
+                <tr><td>Caching</td><td>Rules cached in memory, invalidated on update</td></tr>
+                <tr><td>Extensibility</td><td>Add new patterns via API without code changes</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Section 4: Ideal FTE -->
+    <div id="ideal-fte" class="diagram-section">
+        <h2>4. Ideal FTE Calculation (Weekly Granularity)</h2>
+        <p class="description">
+            <strong>Critical:</strong> Allocation runs <strong>week by week</strong>, not across all 6 months at once.
+            Each week, resources are filtered fresh based on availability, and ideal FTE is recalculated.
+            Monthly forecasts are divided into weekly forecasts before allocation.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Weekly Allocation Loop</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Input[Input: July 2025]
+        MONTH_FORE[Monthly Forecast: 16000 cases]
+        WEEKS[4 Weeks: 27, 28, 29, 30]
+    end
+
+    MONTH_FORE --> DIVIDE[Divide by Weeks]
+    WEEKS --> DIVIDE
+    DIVIDE --> WEEKLY[Weekly Forecast: 4000/week]
+
+    subgraph WeekLoop[For Each Week]
+        WEEKLY --> W27[Week 27: 50 resources]
+        WEEKLY --> W28[Week 28: 48 resources]
+        WEEKLY --> W29[Week 29: 52 resources]
+        WEEKLY --> W30[Week 30: 52 resources]
+    end
+
+    W27 --> CALC27[Calculate Ideal FTE with 50]
+    W28 --> CALC28[Calculate Ideal FTE with 48]
+    W29 --> CALC29[Calculate Ideal FTE with 52]
+    W30 --> CALC30[Calculate Ideal FTE with 52]
+
+    style Input fill:#e3f2fd
+    style WeekLoop fill:#fff3e0
+</pre>
+        </div>
+
+        <div class="formula-box">
+For EACH week w independently:
+
+                                      weekly_forecast(d, w)
+ideal_fte(d, w) = available_resources(w) × ─────────────────────────
+                                       Σ weekly_forecast(all, w)
+
+Where:
+  - available_resources(w) = resources available THIS week (filtered by availability window)
+  - weekly_forecast(d, w) = monthly_forecast ÷ weeks_in_month
+  - Σ weekly_forecast = sum of all weekly forecasts
+        </div>
+
+        <div class="diagram-card">
+            <h3>Resource Availability Changes Per Week</h3>
+<pre class="mermaid">
+graph LR
+    subgraph W27[Week 27: 50 available]
+        R1_27[R001 ✓]
+        R2_27[R002 ✓]
+        R3_27[R003 ✗ not started]
+    end
+
+    subgraph W28[Week 28: 48 available]
+        R1_28[R001 ✓]
+        R2_28[R002 ✗ left]
+        R3_28[R003 ✓ started]
+    end
+
+    subgraph W29[Week 29: 52 available]
+        R1_29[R001 ✓]
+        R3_29[R003 ✓]
+        R4_29[R004 ✓ new hire]
+    end
+
+    W27 --> W28
+    W28 --> W29
+
+    style R3_27 fill:#ffcdd2
+    style R2_28 fill:#ffcdd2
+    style R4_29 fill:#c8e6c9
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Monthly to Weekly Forecast - Working Days Weighted</h3>
+<pre class="mermaid">
+graph TD
+    subgraph Monthly[Monthly Forecast: 16000 cases]
+        TOTAL[Total: 16000]
+    end
+
+    subgraph WorkingDays[Working Days per Week - Domestic]
+        W27_D[Week 27: 3 days<br/>Jul 4 Holiday]
+        W28_D[Week 28: 5 days<br/>Full week]
+        W29_D[Week 29: 5 days<br/>Full week]
+        W30_D[Week 30: 4 days<br/>Month ends Thu]
+    end
+
+    subgraph Formula[Weighted Distribution]
+        CALC[Weekly = Monthly × days/total_days]
+    end
+
+    subgraph Weekly[Weekly Forecasts]
+        W27_F[Week 27: 2824<br/>3/17 = 17.6%]
+        W28_F[Week 28: 4706<br/>5/17 = 29.4%]
+        W29_F[Week 29: 4706<br/>5/17 = 29.4%]
+        W30_F[Week 30: 3764<br/>4/17 = 23.5%]
+    end
+
+    TOTAL --> CALC
+    W27_D --> CALC
+    W28_D --> CALC
+    W29_D --> CALC
+    W30_D --> CALC
+    CALC --> W27_F
+    CALC --> W28_F
+    CALC --> W29_F
+    CALC --> W30_F
+
+    style W27_D fill:#fff3e0
+    style W27_F fill:#fff3e0
+    style W28_D fill:#e8f5e9
+    style W29_D fill:#e8f5e9
+    style W28_F fill:#e8f5e9
+    style W29_F fill:#e8f5e9
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Location-Specific Working Days</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Week27[Week 27: Jun 30 - Jul 6]
+        DOM_W27[Domestic: 3 days<br/>Jul 4 = Holiday]
+        GLO_W27[Global: 4 days<br/>No Jul 4 holiday]
+    end
+
+    subgraph Week28[Week 28: Jul 7 - 13]
+        DOM_W28[Domestic: 5 days]
+        GLO_W28[Global: 5 days]
+    end
+
+    subgraph Result[Different Distribution]
+        DOM_TOTAL[Domestic: 17 total days]
+        GLO_TOTAL[Global: 19 total days]
+    end
+
+    DOM_W27 --> DOM_TOTAL
+    DOM_W28 --> DOM_TOTAL
+    GLO_W27 --> GLO_TOTAL
+    GLO_W28 --> GLO_TOTAL
+
+    style DOM_W27 fill:#ffcdd2
+    style GLO_W27 fill:#c8e6c9
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Location-Aware Forecast Distribution Flow</h3>
+<pre class="mermaid">
+graph TD
+    subgraph Input[Monthly Demands]
+        D1[D1: FL FTC<br/>Domestic<br/>8000/month]
+        D2[D2: India FTC<br/>Global<br/>8000/month]
+    end
+
+    subgraph Calendars[Select Calendar by Location]
+        D1 --> DOM_CAL[Domestic Calendar<br/>17 working days]
+        D2 --> GLO_CAL[Global Calendar<br/>19 working days]
+    end
+
+    subgraph Distribute[Distribute Using Own Calendar]
+        DOM_CAL --> D1_W[D1 Weekly:<br/>W27=1412, W28=2353<br/>W29=2353, W30=1882]
+        GLO_CAL --> D2_W[D2 Weekly:<br/>W27=1684, W28=2105<br/>W29=2105, W30=2106]
+    end
+
+    subgraph Compare[Same Forecast, Different Distribution]
+        D1_W --> DIFF[Week 27:<br/>D1=1412 vs D2=1684]
+        D2_W --> DIFF
+    end
+
+    style D1 fill:#bbdefb
+    style D2 fill:#c8e6c9
+    style DOM_CAL fill:#bbdefb
+    style GLO_CAL fill:#c8e6c9
+    style D1_W fill:#bbdefb
+    style D2_W fill:#c8e6c9
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Ideal FTE by Location Group</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Week27[Week 27 Allocation]
+        subgraph DomResources[Domestic Resources: 40]
+            DR[40 Domestic Resources]
+        end
+        subgraph GloResources[Global Resources: 15]
+            GR[15 Global Resources]
+        end
+        subgraph DomDemands[Domestic Demands]
+            DD1[D1: FL FTC - 1412]
+            DD2[D2: GA FTC - 1059]
+            DD3[D4: TX Claims - 353]
+        end
+        subgraph GloDemands[Global Demands]
+            GD1[D3: India FTC - 842]
+        end
+    end
+
+    DR --> DD1
+    DR --> DD2
+    DR --> DD3
+    GR --> GD1
+
+    DD1 --> IDEAL1[D1 Ideal: 40 × 1412/2824 = 20]
+    DD2 --> IDEAL2[D2 Ideal: 40 × 1059/2824 = 15]
+    DD3 --> IDEAL3[D4 Ideal: 40 × 353/2824 = 5]
+    GD1 --> IDEAL4[D3 Ideal: 15 × 842/842 = 15]
+
+    style DomResources fill:#bbdefb
+    style GloResources fill:#c8e6c9
+    style DomDemands fill:#bbdefb
+    style GloDemands fill:#c8e6c9
+</pre>
+        </div>
+
+        <div class="example-box">
+            <h4>Example: July 2025 - Working Days Weighted Distribution (Domestic)</h4>
+            <table>
+                <tr><th>Week</th><th>Work Days</th><th>Forecast</th><th>Available</th><th>D1 (50%)</th><th>D2 (37.5%)</th><th>D3 (12.5%)</th></tr>
+                <tr style="background:#fff3e0"><td>Week 27</td><td>3 (holiday)</td><td>2,824</td><td>50</td><td>25.0</td><td>18.75</td><td>6.25</td></tr>
+                <tr><td>Week 28</td><td>5 (full)</td><td>4,706</td><td>48</td><td>24.0</td><td>18.0</td><td>6.0</td></tr>
+                <tr><td>Week 29</td><td>5 (full)</td><td>4,706</td><td>52</td><td>26.0</td><td>19.5</td><td>6.5</td></tr>
+                <tr style="background:#fff3e0"><td>Week 30</td><td>4 (partial)</td><td>3,764</td><td>52</td><td>26.0</td><td>19.5</td><td>6.5</td></tr>
+                <tr style="background:#e8f5e9"><td><strong>Total</strong></td><td><strong>17 days</strong></td><td><strong>16,000</strong></td><td><strong>-</strong></td><td><strong>101</strong></td><td><strong>76</strong></td><td><strong>25</strong></td></tr>
+            </table>
+            <p><strong>Key Insights:</strong></p>
+            <ul style="margin:10px 0; padding-left:20px; font-size:14px; color:#666">
+                <li>Week 27 has lower forecast (2,824) due to Jul 4 holiday (3 working days)</li>
+                <li>Weeks 28-29 have higher forecast (4,706) due to full 5 working days</li>
+                <li>Forecast is NOT evenly distributed - weighted by working days</li>
+                <li>Domestic vs Global locations have different working days (different holidays)</li>
+            </ul>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Same Resource, Different Demands Across Weeks</h3>
+<pre class="mermaid">
+graph LR
+    R001[Resource R001<br/>Skills: FTC, ADJ<br/>States: FL, GA]
+
+    R001 --> W27_A[Week 27<br/>→ D1 FL FTC<br/>highest urgency]
+    R001 --> W28_A[Week 28<br/>→ D3 FL ADJ<br/>D1 filled]
+    R001 --> W29_A[Week 29<br/>→ D1 FL FTC<br/>gap reopened]
+    R001 --> W30_A[Week 30<br/>→ D2 GA FTC<br/>balancing]
+
+    style R001 fill:#e3f2fd
+    style W27_A fill:#c8e6c9
+    style W28_A fill:#fff9c4
+    style W29_A fill:#c8e6c9
+    style W30_A fill:#bbdefb
+</pre>
+            <p style="color:#666; font-size:14px; margin-top:15px;">
+                <strong>Resource-Week Concept:</strong> R001 contributes 4 resource-weeks total (2 to D1, 1 to D2, 1 to D3).
+                This is valid and expected for multi-skilled resources.
+            </p>
+        </div>
+
+        <div class="complexity-box">
+            <h4>Weekly vs Monthly Summary</h4>
+            <table>
+                <tr><th>Concept</th><th>Description</th></tr>
+                <tr><td><strong>Allocation Unit</strong></td><td>Week (not month)</td></tr>
+                <tr><td><strong>Forecast Conversion</strong></td><td>Monthly × (working_days_this_week / total_working_days)</td></tr>
+                <tr><td><strong>Working Days</strong></td><td>Excludes weekends AND location-specific holidays</td></tr>
+                <tr><td><strong>Location Awareness</strong></td><td>Domestic vs Global have different holiday calendars</td></tr>
+                <tr><td><strong>Resource Filtering</strong></td><td>Fresh each week based on availability window</td></tr>
+                <tr><td><strong>Ideal FTE Scope</strong></td><td>Calculated per week with that week's resources</td></tr>
+                <tr><td><strong>Resource-Week</strong></td><td>1 resource working 1 week = 1 resource-week</td></tr>
+                <tr><td><strong>Same Resource</strong></td><td>Can be allocated to different demands in different weeks</td></tr>
+                <tr><td><strong>Future: Regional</strong></td><td>Different groups may have different regional holidays</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Section 5: Exclusive Allocation -->
+    <div id="exclusive" class="diagram-section">
+        <h2>5. Exclusive Resource Allocation</h2>
+        <p class="description">
+            Resources that can ONLY serve one demand are allocated first. This ensures they go where they're needed most and simplifies subsequent allocation.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Exclusive Resource Detection & Allocation</h3>
+<pre class="mermaid">
+graph TD
+    START[For Each Unallocated Resource] --> CHECK[Find Eligible Demands]
+    CHECK --> COUNT{How Many Eligible?}
+
+    COUNT -->|0| SKIP1[Skip - No Match]
+    COUNT -->|1| EXCLUSIVE[EXCLUSIVE RESOURCE]
+    COUNT -->|2+| MULTI[Multi-Option - Handle in Phase 3]
+
+    EXCLUSIVE --> ALLOC[Allocate to Only Option]
+    ALLOC --> MARK[Mark Resource Allocated]
+    MARK --> UPDATE[Update Demand: current_fte += 1]
+    UPDATE --> RECALC[Recalculate Gap]
+
+    SKIP1 --> NEXT[Next Resource]
+    MULTI --> NEXT
+    RECALC --> NEXT
+
+    style EXCLUSIVE fill:#fff3e0
+    style ALLOC fill:#e8f5e9
+</pre>
+        </div>
+
+        <div class="example-box">
+            <h4>Example: Exclusive Resources</h4>
+            <table>
+                <tr><th>Resource</th><th>Skills</th><th>States</th><th>Eligible Demands</th><th>Action</th></tr>
+                <tr><td>R1</td><td>{FTC}</td><td>{FL}</td><td>D1 only</td><td style="color:#4ade80">✓ Allocate to D1</td></tr>
+                <tr><td>R2</td><td>{FTC, ADJ}</td><td>{FL, GA}</td><td>D1, D2, D3</td><td>→ Phase 3</td></tr>
+                <tr><td>R3</td><td>{ADJ}</td><td>{GA}</td><td>D3 only</td><td style="color:#4ade80">✓ Allocate to D3</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Section 6: Scoring -->
+    <div id="scoring" class="diagram-section">
+        <h2>6. Scoring Algorithm</h2>
+        <p class="description">
+            Each resource-demand pair gets a score from 0.0 to 1.0. Higher scores indicate better allocation fit.
+            The algorithm uses a max-heap to always allocate the highest-scoring pair first.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Score Calculation Components</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Inputs
+        RES[Resource R]
+        DEM[Demand D]
+        CTX[Allocation Context]
+    end
+
+    subgraph Scoring[Score Components]
+        URG[URGENCY 40%]
+        EXC[EXCLUSIVITY 35%]
+        STA[STATE MATCH 15%]
+        SKI[SKILL MATCH 10%]
+    end
+
+    RES --> URG
+    DEM --> URG
+    RES --> EXC
+    CTX --> EXC
+    RES --> STA
+    DEM --> STA
+    RES --> SKI
+
+    URG --> |gap/ideal| SUM[Total Score]
+    EXC --> |1/options| SUM
+    STA --> |exact=1, N/A=0.5| SUM
+    SKI --> |single=1, multi=0.5| SUM
+
+    SUM --> HEAP[Push to Max-Heap]
+
+    style URG fill:#ffcdd2
+    style EXC fill:#c8e6c9
+    style STA fill:#bbdefb
+    style SKI fill:#fff9c4
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Heap-Based Allocation</h3>
+<pre class="mermaid">
+graph TD
+    BUILD[Build Heap with All Valid Pairs] --> POP[Pop Highest Score]
+    POP --> CHECK1{Resource Allocated?}
+    CHECK1 -->|Yes| POP
+    CHECK1 -->|No| CHECK2{Demand at Ideal?}
+    CHECK2 -->|Yes| POP
+    CHECK2 -->|No| ALLOC[Allocate Pair]
+    ALLOC --> MARK[Mark Resource Allocated]
+    MARK --> UPDATE[Update Demand Gap]
+    UPDATE --> MORE{More in Heap?}
+    MORE -->|Yes| POP
+    MORE -->|No| DONE[Phase Complete]
+
+    style ALLOC fill:#e8f5e9
+    style DONE fill:#e3f2fd
+</pre>
+        </div>
+
+        <div class="formula-box">
+Score Components:
+
+URGENCY (40%):      (ideal_fte - current_fte) / ideal_fte
+EXCLUSIVITY (35%):  1 / number_of_eligible_demands
+STATE MATCH (15%):  1.0 if exact match, 0.5 if N/A fallback
+SKILL MATCH (10%):  1.0 if single-skill, 0.5 if multi-skill
+
+TOTAL = urgency×0.40 + exclusivity×0.35 + state×0.15 + skill×0.10
+        </div>
+    </div>
+
+    <!-- Section 7: Multi-Skilled -->
+    <div id="multi-skilled" class="diagram-section">
+        <h2>7. Multi-Skilled Resource Decision</h2>
+        <p class="description">
+            When a resource can serve multiple demands, the scoring system decides the best allocation based on urgency and exclusivity.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Multi-Skilled Resource Allocation Decision</h3>
+<pre class="mermaid">
+graph TD
+    RES[/Resource R2: Skills=FTC,ADJ States=FL,GA/] --> FIND[Find All Eligible Demands]
+
+    FIND --> D1[D1: FL FTC - Gap=5]
+    FIND --> D2[D2: GA FTC - Gap=3]
+    FIND --> D3[D3: FL ADJ - Gap=2]
+    FIND --> D4[D4: TX FTC - Gap=4]
+
+    D4 --> FILTER{State Compatible?}
+    FILTER -->|No TX in R2| REJECT[Reject D4]
+
+    D1 --> SCORE1[Score: 0.42]
+    D2 --> SCORE2[Score: 0.38]
+    D3 --> SCORE3[Score: 0.36]
+
+    SCORE1 --> COMPARE{Compare Scores}
+    SCORE2 --> COMPARE
+    SCORE3 --> COMPARE
+
+    COMPARE --> WINNER[D1 Wins - Highest Score]
+    WINNER --> ALLOCATE[R2 → D1]
+
+    style RES fill:#e3f2fd
+    style WINNER fill:#e8f5e9
+    style REJECT fill:#ffcdd2
+</pre>
+        </div>
+
+        <div class="example-box">
+            <h4>Score Breakdown for Resource R2</h4>
+            <table>
+                <tr><th>Demand</th><th>Urgency (40%)</th><th>Exclusivity (35%)</th><th>State (15%)</th><th>Skill (10%)</th><th>Total</th></tr>
+                <tr><td>D1: FL FTC</td><td>0.25×0.40=0.10</td><td>0.33×0.35=0.12</td><td>1.0×0.15=0.15</td><td>0.5×0.10=0.05</td><td><strong>0.42</strong></td></tr>
+                <tr><td>D2: GA FTC</td><td>0.15×0.40=0.06</td><td>0.33×0.35=0.12</td><td>1.0×0.15=0.15</td><td>0.5×0.10=0.05</td><td>0.38</td></tr>
+                <tr><td>D3: FL ADJ</td><td>0.10×0.40=0.04</td><td>0.33×0.35=0.12</td><td>1.0×0.15=0.15</td><td>0.5×0.10=0.05</td><td>0.36</td></tr>
+            </table>
+            <p><strong>Result:</strong> D1 has highest urgency (largest gap), so R2 → D1</p>
+        </div>
+    </div>
+
+    <!-- Section 8: Remainder -->
+    <div id="remainder" class="diagram-section">
+        <h2>8. Remainder Distribution (Largest Remainder Method)</h2>
+        <p class="description">
+            After scored allocation, some resources may remain unallocated (e.g., when demands reach their ideal).
+            The Largest Remainder Method ensures fair distribution of these remaining resources.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Largest Remainder Method</h3>
+<pre class="mermaid">
+graph TD
+    START[Unallocated Resources Remaining] --> CALC[Calculate Fractional Parts]
+
+    CALC --> FRAC1[D1: ideal=20.3, floor=20, remainder=0.3]
+    CALC --> FRAC2[D2: ideal=15.7, floor=15, remainder=0.7]
+    CALC --> FRAC3[D3: ideal=10.1, floor=10, remainder=0.1]
+    CALC --> FRAC4[D4: ideal=3.9, floor=3, remainder=0.9]
+
+    FRAC1 --> SORT[Sort by Remainder DESC]
+    FRAC2 --> SORT
+    FRAC3 --> SORT
+    FRAC4 --> SORT
+
+    SORT --> ORDER[D4=0.9, D2=0.7, D1=0.3, D3=0.1]
+
+    ORDER --> DIST[Distribute Remaining Resources]
+    DIST --> GIVE1[+1 to D4]
+    GIVE1 --> GIVE2[+1 to D2]
+    GIVE2 --> CHECK{More Resources?}
+    CHECK -->|Yes| GIVE3[+1 to D1]
+    CHECK -->|No| DONE[Distribution Complete]
+
+    style ORDER fill:#fff3e0
+    style DONE fill:#e8f5e9
+</pre>
+        </div>
+
+        <div class="example-box">
+            <h4>Example: Distributing 2 Remaining Resources</h4>
+            <table>
+                <tr><th>Demand</th><th>Ideal FTE</th><th>Floor</th><th>Remainder</th><th>Extra</th><th>Final</th></tr>
+                <tr><td>D4</td><td>3.9</td><td>3</td><td><strong>0.9</strong></td><td>+1</td><td>4</td></tr>
+                <tr><td>D2</td><td>15.7</td><td>15</td><td><strong>0.7</strong></td><td>+1</td><td>16</td></tr>
+                <tr><td>D1</td><td>20.3</td><td>20</td><td>0.3</td><td>-</td><td>20</td></tr>
+                <tr><td>D3</td><td>10.1</td><td>10</td><td>0.1</td><td>-</td><td>10</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Section 9: Complexity -->
+    <div id="complexity" class="diagram-section">
+        <h2>9. Complexity Analysis</h2>
+        <p class="description">
+            The algorithm is optimized for both time and space efficiency.
+        </p>
+
+        <div class="diagram-card">
+            <h3>Time Complexity Breakdown</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Time[Time Complexity]
+        T1[Init: O-r×s-]
+        T2[Ideal: O-d-]
+        T3[Exclusive: O-r-]
+        T4[Scored: O-r×d×log rd-]
+        T5[Remainder: O-d log d-]
+    end
+
+    T1 --> TOTAL[Total: O-r×d×log rd-]
+    T2 --> TOTAL
+    T3 --> TOTAL
+    T4 --> TOTAL
+    T5 --> TOTAL
+
+    TOTAL --> EXAMPLE[500 resources × 100 demands]
+    EXAMPLE --> OPS[~800,000 operations]
+    OPS --> TIME[≈ 1ms execution time]
+
+    style TIME fill:#e8f5e9
+</pre>
+        </div>
+
+        <div class="diagram-card">
+            <h3>Space Complexity</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Memory[Memory Usage]
+        M1[Resource Index: O-r×s-]
+        M2[Demand List: O-d-]
+        M3[Eligibility Matrix: O-r×d sparse-]
+        M4[Score Heap: O-r×d-]
+        M5[Allocated Set: O-r-]
+    end
+
+    M1 --> TOTAL[Total: O-r×d + r×s-]
+    M2 --> TOTAL
+    M3 --> TOTAL
+    M4 --> TOTAL
+    M5 --> TOTAL
+
+    TOTAL --> SIZE[500×100 + 500×5]
+    SIZE --> BYTES[≈ 3 MB per week]
+
+    style BYTES fill:#e3f2fd
+</pre>
+        </div>
+
+        <div class="complexity-box">
+            <h4>Performance Summary</h4>
+            <table>
+                <tr><th>Metric</th><th>Value</th><th>Notes</th></tr>
+                <tr><td>Time Complexity</td><td><code>O(r × d × log(rd))</code></td><td>Dominated by heap operations</td></tr>
+                <tr><td>Space Complexity</td><td><code>O(r × d)</code></td><td>Sparse eligibility matrix</td></tr>
+                <tr><td>Typical Execution</td><td><strong>< 5ms</strong></td><td>For 500 resources, 100 demands</td></tr>
+                <tr><td>Memory Usage</td><td><strong>~3 MB</strong></td><td>Per week allocation</td></tr>
+                <tr><td>Scalability</td><td>Linear with r×d</td><td>10x resources = 10x time</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div style="text-align: center; padding: 30px; color: #666;">
+        <p>V2 Fair Allocation Algorithm - Detailed Flowcharts</p>
+        <p>Document Version 1.4 | Created 2025-02-18 | Updated 2025-02-19</p>
+        <p style="font-size:12px">v1.1: Eligibility Gate | v1.2: Weekly Granularity | v1.3: Working Days | v1.4: Location-Aware Distribution</p>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: {
+                useMaxWidth: true,
+                htmlLabels: true
+            }
+        });
+    </script>
+</body>
+</html>

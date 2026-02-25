@@ -1,0 +1,38 @@
+%% V2 Architecture - Update Policy Setting
+
+sequenceDiagram
+    autonumber
+    participant Admin as Admin User
+    participant API as API Gateway
+    participant Router as Policy Router
+    participant DB as Database
+    participant Cache as Cache
+
+    Admin->>API: PUT /api/v2/policies/ALLOW_OVER_ALLOCATION
+    Note over Admin,API: policy_value true
+
+    API->>Router: Forward Request
+
+    Router->>DB: Get Policy
+    DB-->>Router: Current Policy
+
+    alt Policy Not Found
+        Router-->>API: 404 Not Found
+        API-->>Admin: Policy not found
+    else Policy Found
+        Router->>Router: Validate Value Type
+
+        alt Invalid Value
+            Router-->>API: 400 Bad Request
+            API-->>Admin: Invalid value for boolean
+        else Valid Value
+            Router->>DB: Update Policy
+            DB-->>Router: Updated
+
+            Router->>Cache: Invalidate Policy Cache
+            Cache-->>Router: Cache Cleared
+
+            Router-->>API: 200 OK
+            API-->>Admin: policy_key, old_value, new_value, updated_at
+        end
+    end

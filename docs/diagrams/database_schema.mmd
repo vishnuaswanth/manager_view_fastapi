@@ -1,0 +1,66 @@
+%% V2 Architecture - Database Schema
+
+erDiagram
+    ResourceModel ||--o{ WeeklyResourceAssignment : assigned_to
+    ProductionCapacityTier ||--o{ WeeklyResourceAssignment : tier
+    WeekConfiguration ||--o{ WeeklyResourceAssignment : week
+    WeeklyResourceAssignment }o--|| MonthlyCapacitySummary : aggregates
+    AvailabilityPolicy ||--o{ ResourceModel : governs
+
+    ResourceModel {
+        int id PK
+        string cn UK
+        string resource_type
+        string display_name
+        string primary_platform
+        string location
+        string state_list
+        date available_from
+        date available_until
+        bool is_active
+    }
+
+    WeeklyResourceAssignment {
+        int id PK
+        int year
+        int week_number
+        string resource_cn FK
+        int capacity_tier_id FK
+        float production_percentage
+        float weekly_capacity
+        bool is_active
+    }
+
+    MonthlyCapacitySummary {
+        int id PK
+        string report_month
+        int report_year
+        int actual_fte_count
+        int placeholder_fte_count
+        float total_capacity
+        float capacity_gap
+    }
+
+    ProductionCapacityTier {
+        int id PK
+        string tier_name UK
+        float capacity_percentage
+        bool is_active
+    }
+
+    WeekConfiguration {
+        int id PK
+        int year
+        int week_number
+        int working_days
+        float work_hours
+        float shrinkage
+    }
+
+    AvailabilityPolicy {
+        int id PK
+        string policy_key UK
+        string policy_value
+        string category
+        bool is_active
+    }

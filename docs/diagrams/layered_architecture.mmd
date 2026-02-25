@@ -1,0 +1,16 @@
+%% V2 Architecture - Layered Architecture
+
+graph TB
+    WEB[Web Dashboard] --> ROUTERS[FastAPI Routers]
+    PBI[PowerBI] --> ROUTERS
+    DOCS[API Docs] --> ROUTERS
+    ROUTERS --> ALLOC[Allocation Service]
+    ROUTERS --> CAPACITY[Capacity Calculator]
+    ROUTERS --> AVAIL[Availability Service]
+    ROUTERS --> POLICY[Policy Service]
+    ALLOC --> ORM[SQLModel ORM]
+    CAPACITY --> ORM
+    AVAIL --> ORM
+    POLICY --> ORM
+    ORM --> MSSQL[(MSSQL Production)]
+    ORM --> SQLITE[(SQLite Development)]

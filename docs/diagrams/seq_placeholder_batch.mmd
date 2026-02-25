@@ -1,0 +1,40 @@
+%% V2 Architecture - Create Placeholder Resources Batch
+
+sequenceDiagram
+    autonumber
+    participant User
+    participant API as API Gateway
+    participant Router as Resource Router
+    participant Placeholder as Placeholder Utils
+    participant Policy as Policy Service
+    participant DB as Database
+
+    User->>API: POST /api/v2/resources/placeholders
+    Note over User,API: count 5, platform Amisys, available_from, available_until
+
+    API->>Router: Forward Request
+
+    Router->>Policy: Get MAX_PLACEHOLDERS_PER_REQUEST
+    Policy->>DB: Query Policy
+    DB-->>Policy: 100
+    Policy-->>Router: Max = 100
+
+    alt count > MAX
+        Router-->>API: 400 Bad Request
+        API-->>User: Exceeds maximum
+    else count <= MAX
+        Router->>Policy: Get PLACEHOLDER_PREFIX
+        Policy-->>Router: TBH-
+
+        loop For each placeholder
+            Router->>Placeholder: Generate CN
+            Placeholder->>DB: Get Next Sequence
+            DB-->>Placeholder: 1, 2, 3...
+            Placeholder-->>Router: TBH-001, TBH-002...
+            Router->>DB: Insert Placeholder
+        end
+
+        DB-->>Router: All Created
+        Router-->>API: 201 Created
+        API-->>User: created TBH-001, TBH-002, ...
+    end

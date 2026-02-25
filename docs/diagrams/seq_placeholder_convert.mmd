@@ -1,0 +1,42 @@
+%% V2 Architecture - Convert Placeholder to Actual
+
+sequenceDiagram
+    autonumber
+    participant User
+    participant API as API Gateway
+    participant Router as Resource Router
+    participant Service as Resource Service
+    participant DB as Database
+
+    User->>API: POST /api/v2/resources/TBH-001/convert
+    Note over User,API: actual_cn, first_name, last_name, transfer_assignments
+
+    API->>Router: Forward Request
+
+    Router->>DB: Get Placeholder TBH-001
+    DB-->>Router: Placeholder Record
+
+    alt Placeholder Not Found
+        Router-->>API: 404 Not Found
+        API-->>User: Placeholder not found
+    else Placeholder Found
+        Router->>Service: Convert Placeholder
+
+        Service->>DB: Create Actual Resource CN12345
+        DB-->>Service: Resource Created
+
+        alt transfer_assignments = true
+            Service->>DB: Update Assignments resource_cn TBH-001 to CN12345
+            DB-->>Service: Assignments Updated
+        end
+
+        Service->>DB: Update Placeholder replaced_by_cn, replaced_at
+        DB-->>Service: Placeholder Updated
+
+        Service->>DB: Deactivate Placeholder
+        DB-->>Service: Done
+
+        Service-->>Router: Conversion Complete
+        Router-->>API: 200 OK
+        API-->>User: actual_cn CN12345, transferred_assignments count
+    end

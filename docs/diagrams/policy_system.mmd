@@ -1,0 +1,32 @@
+%% V2 Architecture - Policy System
+
+graph TB
+    DEFAULTS[Default Values - Seeded on Startup] --> POLICY_DB[(AvailabilityPolicyModel)]
+
+    POLICY_DB --> CAT_AVAIL[Availability Category]
+    POLICY_DB --> CAT_ALLOC[Allocation Category]
+    POLICY_DB --> CAT_REPORT[Reporting Category]
+
+    CAT_AVAIL --> P1[ENFORCE_AVAILABLE_FROM]
+    CAT_AVAIL --> P2[ENFORCE_AVAILABLE_UNTIL]
+    CAT_AVAIL --> P3[DEFAULT_AVAILABILITY_DAYS]
+
+    CAT_ALLOC --> P4[ALLOW_OVER_ALLOCATION]
+    CAT_ALLOC --> P5[AUTO_CREATE_PLACEHOLDERS]
+    CAT_ALLOC --> P6[PLACEHOLDER_PREFIX]
+    CAT_ALLOC --> P7[MAX_PLACEHOLDERS_PER_REQUEST]
+
+    CAT_REPORT --> P8[INCLUDE_PLACEHOLDERS_IN_REPORTS]
+    CAT_REPORT --> P9[SEPARATE_PLACEHOLDER_COLUMNS]
+
+    P1 --> AVAIL_CHECK[Availability Check Logic]
+    P2 --> AVAIL_CHECK
+    P3 --> AVAIL_CHECK
+
+    P4 --> ALLOC_ENGINE[Allocation Engine]
+    P5 --> ALLOC_ENGINE
+    P6 --> ALLOC_ENGINE
+    P7 --> ALLOC_ENGINE
+
+    P8 --> REPORT_GEN[Report Generator]
+    P9 --> REPORT_GEN

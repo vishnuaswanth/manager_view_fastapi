@@ -1,0 +1,39 @@
+%% V2 Architecture - User Workflow Summary
+
+graph LR
+    subgraph Planning[Planning Phase]
+        P1[Upload Roster]
+        P2[Create Placeholders]
+        P3[Set Week Targets]
+    end
+
+    subgraph Execution[Execution Phase]
+        E1[Run Allocation]
+        E2[Review Assignments]
+        E3[Adjust Tiers]
+    end
+
+    subgraph Reporting[Reporting Phase]
+        R1[Generate Reports]
+        R2[Export to PowerBI]
+        R3[View Dashboard]
+    end
+
+    subgraph Maintenance[Maintenance]
+        M1[Convert Placeholders]
+        M2[Update Policies]
+        M3[Rebalance]
+    end
+
+    P1 --> P2
+    P2 --> P3
+    P3 --> E1
+    E1 --> E2
+    E2 --> E3
+    E3 --> R1
+    R1 --> R2
+    R1 --> R3
+    R3 --> M1
+    M1 --> M2
+    M2 --> M3
+    M3 --> P1

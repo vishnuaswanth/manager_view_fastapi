@@ -1,0 +1,13 @@
+%% V2 Architecture - Availability Window Check
+
+graph TD
+    START((Start)) --> GET[Get Resource]
+    GET --> FROM{available_from set?}
+    FROM -->|No| UNTIL{available_until set?}
+    FROM -->|Yes| FROM_DATE{week_start >= available_from?}
+    FROM_DATE -->|Yes| UNTIL
+    FROM_DATE -->|No| NOT_AVAIL((Not Available))
+    UNTIL -->|No| AVAIL((Available))
+    UNTIL -->|Yes| UNTIL_DATE{week_end <= available_until?}
+    UNTIL_DATE -->|Yes| AVAIL
+    UNTIL_DATE -->|No| NOT_AVAIL

@@ -1,0 +1,39 @@
+%% V2 Architecture - System Architecture Overview
+
+graph TB
+    subgraph Clients[Client Layer]
+        BROWSER[Web Browser]
+        POWERBI[PowerBI]
+        EXCEL_CLIENT[Excel]
+    end
+
+    subgraph API[API Layer - FastAPI]
+        GATEWAY[API Gateway]
+        subgraph Routers
+            RESOURCE_R[Resource Router]
+            ASSIGN_R[Assignment Router]
+            POLICY_R[Policy Router]
+            REPORT_R[Reports Router]
+            ALLOC_R[Allocation Router]
+        end
+    end
+
+    subgraph Logic[Business Logic Layer]
+        ALLOC_SVC[Allocation Service]
+        CAPACITY_SVC[Capacity Calculator]
+        AVAIL_SVC[Availability Service]
+        POLICY_SVC[Policy Service]
+    end
+
+    subgraph Data[Data Layer]
+        ORM[SQLModel ORM]
+        DB[(Database)]
+    end
+
+    BROWSER --> GATEWAY
+    POWERBI --> GATEWAY
+    EXCEL_CLIENT --> GATEWAY
+    GATEWAY --> Routers
+    Routers --> Logic
+    Logic --> ORM
+    ORM --> DB

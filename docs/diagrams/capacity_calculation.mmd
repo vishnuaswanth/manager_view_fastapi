@@ -1,0 +1,10 @@
+%% V2 Architecture - Capacity Calculation Flow
+
+graph LR
+    PROD[Production Percent] --> CALC[Calculate Capacity]
+    DAYS[Working Days] --> CALC
+    HOURS[Work Hours] --> CALC
+    SHRINK[Shrinkage] --> CALC
+    CPH[Target CPH] --> CALC
+    CALC --> WEEKLY[Weekly Capacity]
+    WEEKLY --> MONTHLY[Monthly Capacity]

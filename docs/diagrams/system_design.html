@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2 System Design Diagrams</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #60a5fa, #3b82f6);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+        .header h1 { margin: 0 0 10px 0; font-size: 28px; }
+        .header p { margin: 0; opacity: 0.9; }
+        .diagram-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .diagram-card h3 {
+            margin: 0 0 20px 0;
+            color: #333;
+            border-bottom: 2px solid #60a5fa;
+            padding-bottom: 10px;
+        }
+        .mermaid { text-align: center; }
+        .nav { margin-bottom: 20px; }
+        .nav a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #e0e0e0;
+            color: #333;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-right: 10px;
+        }
+        .nav a:hover { background: #d0d0d0; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <a href="data_flow.html">Data Flow</a>
+        <a href="allocation.html">Allocation</a>
+        <a href="system_design.html">System Design</a>
+    </div>
+
+    <div class="header">
+        <h1>System Design Diagrams</h1>
+        <p>V2 Weekly Capacity & Multi-Group Resource Tracking - Architecture Overview</p>
+    </div>
+
+    <div class="diagram-card">
+        <h3>1. System Architecture Overview</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Clients[Client Layer]
+        BROWSER[Web Browser]
+        POWERBI[PowerBI]
+        EXCEL_CLIENT[Excel]
+    end
+
+    subgraph API[API Layer - FastAPI]
+        GATEWAY[API Gateway /api/v2]
+        subgraph Routers
+            RESOURCE_R[Resource Router]
+            ASSIGN_R[Assignment Router]
+            POLICY_R[Policy Router]
+            TIER_R[Tier Router]
+            REPORT_R[Reports Router]
+            ALLOC_R[Allocation Router]
+        end
+    end
+
+    subgraph Logic[Business Logic Layer]
+        ALLOC_SVC[Allocation Service]
+        CAPACITY_SVC[Capacity Calculator]
+        AVAIL_SVC[Availability Service]
+        POLICY_SVC[Policy Service]
+        PLACEHOLDER_U[Placeholder Utils]
+    end
+
+    subgraph Data[Data Layer]
+        ORM[SQLModel ORM]
+        MSSQL[(MSSQL Server)]
+        SQLITE[(SQLite Debug)]
+    end
+
+    BROWSER --> GATEWAY
+    POWERBI --> GATEWAY
+    EXCEL_CLIENT --> GATEWAY
+    GATEWAY --> Routers
+    Routers --> Logic
+    Logic --> ORM
+    ORM --> MSSQL
+    ORM --> SQLITE
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>2. Layered Architecture</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Presentation[Presentation Layer]
+        WEB[Web Dashboard]
+        PBI[PowerBI]
+        API_DOC[API Docs - Swagger]
+    end
+
+    subgraph Application[Application Layer]
+        R_V2[V2 Routers]
+        R_V1[V1 Routers - Legacy]
+        AUTH[Authentication]
+        LOG[Logging]
+        CACHE[Caching]
+    end
+
+    subgraph Business[Business Logic Layer]
+        ALLOC[Allocation]
+        CAPACITY[Capacity]
+        AVAIL[Availability]
+        POLICY[Policy]
+        PLACEHOLDER[Placeholder]
+        AGGREGATION[Aggregation]
+    end
+
+    subgraph DataAccess[Data Access Layer]
+        ORM[SQLModel ORM]
+        REPO[Repository Pattern]
+        CONN[Connection Pool]
+    end
+
+    subgraph Infrastructure[Infrastructure Layer]
+        DB_PROD[MSSQL - Production]
+        DB_DEV[SQLite - Development]
+        FILES[File Storage]
+    end
+
+    Presentation --> Application
+    Application --> Business
+    Business --> DataAccess
+    DataAccess --> Infrastructure
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>3. Database Schema - ER Diagram</h3>
+<pre class="mermaid">
+erDiagram
+    ResourceModel ||--o{ WeeklyResourceAssignment : assigned_to
+    ProductionCapacityTier ||--o{ WeeklyResourceAssignment : defines_tier
+    WeekConfiguration ||--o{ WeeklyResourceAssignment : week_config
+    ForecastModel ||--o{ WeeklyResourceAssignment : demand
+    WeeklyResourceAssignment }o--|| MonthlyCapacitySummary : aggregates
+    MonthConfiguration ||--o{ WeekConfiguration : generates
+    AvailabilityPolicy ||--o{ ResourceModel : governs
+
+    ResourceModel {
+        int id PK
+        string cn UK
+        string resource_type
+        string display_name
+        string primary_platform
+        string location
+        string state_list
+        date available_from
+        date available_until
+        bool is_active
+    }
+
+    WeeklyResourceAssignment {
+        int id PK
+        int year
+        int week_number
+        string resource_cn FK
+        int capacity_tier_id FK
+        float production_percentage
+        float weekly_capacity
+        bool is_active
+    }
+
+    MonthlyCapacitySummary {
+        int id PK
+        string report_month
+        int report_year
+        int actual_fte_count
+        int placeholder_fte_count
+        float total_capacity
+        float capacity_gap
+    }
+
+    ProductionCapacityTier {
+        int id PK
+        string tier_name UK
+        float capacity_percentage
+        bool is_active
+    }
+
+    WeekConfiguration {
+        int id PK
+        int year
+        int week_number
+        int working_days
+        float work_hours
+        float shrinkage
+    }
+
+    AvailabilityPolicy {
+        int id PK
+        string policy_key UK
+        string policy_value
+        string category
+        bool is_active
+    }
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>4. API Endpoint Structure</h3>
+<pre class="mermaid">
+graph TD
+    subgraph Root[/api/v2]
+        RESOURCES[/resources]
+        ASSIGNMENTS[/assignments]
+        POLICIES[/policies]
+        TIERS[/capacity-tiers]
+        WEEKCFG[/week-config]
+        REPORTS[/reports]
+        ALLOCATION[/allocation]
+    end
+
+    subgraph ResourceEndpoints[/resources Endpoints]
+        R_LIST[GET / - List]
+        R_GET[GET /cn - Get]
+        R_CREATE[POST / - Create]
+        R_BULK[POST /bulk-import]
+        R_PLACE[POST /placeholders]
+        R_CONVERT[POST /cn/convert]
+    end
+
+    subgraph ReportEndpoints[/reports Endpoints]
+        REP_PBI[GET /powerbi/monthly-summary]
+        REP_DASH[GET /dashboard/hierarchy]
+        REP_TIER[GET /capacity-by-tier]
+    end
+
+    subgraph AllocEndpoints[/allocation Endpoints]
+        AL_EXEC[POST /execute]
+        AL_PREVIEW[GET /preview]
+        AL_REBAL[POST /rebalance]
+    end
+
+    RESOURCES --> ResourceEndpoints
+    REPORTS --> ReportEndpoints
+    ALLOCATION --> AllocEndpoints
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>5. Component Architecture</h3>
+<pre class="mermaid">
+graph TB
+    subgraph API_Layer[API Layer - V2 Routers]
+        R1[resource_router_v2.py]
+        R2[assignment_router_v2.py]
+        R3[policy_router_v2.py]
+        R4[capacity_tier_router.py]
+        R5[reports_router_v2.py]
+        R6[allocation_router_v2.py]
+    end
+
+    subgraph Models_Layer[Models - models_v2.py]
+        M1[ResourceModel]
+        M2[WeeklyResourceAssignment]
+        M3[MonthlyCapacitySummary]
+        M4[ProductionCapacityTier]
+        M5[WeekConfiguration]
+        M6[AvailabilityPolicy]
+    end
+
+    subgraph Services_Layer[Services]
+        S1[allocation_v2.py]
+        S2[capacity_calculations_v2.py]
+        S3[availability_utils.py]
+        S4[policy_utils.py]
+        S5[placeholder_utils.py]
+    end
+
+    R1 --> M1
+    R2 --> M2
+    R3 --> M6
+    R6 --> S1
+    S1 --> S2
+    S1 --> S3
+    S3 --> S4
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>6. Deployment Architecture</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Development[Development Environment]
+        DEV_APP[FastAPI App]
+        DEV_DB[(SQLite test.db)]
+        DEV_MODE[MODE=DEBUG]
+    end
+
+    subgraph Production[Production Environment]
+        PROD_APP[FastAPI App - Uvicorn]
+        PROD_DB[(MSSQL Server)]
+        PROD_MODE[MODE=PRODUCTION]
+    end
+
+    subgraph Config[Configuration]
+        CONFIG_INI[config.ini]
+        ENV_VARS[Environment Variables]
+    end
+
+    subgraph Clients[Clients]
+        WEB[Web Browser]
+        PBI[PowerBI]
+        SCRIPTS[Python Scripts]
+    end
+
+    DEV_APP --> DEV_DB
+    DEV_MODE --> DEV_APP
+    CONFIG_INI --> DEV_MODE
+
+    PROD_APP --> PROD_DB
+    PROD_MODE --> PROD_APP
+    CONFIG_INI --> PROD_MODE
+    ENV_VARS --> PROD_APP
+
+    WEB --> PROD_APP
+    PBI --> PROD_APP
+    WEB --> DEV_APP
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>7. Policy System Architecture</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Config[Policy Configuration]
+        POLICY_DB[(AvailabilityPolicyModel)]
+        DEFAULTS[Default Values - Seeded on Startup]
+    end
+
+    subgraph Categories[Policy Categories]
+        CAT_AVAIL[Availability Policies]
+        CAT_ALLOC[Allocation Policies]
+        CAT_REPORT[Reporting Policies]
+    end
+
+    subgraph Avail_Policies[Availability Policies]
+        P1[ENFORCE_AVAILABLE_FROM]
+        P2[ENFORCE_AVAILABLE_UNTIL]
+        P3[DEFAULT_AVAILABILITY_DAYS]
+    end
+
+    subgraph Alloc_Policies[Allocation Policies]
+        P4[ALLOW_OVER_ALLOCATION]
+        P5[AUTO_CREATE_PLACEHOLDERS]
+        P6[PLACEHOLDER_PREFIX]
+    end
+
+    subgraph Usage[Policy Usage]
+        AVAIL_CHECK[Availability Check]
+        ALLOC_ENGINE[Allocation Engine]
+        REPORT_GEN[Report Generator]
+    end
+
+    DEFAULTS --> POLICY_DB
+    POLICY_DB --> CAT_AVAIL
+    POLICY_DB --> CAT_ALLOC
+    POLICY_DB --> CAT_REPORT
+
+    CAT_AVAIL --> Avail_Policies
+    CAT_ALLOC --> Alloc_Policies
+
+    Avail_Policies --> AVAIL_CHECK
+    Alloc_Policies --> ALLOC_ENGINE
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>8. Capacity Tier System</h3>
+<pre class="mermaid">
+graph TB
+    subgraph Tiers[Production Capacity Tiers]
+        T100[100% - Full Production]
+        T75[75% - Final Ramp]
+        T50[50% - Mid Ramp]
+        T25[25% - Early Ramp/Training]
+    end
+
+    subgraph Resources[Resource Types]
+        ACTUAL[Actual Resources - CN12345]
+        PLACEHOLDER[Placeholders - TBH-001]
+    end
+
+    subgraph Assignment[Weekly Assignment]
+        ASSIGN[WeeklyResourceAssignment]
+    end
+
+    subgraph Output[Output Metrics]
+        FTE_COUNT[FTE Count]
+        FTE_EQUIV[FTE Equivalent]
+        CAPACITY[Total Capacity]
+    end
+
+    ACTUAL --> ASSIGN
+    PLACEHOLDER --> ASSIGN
+    T100 --> ASSIGN
+    T75 --> ASSIGN
+    T50 --> ASSIGN
+    T25 --> ASSIGN
+    ASSIGN --> FTE_COUNT
+    ASSIGN --> FTE_EQUIV
+    ASSIGN --> CAPACITY
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>9. Request Flow Diagram</h3>
+<pre class="mermaid">
+sequenceDiagram
+    participant Client
+    participant FastAPI
+    participant Router
+    participant Service
+    participant Model
+    participant Database
+
+    Client->>FastAPI: HTTP Request
+    FastAPI->>Router: Route to Handler
+    Router->>Service: Call Business Logic
+    Service->>Model: Use Data Models
+    Model->>Database: Query/Update
+    Database-->>Model: Result
+    Model-->>Service: Data Objects
+    Service-->>Router: Process Result
+    Router-->>FastAPI: Response Object
+    FastAPI-->>Client: HTTP Response
+</pre>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose'
+        });
+    </script>
+</body>
+</html>

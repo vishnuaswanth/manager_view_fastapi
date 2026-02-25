@@ -1,0 +1,17 @@
+%% V2 Architecture - Allocation Process Flow
+
+graph TD
+    START((Start)) --> FORECAST[Get Forecast Demands]
+    START --> RESOURCES[Get Available Resources]
+    START --> CONFIG[Get Week Configuration]
+    RESOURCES --> CHECK{Check Availability}
+    CHECK -->|Available| SKILLS[Match Skills]
+    CHECK -->|Not Available| SKIP[Skip Resource]
+    SKILLS --> FILTER[Filter Eligible]
+    FORECAST --> MATCH[Match Resources to Demands]
+    FILTER --> MATCH
+    MATCH --> CALC[Calculate Weekly Capacity]
+    CALC --> ASSIGN[Create Assignment Records]
+    ASSIGN --> SUMMARY[Create Monthly Summary]
+    SUMMARY --> GAP[Calculate Capacity Gap]
+    GAP --> DONE((End))

@@ -1,0 +1,42 @@
+%% V2 Architecture - Capacity Tier System
+
+graph TB
+    subgraph Tiers[Production Capacity Tiers]
+        T100[100% - Full Production]
+        T75[75% - Final Ramp]
+        T50[50% - Mid Ramp]
+        T25[25% - Early Ramp/Training]
+    end
+
+    subgraph Resources[Resource Types]
+        ACTUAL[Actual Resources - CN12345]
+        PLACEHOLDER[Placeholders - TBH-001]
+    end
+
+    subgraph Assignment[Weekly Assignment]
+        ASSIGN[WeeklyResourceAssignment]
+    end
+
+    subgraph Calculation[Capacity Calculation]
+        CALC[Capacity = Tier% x Days x Hours x 1-Shrink x CPH]
+    end
+
+    subgraph Output[Output Metrics]
+        FTE_COUNT[FTE Count]
+        FTE_EQUIV[FTE Equivalent - Sum of Tier%]
+        CAPACITY[Total Capacity]
+    end
+
+    ACTUAL --> ASSIGN
+    PLACEHOLDER --> ASSIGN
+
+    T100 --> ASSIGN
+    T75 --> ASSIGN
+    T50 --> ASSIGN
+    T25 --> ASSIGN
+
+    ASSIGN --> CALC
+
+    CALC --> FTE_COUNT
+    CALC --> FTE_EQUIV
+    CALC --> CAPACITY

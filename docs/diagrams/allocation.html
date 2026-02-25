@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>V2 Allocation Diagrams</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #f472b6, #ec4899);
+            color: white;
+            padding: 30px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+        }
+        .header h1 { margin: 0 0 10px 0; font-size: 28px; }
+        .header p { margin: 0; opacity: 0.9; }
+        .diagram-card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        .diagram-card h3 {
+            margin: 0 0 20px 0;
+            color: #333;
+            border-bottom: 2px solid #f472b6;
+            padding-bottom: 10px;
+        }
+        .mermaid { text-align: center; }
+        .nav { margin-bottom: 20px; }
+        .nav a {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #e0e0e0;
+            color: #333;
+            text-decoration: none;
+            border-radius: 6px;
+            margin-right: 10px;
+        }
+        .nav a:hover { background: #d0d0d0; }
+    </style>
+</head>
+<body>
+    <div class="nav">
+        <a href="data_flow.html">Data Flow</a>
+        <a href="allocation.html">Allocation</a>
+        <a href="system_design.html">System Design</a>
+    </div>
+
+    <div class="header">
+        <h1>Allocation Diagrams</h1>
+        <p>V2 Weekly Capacity & Multi-Group Resource Tracking - Allocation Process</p>
+    </div>
+
+    <div class="diagram-card">
+        <h3>1. Allocation Process Flow</h3>
+<pre class="mermaid">
+graph TD
+    START((Start)) --> GET_FORECAST[Get Forecast Demands]
+    START --> GET_RESOURCES[Get Available Resources]
+    START --> GET_CONFIG[Get Week Configuration]
+    GET_RESOURCES --> CHECK_AVAIL{Check Availability Window}
+    CHECK_AVAIL -->|Available| CHECK_SKILLS[Match Skills and Platform]
+    CHECK_AVAIL -->|Not Available| SKIP[Skip Resource]
+    CHECK_SKILLS -->|Match| FILTER[Add to Eligible List]
+    CHECK_SKILLS -->|No Match| SKIP
+    GET_FORECAST --> MATCH[Match Resources to Demands]
+    FILTER --> MATCH
+    MATCH --> CALC[Calculate Weekly Capacity]
+    CALC --> ASSIGN[Create Assignment Records]
+    ASSIGN --> AGG[Aggregate Weekly to Monthly]
+    AGG --> SUMMARY[Create Monthly Summary]
+    SUMMARY --> GAP[Calculate Capacity Gap]
+    GAP --> DONE((End))
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>2. Availability Window Check</h3>
+<pre class="mermaid">
+graph TD
+    START((Check Availability)) --> GET_RESOURCE[Get Resource Record]
+    GET_RESOURCE --> GET_WEEK[Get Week Start/End Dates]
+    GET_WEEK --> CHECK_FROM{available_from is set?}
+    CHECK_FROM -->|No| CHECK_UNTIL{available_until is set?}
+    CHECK_FROM -->|Yes| GET_POLICY_FROM[Get Policy ENFORCE_AVAILABLE_FROM]
+    GET_POLICY_FROM --> ENFORCE_FROM{Policy Enabled?}
+    ENFORCE_FROM -->|No| CHECK_UNTIL
+    ENFORCE_FROM -->|Yes| CHECK_FROM_DATE{week_start >= available_from?}
+    CHECK_FROM_DATE -->|Yes| CHECK_UNTIL
+    CHECK_FROM_DATE -->|No| NOT_AVAILABLE((Not Available))
+    CHECK_UNTIL -->|No| AVAILABLE((Available))
+    CHECK_UNTIL -->|Yes| GET_POLICY_UNTIL[Get Policy ENFORCE_AVAILABLE_UNTIL]
+    GET_POLICY_UNTIL --> ENFORCE_UNTIL{Policy Enabled?}
+    ENFORCE_UNTIL -->|No| AVAILABLE
+    ENFORCE_UNTIL -->|Yes| CHECK_UNTIL_DATE{week_end <= available_until?}
+    CHECK_UNTIL_DATE -->|Yes| AVAILABLE
+    CHECK_UNTIL_DATE -->|No| NOT_AVAILABLE
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>3. Resource Matching Logic</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Demand[Demand Requirements]
+        D1[Platform]
+        D2[Location]
+        D3[State]
+        D4[Skills/Case Type]
+    end
+    subgraph Resource[Resource Attributes]
+        R1[Primary Platform]
+        R2[Location]
+        R3[StateList]
+        R4[Skills]
+    end
+    D1 --> MATCH{All Criteria Match?}
+    D2 --> MATCH
+    D3 --> MATCH
+    D4 --> MATCH
+    R1 --> MATCH
+    R2 --> MATCH
+    R3 --> MATCH
+    R4 --> MATCH
+    MATCH -->|Yes| ELIGIBLE[Resource is Eligible]
+    MATCH -->|No| NOT_ELIGIBLE[Resource Not Eligible]
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>4. Capacity Calculation Formula</h3>
+<pre class="mermaid">
+graph LR
+    subgraph Inputs
+        PROD_PCT[Production % - 25/50/75/100]
+        WORK_DAYS[Working Days - eg 5]
+        WORK_HRS[Work Hours - eg 9]
+        SHRINK[Shrinkage - eg 0.10]
+        CPH[Target CPH - eg 12.5]
+    end
+    subgraph Formula
+        CALC[Weekly Capacity = Prod% x Days x Hours x 1-Shrink x CPH]
+    end
+    subgraph Output
+        WEEKLY[Weekly Capacity - cases/week]
+        MONTHLY[Monthly Capacity - sum of weeks]
+    end
+    PROD_PCT --> CALC
+    WORK_DAYS --> CALC
+    WORK_HRS --> CALC
+    SHRINK --> CALC
+    CPH --> CALC
+    CALC --> WEEKLY
+    WEEKLY --> MONTHLY
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>5. Execute Allocation Sequence</h3>
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant User
+    participant API as API Gateway
+    participant Alloc as Allocation Service
+    participant Avail as Availability Service
+    participant Capacity as Capacity Calculator
+    participant DB as Database
+
+    User->>API: POST /api/v2/allocation/execute
+    API->>Alloc: Execute Allocation
+    Alloc->>DB: Get Forecast Demands
+    DB-->>Alloc: Forecast Records
+    Alloc->>DB: Get Week Configurations
+    DB-->>Alloc: Week Configs
+    Alloc->>DB: Get All Active Resources
+    DB-->>Alloc: Resources
+
+    loop For Each Demand
+        Alloc->>Alloc: Filter by Platform/Location
+        loop For Each Resource
+            Alloc->>Avail: Check Availability Window
+            Avail-->>Alloc: Available/Not Available
+            Alloc->>Alloc: Match Skills and State
+        end
+        Alloc->>Alloc: Select Best Matches
+        loop For Each Match
+            Alloc->>Capacity: Calculate Weekly Capacity
+            Capacity-->>Alloc: Capacity Value
+            Alloc->>DB: Create Assignment
+        end
+    end
+
+    Alloc->>DB: Compute Monthly Summary
+    Alloc-->>API: Allocation Complete
+    API-->>User: 200 OK with results
+</pre>
+    </div>
+
+    <div class="diagram-card">
+        <h3>6. Preview Allocation - Dry Run</h3>
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant User
+    participant API as API Gateway
+    participant Alloc as Allocation Service
+    participant Avail as Availability Service
+    participant DB as Database
+
+    User->>API: GET /api/v2/allocation/preview
+    Note over User,API: month=June, year=2025
+
+    API->>Alloc: Preview Allocation - dry_run=true
+
+    Alloc->>DB: Get Forecast Demands
+    DB-->>Alloc: Demands
+
+    Alloc->>DB: Get Resources
+    DB-->>Alloc: Resources
+
+    Alloc->>Avail: Filter by Availability
+    Avail-->>Alloc: Available Resources
+
+    Alloc->>Alloc: Simulate Matching
+
+    loop For Each Demand
+        Alloc->>Alloc: Calculate Potential Assignments
+        Alloc->>Alloc: Calculate Capacity
+        Alloc->>Alloc: Calculate Gaps
+    end
+
+    Note over Alloc,DB: No database writes
+
+    Alloc-->>API: Preview Results
+    API-->>User: potential assignments, estimated capacity, estimated gap
+</pre>
+    </div>
+
+    <script>
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'default',
+            securityLevel: 'loose'
+        });
+    </script>
+</body>
+</html>

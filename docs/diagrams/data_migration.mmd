@@ -1,0 +1,14 @@
+%% V2 Architecture - Data Migration Flow
+
+graph TD
+    START[Start Migration] --> CREATE[Create V2 Tables]
+    CREATE --> SEED1[Seed Capacity Tiers]
+    SEED1 --> SEED2[Seed Policies]
+    SEED2 --> READ[Read Existing Roster]
+    READ --> MAP[Map Fields]
+    MAP --> SAVE1[Save Resources]
+    SAVE1 --> ALLOC[Read Allocations]
+    ALLOC --> CONVERT[Convert to Weekly]
+    CONVERT --> SAVE2[Save Assignments]
+    SAVE2 --> VERIFY[Verify Integrity]
+    VERIFY --> DONE[Migration Complete]

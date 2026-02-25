@@ -5,50 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>V2 Architecture - Weekly Capacity & Multi-Group Resource Tracking</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #0f0f23 0%, #1a1a3e 100%);
             min-height: 100vh;
             color: #e0e0e0;
         }
-
         .header {
             background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(10px);
             padding: 20px 40px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             position: sticky;
             top: 0;
             z-index: 100;
         }
-
-        .header h1 {
-            font-size: 24px;
-            font-weight: 600;
-            color: #fff;
-            margin-bottom: 8px;
-        }
-
-        .header p {
-            font-size: 14px;
-            color: #a0a0a0;
-        }
-
+        .header h1 { font-size: 24px; color: #fff; margin-bottom: 8px; }
+        .header p { font-size: 14px; color: #a0a0a0; }
         .nav-tabs {
             display: flex;
-            gap: 0;
             background: rgba(255, 255, 255, 0.03);
             padding: 0 40px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
             overflow-x: auto;
         }
-
         .nav-tab {
             padding: 16px 24px;
             cursor: pointer;
@@ -59,33 +39,12 @@
             transition: all 0.3s ease;
             white-space: nowrap;
         }
-
-        .nav-tab:hover {
-            color: #fff;
-            background: rgba(255, 255, 255, 0.05);
-        }
-
-        .nav-tab.active {
-            color: #4ade80;
-            border-bottom-color: #4ade80;
-        }
-
-        .container {
-            padding: 30px 40px;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
-
-        .section {
-            margin-bottom: 40px;
-        }
-
+        .nav-tab:hover { color: #fff; background: rgba(255, 255, 255, 0.05); }
+        .nav-tab.active { color: #4ade80; border-bottom-color: #4ade80; }
+        .container { padding: 30px 40px; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .section { margin-bottom: 40px; }
         .section h2 {
             font-size: 20px;
             color: #fff;
@@ -93,13 +52,6 @@
             padding-bottom: 10px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
-
-        .section h3 {
-            font-size: 16px;
-            color: #4ade80;
-            margin-bottom: 15px;
-        }
-
         .diagram-card {
             background: #fff;
             border-radius: 12px;
@@ -107,7 +59,6 @@
             margin-bottom: 30px;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
         }
-
         .diagram-card h4 {
             font-size: 16px;
             color: #333;
@@ -115,62 +66,26 @@
             padding-bottom: 10px;
             border-bottom: 1px solid #eee;
         }
-
-        .mermaid {
-            display: flex;
-            justify-content: center;
-            overflow-x: auto;
-        }
-
+        .mermaid { text-align: center; }
         .info-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
             margin-top: 20px;
         }
-
         .info-card {
             background: rgba(255, 255, 255, 0.05);
             border-radius: 12px;
             padding: 20px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-
-        .info-card.flow {
-            border-left: 4px solid #4ade80;
-        }
-
-        .info-card.system {
-            border-left: 4px solid #60a5fa;
-        }
-
-        .info-card.interaction {
-            border-left: 4px solid #f472b6;
-        }
-
-        .info-card h5 {
-            font-size: 14px;
-            color: #fff;
-            margin-bottom: 10px;
-        }
-
-        .info-card p {
-            font-size: 13px;
-            color: #a0a0a0;
-            line-height: 1.6;
-        }
-
-        .info-card ul {
-            margin-top: 10px;
-            padding-left: 20px;
-        }
-
-        .info-card li {
-            font-size: 12px;
-            color: #808080;
-            margin-bottom: 4px;
-        }
-
+        .info-card.flow { border-left: 4px solid #4ade80; }
+        .info-card.system { border-left: 4px solid #60a5fa; }
+        .info-card.interaction { border-left: 4px solid #f472b6; }
+        .info-card h5 { font-size: 14px; color: #fff; margin-bottom: 10px; }
+        .info-card p { font-size: 13px; color: #a0a0a0; line-height: 1.6; }
+        .info-card ul { margin-top: 10px; padding-left: 20px; }
+        .info-card li { font-size: 12px; color: #808080; margin-bottom: 4px; }
         .badge {
             display: inline-block;
             font-size: 10px;
@@ -179,11 +94,9 @@
             font-weight: 500;
             margin-left: 8px;
         }
-
         .badge-flow { background: #4ade80; color: #000; }
         .badge-system { background: #60a5fa; color: #000; }
         .badge-interaction { background: #f472b6; color: #000; }
-
         .legend {
             display: flex;
             flex-wrap: wrap;
@@ -192,47 +105,15 @@
             padding: 20px;
             background: rgba(255, 255, 255, 0.05);
             border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
         }
-
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 13px;
-        }
-
-        .legend-color {
-            width: 20px;
-            height: 20px;
-            border-radius: 4px;
-        }
-
+        .legend-item { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+        .legend-color { width: 20px; height: 20px; border-radius: 4px; }
         .footer {
             text-align: center;
             padding: 30px;
             color: #606060;
             font-size: 12px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        @media (max-width: 768px) {
-            .header {
-                padding: 15px 20px;
-            }
-            .nav-tabs {
-                padding: 0 20px;
-            }
-            .nav-tab {
-                padding: 12px 16px;
-                font-size: 13px;
-            }
-            .container {
-                padding: 20px;
-            }
-            .diagram-card {
-                padding: 15px;
-            }
         }
     </style>
 </head>
@@ -275,89 +156,52 @@
 
                 <div class="diagram-card">
                     <h4>System Architecture Overview</h4>
-                    <div class="mermaid">
-graph TB
-    subgraph Clients[Client Layer]
-        BROWSER[Web Browser]
-        POWERBI[PowerBI]
-        EXCEL_CLIENT[Excel]
-    end
-    subgraph API[API Layer FastAPI]
-        GATEWAY[API Gateway]
-        subgraph Routers[Routers]
-            RESOURCE_R[Resource]
-            ASSIGN_R[Assignment]
-            POLICY_R[Policy]
-            REPORT_R[Reports]
-            ALLOC_R[Allocation]
-        end
-    end
-    subgraph Logic[Business Logic Layer]
-        ALLOC_SVC[Allocation Service]
-        CAPACITY_SVC[Capacity Calculator]
-        AVAIL_SVC[Availability Service]
-        POLICY_SVC[Policy Service]
-    end
-    subgraph Data[Data Layer]
-        ORM[SQLModel ORM]
-        DB[Database]
-    end
-    BROWSER --> GATEWAY
-    POWERBI --> GATEWAY
-    EXCEL_CLIENT --> GATEWAY
-    GATEWAY --> Routers
-    Routers --> Logic
-    Logic --> ORM
-    ORM --> DB
-                    </div>
+<div class="mermaid">
+flowchart TB
+    BROWSER[Web Browser] --> GATEWAY[API Gateway]
+    POWERBI[PowerBI] --> GATEWAY
+    EXCEL[Excel] --> GATEWAY
+    GATEWAY --> RESOURCE_R[Resource Router]
+    GATEWAY --> ASSIGN_R[Assignment Router]
+    GATEWAY --> REPORT_R[Reports Router]
+    RESOURCE_R --> ALLOC_SVC[Allocation Service]
+    ASSIGN_R --> ALLOC_SVC
+    REPORT_R --> CAPACITY_SVC[Capacity Calculator]
+    ALLOC_SVC --> ORM[SQLModel ORM]
+    CAPACITY_SVC --> ORM
+    ORM --> DB[(Database)]
+</div>
                 </div>
 
                 <div class="info-grid">
                     <div class="info-card flow">
                         <h5>Flow Diagrams <span class="badge badge-flow">8 diagrams</span></h5>
-                        <p>Visual representation of data movement and process execution throughout the system.</p>
+                        <p>Visual representation of data movement and process execution.</p>
                         <ul>
                             <li>High-Level Data Flow</li>
-                            <li>Allocation Process Flow</li>
                             <li>Capacity Calculation Flow</li>
-                            <li>Placeholder Lifecycle</li>
-                            <li>Availability Check Flow</li>
-                            <li>Week Config Generation</li>
                             <li>Report Generation Flow</li>
                             <li>Data Migration Flow</li>
                         </ul>
                     </div>
                     <div class="info-card system">
                         <h5>System Design <span class="badge badge-system">9 diagrams</span></h5>
-                        <p>Component architecture, layered design, and infrastructure layout.</p>
+                        <p>Component architecture and infrastructure layout.</p>
                         <ul>
-                            <li>System Architecture Overview</li>
-                            <li>Component Architecture</li>
+                            <li>Layered Architecture</li>
                             <li>Database Schema</li>
                             <li>API Endpoint Structure</li>
-                            <li>Layered Architecture</li>
-                            <li>Policy System Architecture</li>
-                            <li>Capacity Tier System</li>
                             <li>Deployment Architecture</li>
-                            <li>File Structure</li>
                         </ul>
                     </div>
                     <div class="info-card interaction">
                         <h5>User Interactions <span class="badge badge-interaction">12 diagrams</span></h5>
-                        <p>Sequence diagrams showing user workflows and API interactions.</p>
+                        <p>Sequence diagrams showing user workflows.</p>
                         <ul>
                             <li>Resource Creation</li>
-                            <li>Placeholder Creation (Batch)</li>
-                            <li>Placeholder Conversion</li>
-                            <li>Weekly Assignment</li>
                             <li>Execute Allocation</li>
-                            <li>Generate Reports</li>
-                            <li>Update Policy</li>
-                            <li>Set Week Targets</li>
-                            <li>Bulk Import</li>
-                            <li>Preview Allocation</li>
-                            <li>Check Availability</li>
-                            <li>User Workflow Summary</li>
+                            <li>Placeholder Conversion</li>
+                            <li>Policy Updates</li>
                         </ul>
                     </div>
                 </div>
@@ -371,7 +215,7 @@ graph TB
 
                 <div class="diagram-card">
                     <h4>1. High-Level Data Flow</h4>
-                    <div class="mermaid">
+<div class="mermaid">
 graph TB
     ROSTER[Roster File] --> UPLOAD[Upload Router]
     FORECAST[Forecast File] --> UPLOAD
@@ -385,70 +229,47 @@ graph TB
     SUMMARY --> POWERBI[PowerBI]
     SUMMARY --> DASHBOARD[JS Dashboard]
     SUMMARY --> EXCEL[Excel Export]
-                    </div>
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>2. Capacity Calculation Flow</h4>
-                    <div class="mermaid">
-graph LR
-    PROD[Production Percent] --> CALC[Calculate Capacity]
+<div class="mermaid">
+flowchart LR
+    PROD[Production %] --> CALC[Calculate]
     DAYS[Working Days] --> CALC
     HOURS[Work Hours] --> CALC
-    SHRINK[Shrinkage] --> CALC
     CPH[Target CPH] --> CALC
     CALC --> WEEKLY[Weekly Capacity]
     WEEKLY --> MONTHLY[Monthly Capacity]
-                    </div>
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>3. Report Generation Flow</h4>
-                    <div class="mermaid">
-graph TD
-    START[Generate Report] --> GET_DATA[Get Summary and Assignments]
-    GET_DATA --> SPLIT[Split Actual vs Placeholder]
+<div class="mermaid">
+flowchart TD
+    START[Generate Report] --> GET[Get Data]
+    GET --> SPLIT[Split Actual vs Placeholder]
     SPLIT --> TIERS[Calculate Tier Breakdown]
-    TIERS --> FORMAT{Output Format}
+    TIERS --> FORMAT{Output Format?}
     FORMAT -->|PowerBI| FLAT[Flatten to Table]
     FORMAT -->|Dashboard| NEST[Nest to JSON]
-    FLAT --> PBI_OUT[PowerBI Report]
-    NEST --> JS_OUT[Dashboard JSON]
-                    </div>
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>4. Data Migration Flow</h4>
-                    <div class="mermaid">
-graph TD
-    START[Start Migration] --> CREATE[Create V2 Tables]
-    CREATE --> SEED1[Seed Capacity Tiers]
-    SEED1 --> SEED2[Seed Policies]
-    SEED2 --> READ[Read Existing Roster]
+<div class="mermaid">
+flowchart TD
+    START[Start] --> CREATE[Create V2 Tables]
+    CREATE --> SEED[Seed Tiers and Policies]
+    SEED --> READ[Read Existing Roster]
     READ --> MAP[Map Fields]
-    MAP --> SAVE1[Save Resources]
-    SAVE1 --> ALLOC[Read Allocations]
-    ALLOC --> CONVERT[Convert to Weekly]
-    CONVERT --> SAVE2[Save Assignments]
-    SAVE2 --> VERIFY[Verify Integrity]
-    VERIFY --> DONE[Migration Complete]
-                    </div>
-                </div>
-
-                <div class="diagram-card">
-                    <h4>5. Week Configuration Generation</h4>
-                    <div class="mermaid">
-graph TD
-    START[Start] --> INPUT[Input Month and Year]
-    INPUT --> GET[Get MonthConfiguration]
-    GET --> CALC[Calculate ISO Weeks]
-    CALC --> LOOP[For Each Week]
-    LOOP --> CREATE[Create WeekConfig]
-    CREATE --> DATES[Set Start and End Dates]
-    DATES --> PARAMS[Set Working Days etc]
-    PARAMS --> SAVE[Save to Database]
-    SAVE --> END[Done]
-                    </div>
+    MAP --> SAVE[Save Resources]
+    SAVE --> VERIFY[Verify Integrity]
+    VERIFY --> DONE[Complete]
+</div>
                 </div>
             </div>
         </div>
@@ -460,57 +281,51 @@ graph TD
 
                 <div class="diagram-card">
                     <h4>Allocation Process Flow</h4>
-                    <div class="mermaid">
-graph TD
-    START((Start)) --> FORECAST[Get Forecast Demands]
-    START --> RESOURCES[Get Available Resources]
-    START --> CONFIG[Get Week Configuration]
+<div class="mermaid">
+flowchart TD
+    START([Start]) --> FORECAST[Get Forecast Demands]
+    FORECAST --> RESOURCES[Get Available Resources]
     RESOURCES --> CHECK{Check Availability}
     CHECK -->|Available| SKILLS[Match Skills]
     CHECK -->|Not Available| SKIP[Skip Resource]
-    SKILLS --> FILTER[Filter Eligible]
-    FORECAST --> MATCH[Match Resources to Demands]
-    FILTER --> MATCH
-    MATCH --> CALC[Calculate Weekly Capacity]
-    CALC --> ASSIGN[Create Assignment Records]
-    ASSIGN --> SUMMARY[Create Monthly Summary]
-    SUMMARY --> GAP[Calculate Capacity Gap]
-    GAP --> DONE((End))
-                    </div>
+    SKILLS --> MATCH[Match to Demands]
+    MATCH --> CALC[Calculate Capacity]
+    CALC --> ASSIGN[Create Assignments]
+    ASSIGN --> SUMMARY[Create Summary]
+    SUMMARY --> DONE([End])
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Availability Window Check</h4>
-                    <div class="mermaid">
-graph TD
-    START((Start)) --> GET[Get Resource]
-    GET --> FROM{available_from set}
-    FROM -->|No| UNTIL{available_until set}
-    FROM -->|Yes| FROM_DATE{week_start >= available_from}
-    FROM_DATE -->|Yes| UNTIL
-    FROM_DATE -->|No| NOT_AVAIL((Not Available))
-    UNTIL -->|No| AVAIL((Available))
-    UNTIL -->|Yes| UNTIL_DATE{week_end <= available_until}
-    UNTIL_DATE -->|Yes| AVAIL
-    UNTIL_DATE -->|No| NOT_AVAIL
-                    </div>
+<div class="mermaid">
+flowchart TD
+    START([Start]) --> GET[Get Resource]
+    GET --> FROM{available_from set?}
+    FROM -->|No| UNTIL{available_until set?}
+    FROM -->|Yes| CHECK1{week >= available_from?}
+    CHECK1 -->|Yes| UNTIL
+    CHECK1 -->|No| NOTAVAIL([Not Available])
+    UNTIL -->|No| AVAIL([Available])
+    UNTIL -->|Yes| CHECK2{week <= available_until?}
+    CHECK2 -->|Yes| AVAIL
+    CHECK2 -->|No| NOTAVAIL
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Resource Matching Logic</h4>
-                    <div class="mermaid">
-graph LR
-    D1[Demand Platform] --> MATCH{All Match}
+<div class="mermaid">
+flowchart LR
+    D1[Demand Platform] --> MATCH{Match All?}
     D2[Demand Location] --> MATCH
     D3[Demand State] --> MATCH
-    D4[Demand Skills] --> MATCH
     R1[Resource Platform] --> MATCH
     R2[Resource Location] --> MATCH
     R3[Resource StateList] --> MATCH
-    R4[Resource Skills] --> MATCH
     MATCH -->|Yes| OK[Eligible]
     MATCH -->|No| NO[Not Eligible]
-                    </div>
+</div>
                 </div>
             </div>
         </div>
@@ -522,67 +337,44 @@ graph LR
 
                 <div class="diagram-card">
                     <h4>Layered Architecture</h4>
-                    <div class="mermaid">
-graph TB
+<div class="mermaid">
+flowchart TB
     WEB[Web Dashboard] --> ROUTERS[FastAPI Routers]
     PBI[PowerBI] --> ROUTERS
-    DOCS[API Docs] --> ROUTERS
     ROUTERS --> ALLOC[Allocation Service]
     ROUTERS --> CAPACITY[Capacity Calculator]
     ROUTERS --> AVAIL[Availability Service]
-    ROUTERS --> POLICY[Policy Service]
     ALLOC --> ORM[SQLModel ORM]
     CAPACITY --> ORM
     AVAIL --> ORM
-    POLICY --> ORM
-    ORM --> MSSQL[(MSSQL Production)]
-    ORM --> SQLITE[(SQLite Development)]
-                    </div>
+    ORM --> MSSQL[(MSSQL)]
+    ORM --> SQLITE[(SQLite)]
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Database Schema Overview</h4>
-                    <div class="mermaid">
+<div class="mermaid">
 erDiagram
-    ResourceModel ||--o{ WeeklyResourceAssignment : assigned_to
-    ProductionCapacityTier ||--o{ WeeklyResourceAssignment : tier
-    WeekConfiguration ||--o{ WeeklyResourceAssignment : week
-    WeeklyResourceAssignment }o--|| MonthlyCapacitySummary : aggregates
-    AvailabilityPolicy ||--o{ ResourceModel : governs
-    ResourceModel {
-        int id
-        string cn
-        string resource_type
-        date available_from
-        date available_until
-    }
-    WeeklyResourceAssignment {
-        int id
-        int year
-        int week_number
-        string resource_cn
-        float production_percentage
-    }
-    MonthlyCapacitySummary {
-        int id
-        int actual_fte_count
-        int placeholder_fte_count
-        float capacity_gap
-    }
-                    </div>
+    ResourceModel ||--o{ WeeklyAssignment : has
+    CapacityTier ||--o{ WeeklyAssignment : defines
+    WeekConfig ||--o{ WeeklyAssignment : configures
+    WeeklyAssignment }o--|| MonthlySummary : aggregates
+    Policy ||--o{ ResourceModel : governs
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Deployment Architecture</h4>
-                    <div class="mermaid">
-graph TB
-    DEV_MODE[MODE DEBUG] --> DEV_APP[FastAPI App Dev]
-    DEV_APP --> DEV_DB[(SQLite)]
-    PROD_MODE[MODE PRODUCTION] --> PROD_APP[FastAPI Uvicorn]
-    PROD_APP --> PROD_DB[(MSSQL Server)]
-    WEB[Web Browser] --> PROD_APP
-    PBI[PowerBI] --> PROD_APP
-                    </div>
+<div class="mermaid">
+flowchart TB
+    DEV[DEBUG Mode] --> DEVAPP[FastAPI Dev]
+    DEVAPP --> SQLITE[(SQLite)]
+    PROD[PRODUCTION Mode] --> PRODAPP[FastAPI Uvicorn]
+    PRODAPP --> MSSQL[(MSSQL Server)]
+    BROWSER[Browser] --> PRODAPP
+    PBI[PowerBI] --> PRODAPP
+</div>
                 </div>
             </div>
         </div>
@@ -594,40 +386,35 @@ graph TB
 
                 <div class="diagram-card">
                     <h4>API Routes</h4>
-                    <div class="mermaid">
-graph TD
-    ROOT[/api/v2] --> RESOURCES[/resources]
-    ROOT --> ASSIGNMENTS[/assignments]
-    ROOT --> POLICIES[/policies]
-    ROOT --> TIERS[/capacity-tiers]
-    ROOT --> REPORTS[/reports]
-    ROOT --> ALLOCATION[/allocation]
-    RESOURCES --> R1[GET List]
-    RESOURCES --> R2[POST Create]
-    RESOURCES --> R3[POST placeholders]
-    RESOURCES --> R4[POST convert]
-    REPORTS --> REP1[GET powerbi]
-    REPORTS --> REP2[GET dashboard]
-    ALLOCATION --> AL1[POST execute]
-    ALLOCATION --> AL2[GET preview]
-                    </div>
+<div class="mermaid">
+flowchart TD
+    ROOT[/api/v2] --> RES[/resources]
+    ROOT --> ASN[/assignments]
+    ROOT --> POL[/policies]
+    ROOT --> REP[/reports]
+    ROOT --> ALC[/allocation]
+    RES --> R1[GET - List]
+    RES --> R2[POST - Create]
+    RES --> R3[POST /placeholders]
+    REP --> RP1[GET /powerbi]
+    REP --> RP2[GET /dashboard]
+    ALC --> A1[POST /execute]
+    ALC --> A2[GET /preview]
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Component Architecture</h4>
-                    <div class="mermaid">
-graph LR
-    R1[resource_router] --> S3[availability_utils]
-    R2[assignment_router] --> S1[allocation_v2]
-    R3[policy_router] --> S4[policy_utils]
-    R4[reports_router] --> S2[capacity_calc]
-    S1 --> S2
-    S1 --> S3
-    S3 --> S4
-    S1 --> M1[ResourceModel]
-    S1 --> M2[WeeklyAssignment]
-    S2 --> M3[MonthlySummary]
-                    </div>
+<div class="mermaid">
+flowchart LR
+    R1[resource_router] --> S1[availability_utils]
+    R2[assignment_router] --> S2[allocation_v2]
+    R3[reports_router] --> S3[capacity_calc]
+    S2 --> S3
+    S2 --> S1
+    S2 --> M1[ResourceModel]
+    S3 --> M2[MonthlySummary]
+</div>
                 </div>
             </div>
         </div>
@@ -638,83 +425,48 @@ graph LR
                 <h2>User Interactions</h2>
 
                 <div class="diagram-card">
-                    <h4>Resource Creation with Availability Window</h4>
-                    <div class="mermaid">
+                    <h4>Resource Creation Flow</h4>
+<div class="mermaid">
 sequenceDiagram
-    participant User
-    participant API
-    participant Service
-    participant DB
-    User->>API: POST /api/v2/resources
-    API->>Service: Validate Availability
+    User->>API: POST /resources
+    API->>Service: Validate
     Service->>DB: Query Policies
     DB-->>Service: Policy Values
-    Service-->>API: Validation Result
-    alt Valid
-        API->>DB: Insert Resource
-        DB-->>API: Created
-        API-->>User: 201 Created
-    else Invalid
-        API-->>User: 400 Bad Request
-    end
-                    </div>
+    Service-->>API: Result
+    API->>DB: Insert Resource
+    DB-->>API: Created
+    API-->>User: 201 Created
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Execute Allocation Flow</h4>
-                    <div class="mermaid">
+<div class="mermaid">
 sequenceDiagram
-    participant User
-    participant API
-    participant Alloc
-    participant DB
-    User->>API: POST /api/v2/allocation/execute
-    API->>Alloc: Execute Allocation
+    User->>API: POST /allocation/execute
+    API->>Alloc: Execute
     Alloc->>DB: Get Demands
-    DB-->>Alloc: Forecast Records
+    DB-->>Alloc: Forecasts
     Alloc->>DB: Get Resources
     DB-->>Alloc: Resources
     Alloc->>Alloc: Match and Calculate
     Alloc->>DB: Create Assignments
-    Alloc->>DB: Compute Summary
     Alloc-->>API: Complete
     API-->>User: 200 OK
-                    </div>
-                </div>
-
-                <div class="diagram-card">
-                    <h4>Convert Placeholder to Actual</h4>
-                    <div class="mermaid">
-sequenceDiagram
-    participant User
-    participant API
-    participant Service
-    participant DB
-    User->>API: POST /resources/TBH-001/convert
-    API->>DB: Get Placeholder
-    DB-->>API: Placeholder Record
-    API->>Service: Convert Placeholder
-    Service->>DB: Create Actual Resource
-    Service->>DB: Transfer Assignments
-    Service->>DB: Update replaced_by_cn
-    Service-->>API: Conversion Complete
-    API-->>User: 200 OK
-                    </div>
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>User Workflow Summary</h4>
-                    <div class="mermaid">
-graph LR
+<div class="mermaid">
+flowchart LR
     P1[Upload Roster] --> P2[Create Placeholders]
-    P2 --> P3[Set Week Targets]
+    P2 --> P3[Set Targets]
     P3 --> E1[Run Allocation]
-    E1 --> E2[Review Assignments]
-    E2 --> E3[Adjust Tiers]
-    E3 --> R1[Generate Reports]
-    R1 --> R2[Export to PowerBI]
-    R1 --> R3[View Dashboard]
-                    </div>
+    E1 --> E2[Review]
+    E2 --> R1[Generate Reports]
+    R1 --> R2[Export PowerBI]
+</div>
                 </div>
             </div>
         </div>
@@ -726,48 +478,34 @@ graph LR
 
                 <div class="diagram-card">
                     <h4>Policy System Architecture</h4>
-                    <div class="mermaid">
-graph TB
-    DEFAULTS[Default Values] --> POLICY_DB[AvailabilityPolicyModel]
-    POLICY_DB --> CAT_AVAIL[Availability Category]
-    POLICY_DB --> CAT_ALLOC[Allocation Category]
-    POLICY_DB --> CAT_REPORT[Reporting Category]
-    CAT_AVAIL --> P1[ENFORCE_AVAILABLE_FROM]
-    CAT_AVAIL --> P2[ENFORCE_AVAILABLE_UNTIL]
-    CAT_ALLOC --> P3[ALLOW_OVER_ALLOCATION]
-    CAT_ALLOC --> P4[AUTO_CREATE_PLACEHOLDERS]
-    CAT_REPORT --> P5[INCLUDE_PLACEHOLDERS]
-    P1 --> AVAIL[Availability Check]
-    P2 --> AVAIL
-    P3 --> ALLOC[Allocation Engine]
-    P4 --> ALLOC
-    P5 --> REPORT[Report Generator]
-                    </div>
+<div class="mermaid">
+flowchart TB
+    DEFAULTS[Default Values] --> POLICYDB[(PolicyModel)]
+    POLICYDB --> AVAIL[Availability Category]
+    POLICYDB --> ALLOC[Allocation Category]
+    POLICYDB --> REPORT[Reporting Category]
+    AVAIL --> P1[ENFORCE_AVAILABLE_FROM]
+    AVAIL --> P2[ENFORCE_AVAILABLE_UNTIL]
+    ALLOC --> P3[ALLOW_OVER_ALLOCATION]
+    ALLOC --> P4[AUTO_CREATE_PLACEHOLDERS]
+    REPORT --> P5[INCLUDE_PLACEHOLDERS]
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Update Policy Sequence</h4>
-                    <div class="mermaid">
+<div class="mermaid">
 sequenceDiagram
-    participant Admin
-    participant API
-    participant Router
-    participant DB
-    Admin->>API: PUT /policies/ALLOW_OVER_ALLOCATION
-    API->>Router: Forward Request
+    Admin->>API: PUT /policies/KEY
+    API->>Router: Forward
     Router->>DB: Get Policy
-    DB-->>Router: Current Policy
-    Router->>Router: Validate Value Type
-    alt Valid
-        Router->>DB: Update Policy
-        DB-->>Router: Updated
-        Router-->>API: 200 OK
-        API-->>Admin: Success
-    else Invalid
-        Router-->>API: 400 Bad Request
-        API-->>Admin: Error
-    end
-                    </div>
+    DB-->>Router: Current Value
+    Router->>Router: Validate
+    Router->>DB: Update Policy
+    DB-->>Router: Updated
+    Router-->>API: 200 OK
+    API-->>Admin: Success
+</div>
                 </div>
             </div>
         </div>
@@ -779,60 +517,47 @@ sequenceDiagram
 
                 <div class="diagram-card">
                     <h4>Placeholder Lifecycle</h4>
-                    <div class="mermaid">
-graph TD
-    CREATE[Create Placeholder TBH-001] --> SKILLS[Set Skills and Platform]
-    SKILLS --> AVAIL[Set Availability Window]
+<div class="mermaid">
+flowchart TD
+    CREATE[Create TBH-001] --> SKILLS[Set Skills]
+    SKILLS --> AVAIL[Set Availability]
     AVAIL --> ASSIGN[Assign to Demand]
-    ASSIGN --> TIER[Set Production Tier]
-    TIER --> CALC[Calculate Planned Capacity]
-    CALC -.-> HIRE[New Hire Onboarded]
-    HIRE --> CONVERT[Convert to Actual Resource]
+    ASSIGN --> TIER[Set Tier]
+    TIER --> CALC[Calculate Capacity]
+    CALC -.-> HIRE[Hire Happens]
+    HIRE --> CONVERT[Convert to Actual]
     CONVERT --> TRANSFER[Transfer Assignments]
-    TRANSFER --> LINK[Link via replaced_by_cn]
-    LINK --> ACTUAL[Actual Resource CN12345]
-    ACTUAL --> TRACK[Track Real Capacity]
-                    </div>
+    TRANSFER --> ACTUAL[Actual Resource]
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Create Placeholders Batch</h4>
-                    <div class="mermaid">
+<div class="mermaid">
 sequenceDiagram
-    participant User
-    participant API
-    participant Policy
-    participant DB
-    User->>API: POST /resources/placeholders
-    API->>Policy: Get MAX_PLACEHOLDERS
+    User->>API: POST /placeholders
+    API->>Policy: Get MAX_COUNT
     Policy-->>API: 100
-    alt count exceeds MAX
-        API-->>User: 400 Bad Request
-    else count OK
-        API->>Policy: Get PLACEHOLDER_PREFIX
-        Policy-->>API: TBH-
-        API->>DB: Generate and Insert Placeholders
-        DB-->>API: Created
-        API-->>User: 201 Created
-    end
-                    </div>
+    API->>Policy: Get PREFIX
+    Policy-->>API: TBH-
+    API->>DB: Generate CNs
+    API->>DB: Insert Placeholders
+    DB-->>API: Created
+    API-->>User: 201 Created
+</div>
                 </div>
 
                 <div class="diagram-card">
                     <h4>Capacity Tier System</h4>
-                    <div class="mermaid">
-graph TB
-    T100[100% Full Production] --> FTE[FTE Count]
-    T75[75% Final Ramp] --> FTE
-    T50[50% Mid Ramp] --> EQUIV[FTE Equivalent]
-    T25[25% Early Ramp] --> EQUIV
-    ACTUAL[Actual Resources] --> T100
-    ACTUAL --> T75
-    PLACEHOLDER[Placeholders] --> T50
-    PLACEHOLDER --> T25
+<div class="mermaid">
+flowchart TB
+    T100[100% Full] --> FTE[FTE Count]
+    T75[75% Ramp] --> FTE
+    T50[50% Mid] --> EQUIV[FTE Equivalent]
+    T25[25% Early] --> EQUIV
     FTE --> CAPACITY[Total Capacity]
     EQUIV --> CAPACITY
-                    </div>
+</div>
                 </div>
             </div>
         </div>
@@ -852,42 +577,20 @@ graph TB
             flowchart: {
                 useMaxWidth: true,
                 htmlLabels: true,
-                curve: 'linear'
-            },
-            sequence: {
-                useMaxWidth: true,
-                diagramMarginX: 50,
-                diagramMarginY: 10,
-                actorMargin: 50,
-                width: 150,
-                height: 65,
-                boxMargin: 10,
-                boxTextMargin: 5,
-                noteMargin: 10,
-                messageMargin: 35,
-                mirrorActors: true
-            },
-            er: {
-                useMaxWidth: true
+                curve: 'basis'
             }
         });
 
         function showTab(tabId) {
-            // Hide all tab contents
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
-
-            // Remove active class from all nav tabs
-            document.querySelectorAll('.nav-tab').forEach(navTab => {
-                navTab.classList.remove('active');
-            });
-
-            // Show selected tab content
+            document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+            document.querySelectorAll('.nav-tab').forEach(navTab => navTab.classList.remove('active'));
             document.getElementById(tabId).classList.add('active');
-
-            // Add active class to clicked nav tab
             event.target.classList.add('active');
+
+            // Re-render mermaid diagrams when tab becomes visible
+            setTimeout(() => {
+                mermaid.init(undefined, document.querySelectorAll('#' + tabId + ' .mermaid'));
+            }, 100);
         }
 
         document.getElementById('date').textContent = new Date().toLocaleDateString('en-US', {

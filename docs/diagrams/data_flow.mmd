@@ -1,0 +1,16 @@
+%% V2 Architecture - Data Flow Diagrams
+
+%% 1. High-Level Data Flow
+graph TB
+    ROSTER[Roster File] --> UPLOAD[Upload Router]
+    FORECAST[Forecast File] --> UPLOAD
+    CONFIG[Month Config] --> UPLOAD
+    UPLOAD --> MIGRATION[Data Migration]
+    MIGRATION --> RESOURCE[ResourceModel]
+    WEEKGEN[Week Config Generator] --> WEEKCONFIG[WeekConfiguration]
+    RESOURCE --> ASSIGN[WeeklyAssignments]
+    WEEKCONFIG --> ASSIGN
+    ASSIGN --> SUMMARY[MonthlySummary]
+    SUMMARY --> POWERBI[PowerBI]
+    SUMMARY --> DASHBOARD[JS Dashboard]
+    SUMMARY --> EXCEL[Excel Export]

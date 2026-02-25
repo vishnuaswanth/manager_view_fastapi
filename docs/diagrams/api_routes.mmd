@@ -1,0 +1,27 @@
+%% V2 Architecture - API Routes
+
+graph TD
+    ROOT[/api/v2] --> RESOURCES[/resources]
+    ROOT --> ASSIGNMENTS[/assignments]
+    ROOT --> POLICIES[/policies]
+    ROOT --> TIERS[/capacity-tiers]
+    ROOT --> REPORTS[/reports]
+    ROOT --> ALLOCATION[/allocation]
+
+    RESOURCES --> R1[GET / - List]
+    RESOURCES --> R2[POST / - Create]
+    RESOURCES --> R3[POST /placeholders]
+    RESOURCES --> R4[POST /cn/convert]
+
+    ASSIGNMENTS --> A1[GET / - List]
+    ASSIGNMENTS --> A2[POST / - Create]
+    ASSIGNMENTS --> A3[POST /bulk]
+
+    POLICIES --> P1[GET / - List]
+    POLICIES --> P2[PUT /key - Update]
+
+    REPORTS --> REP1[GET /powerbi]
+    REPORTS --> REP2[GET /dashboard]
+
+    ALLOCATION --> AL1[POST /execute]
+    ALLOCATION --> AL2[GET /preview]

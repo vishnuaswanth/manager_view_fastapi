@@ -1,0 +1,11 @@
+%% V2 Architecture - Report Generation Flow
+
+graph TD
+    START[Generate Report] --> GET_DATA[Get Summary and Assignments]
+    GET_DATA --> SPLIT[Split Actual vs Placeholder]
+    SPLIT --> TIERS[Calculate Tier Breakdown]
+    TIERS --> FORMAT{Output Format}
+    FORMAT -->|PowerBI| FLAT[Flatten to Table]
+    FORMAT -->|Dashboard| NEST[Nest to JSON]
+    FLAT --> PBI_OUT[PowerBI Report]
+    NEST --> JS_OUT[Dashboard JSON]

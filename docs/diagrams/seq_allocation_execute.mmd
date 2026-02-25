@@ -1,0 +1,52 @@
+%% V2 Architecture - Execute Allocation Sequence
+
+sequenceDiagram
+    autonumber
+    participant User
+    participant API as API Gateway
+    participant Router as Allocation Router
+    participant Alloc as Allocation Service
+    participant Avail as Availability Service
+    participant Capacity as Capacity Calculator
+    participant DB as Database
+
+    User->>API: POST /api/v2/allocation/execute
+    Note over User,API: month, year, include_placeholders
+
+    API->>Router: Forward Request
+    Router->>Alloc: Execute Allocation
+
+    Alloc->>DB: Get Forecast Demands
+    DB-->>Alloc: Forecast Records
+
+    Alloc->>DB: Get Week Configurations
+    DB-->>Alloc: Week Configs
+
+    Alloc->>DB: Get All Active Resources
+    DB-->>Alloc: Resources
+
+    loop For Each Demand
+        Alloc->>Alloc: Filter by Platform/Location
+
+        loop For Each Resource
+            Alloc->>Avail: Check Availability Window
+            Avail-->>Alloc: Available/Not Available
+            Alloc->>Alloc: Match Skills and State
+        end
+
+        Alloc->>Alloc: Select Best Matches
+
+        loop For Each Match
+            Alloc->>Capacity: Calculate Weekly Capacity
+            Capacity-->>Alloc: Capacity Value
+            Alloc->>DB: Create Assignment
+            DB-->>Alloc: Assignment Created
+        end
+    end
+
+    Alloc->>DB: Compute Monthly Summary
+    DB-->>Alloc: Summary Created
+
+    Alloc-->>Router: Allocation Complete
+    Router-->>API: 200 OK
+    API-->>User: assignments_created, actual, placeholder

@@ -1,0 +1,34 @@
+%% V2 Architecture - Resource Creation Sequence
+
+sequenceDiagram
+    autonumber
+    participant User
+    participant API as API Gateway
+    participant Router as Resource Router
+    participant Service as Availability Service
+    participant Policy as Policy Service
+    participant DB as Database
+
+    User->>API: POST /api/v2/resources
+    Note over User,API: cn, platform, location, available_from, available_until
+
+    API->>Router: Forward Request
+    Router->>Service: Validate Availability Dates
+
+    Service->>Policy: Get ENFORCE_AVAILABLE_FROM
+    Policy->>DB: Query Policy
+    DB-->>Policy: Policy Value
+    Policy-->>Service: true/false
+
+    Service->>Service: Validate Dates Logic
+    Service-->>Router: Validation Result
+
+    alt Validation Failed
+        Router-->>API: 400 Bad Request
+        API-->>User: Error Response
+    else Validation Passed
+        Router->>DB: Insert ResourceModel
+        DB-->>Router: Resource Created
+        Router-->>API: 201 Created
+        API-->>User: id, cn, status created
+    end
