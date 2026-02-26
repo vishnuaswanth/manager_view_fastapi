@@ -294,14 +294,20 @@ def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
     with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
 
+        forecast_col = get_forecast_column_name("forecast", suffix)
+        fte_req_col = get_forecast_column_name("fte_req", suffix)
         fte_avail_col = get_forecast_column_name("fte_avail", suffix)
         capacity_col = get_forecast_column_name("capacity", suffix)
 
+        current_forecast = getattr(row, forecast_col) or 0
+        current_fte_req = getattr(row, fte_req_col) or 0
         current_fte_avail = getattr(row, fte_avail_col) or 0
         current_capacity = getattr(row, capacity_col) or 0
 
     projected_fte_avail = current_fte_avail + max_ramp_employees
     projected_capacity = round(current_capacity + total_ramp_capacity, 2)
+    current_gap = round(current_capacity - current_forecast, 2)
+    projected_gap = round(projected_capacity - current_forecast, 2)
 
     return {
         "success": True,
@@ -315,16 +321,25 @@ def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
             "weeks_count": len(weeks)
         },
         "current": {
-            "fte_avail": current_fte_avail,
-            "capacity": current_capacity
+            "forecast": current_forecast,
+            "fte_required": current_fte_req,
+            "fte_available": current_fte_avail,
+            "capacity": current_capacity,
+            "gap": current_gap,
         },
         "projected": {
-            "fte_avail": projected_fte_avail,
-            "capacity": projected_capacity
+            "forecast": current_forecast,
+            "fte_required": current_fte_req,
+            "fte_available": projected_fte_avail,
+            "capacity": projected_capacity,
+            "gap": projected_gap,
         },
         "diff": {
-            "fte_avail": max_ramp_employees,
-            "capacity": round(total_ramp_capacity, 2)
+            "forecast": 0,
+            "fte_required": 0,
+            "fte_available": max_ramp_employees,
+            "capacity": round(total_ramp_capacity, 2),
+            "gap": round(projected_gap - current_gap, 2),
         }
     }
 
