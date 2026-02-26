@@ -786,6 +786,32 @@ class AllocationValidityModel(SQLModel, table=True):
     )
 
 
+class RampModel(SQLModel, table=True):
+    """
+    Stores per-week ramp calculation entries for a forecast row and month.
+
+    Each record represents one ramp week applied to a specific (forecast_id, month_key)
+    combination. Multiple weeks per (forecast_id, month_key) are expected (one per week).
+    """
+    __tablename__ = "ramp_model"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    forecast_id: int = Field(index=True)
+    month_key: str = Field(index=True)        # "YYYY-MM"
+    week_label: str                            # "Jan-1-2026"
+    start_date: str                            # "2026-01-01"
+    end_date: str                              # "2026-01-04"
+    working_days: int
+    ramp_percent: float
+    employee_count: int
+    applied_at: datetime = Field(default_factory=datetime.utcnow)
+    applied_by: str = Field(default="system")
+
+    __table_args__ = (
+        Index('idx_ramp_forecast_month', 'forecast_id', 'month_key'),
+    )
+
+
 class InValidSearchException(Exception):
     """Exception raised for custom error scenarios.
 
