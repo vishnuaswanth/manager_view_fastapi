@@ -3,7 +3,7 @@ LLM Tools Router
 Provides endpoints optimized for LLM consumption with rich metadata and context.
 """
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -295,6 +295,7 @@ def get_llm_forecast_filter_options(
 
 @router.get("/api/llm/forecast")
 def get_llm_forecast_data(
+    request: Request,
     month: str,
     year: int,
     platform: Optional[List[str]] = Query(None),
@@ -354,6 +355,17 @@ def get_llm_forecast_data(
                 "status_code": 400,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
+
+        # Merge bracket-notation params (e.g. state[]=TX) with standard params (e.g. state=TX)
+        # Some clients (JS frameworks, curl) send array params as key[]=value instead of key=value
+        raw_params = request.query_params
+        platform = list(set((platform or []) + raw_params.getlist("platform[]")))
+        market = list(set((market or []) + raw_params.getlist("market[]")))
+        locality = list(set((locality or []) + raw_params.getlist("locality[]")))
+        main_lob = list(set((main_lob or []) + raw_params.getlist("main_lob[]")))
+        state = list(set((state or []) + raw_params.getlist("state[]")))
+        case_type = list(set((case_type or []) + raw_params.getlist("case_type[]")))
+        forecast_months = list(set((forecast_months or []) + raw_params.getlist("forecast_months[]")))
 
         # Step 2: Build filters dictionary
         filters = {
@@ -489,17 +501,17 @@ def get_llm_forecast_data(
 
         transformed_records = []
         for record in filtered_records:
-            main_lob = record.get("Centene_Capacity_Plan_Main_LOB", "")
+            main_lob_val = record.get("Centene_Capacity_Plan_Main_LOB", "")
             state_val = record.get("Centene_Capacity_Plan_State", "")
             case_type_val = record.get("Centene_Capacity_Plan_Case_Type", "")
             case_id_val = record.get("Centene_Capacity_Plan_Call_Type_ID", "")
             target_cph_val = record.get("Centene_Capacity_Plan_Target_CPH", 0.0)
 
             # Parse Main_LOB
-            parsed = parse_main_lob(main_lob)
+            parsed = parse_main_lob(main_lob_val)
             platform_val = parsed.get("platform", "")
             market_val = parsed.get("market", "")
-            locality_val = determine_locality(main_lob, case_type_val)
+            locality_val = determine_locality(main_lob_val, case_type_val)
 
             # Build months data
             months_data = {}
@@ -523,7 +535,7 @@ def get_llm_forecast_data(
                 }
 
             transformed_record = {
-                "main_lob": main_lob,
+                "main_lob": main_lob_val,
                 "state": state_val,
                 "case_type": case_type_val,
                 "case_id": case_id_val,
@@ -653,9 +665,9 @@ def get_available_forecast_reports():
         valid_count = len(results)  # All results are valid due to filter
 
         for result in results:
-            (month, year, execution_id, is_valid, created_dt, invalidated_dt,
-             invalidated_reason, status, forecast_file, roster_file,
-             bench_completed, start_time, records_count) = result
+            (month, year, execution_id, is_valid, created_dt, _,
+             _, status, forecast_file, roster_file,
+             bench_completed, _, records_count) = result
 
             # Format as "YYYY-MM"
             month_abbr = _get_month_label(month, year).split('-')[0]  # Get just the month part
@@ -1031,8 +1043,6 @@ def get_available_ftes(
                 })
 
         # Step 4: Query roster - filter by platform, locality, case_type (via NewWorkType)
-        # Normalize locality for roster query
-        location_filter = "Domestic" if locality == "Domestic" else "Global"
         # Handle both "Offshore" and "Global" in the data
         location_values = ["Domestic"] if locality == "Domestic" else ["Global", "Offshore"]
 
