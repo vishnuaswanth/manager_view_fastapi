@@ -535,6 +535,7 @@ def get_llm_forecast_data(
                 }
 
             transformed_record = {
+                "id": record.get("id"),
                 "main_lob": main_lob_val,
                 "state": state_val,
                 "case_type": case_type_val,
