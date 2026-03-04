@@ -400,7 +400,7 @@ class TestGetAppliedRamp:
 
     @patch("code.logics.ramp_calculator.core_utils")
     def test_no_ramp_returns_false(self, mock_cu):
-        """When no ramp rows exist, ramp_applied=False."""
+        """When no ramp rows exist, ramp_applied=False and ramps is empty list."""
         self._setup_ramp_db(mock_cu, [])
 
         from code.logics.ramp_calculator import get_applied_ramp
@@ -408,16 +408,17 @@ class TestGetAppliedRamp:
 
         assert result["success"] is True
         assert result["ramp_applied"] is False
-        assert result["ramp_data"] is None
+        assert result["ramps"] == []
         assert result["forecast_id"] == 1
         assert result["month_key"] == "2026-01"
 
     @patch("code.logics.ramp_calculator.core_utils")
     def test_with_ramp_rows_returns_true(self, mock_cu):
-        """When ramp rows exist, ramp_applied=True with data list."""
+        """When ramp rows exist, ramp_applied=True with ramps grouped by ramp_name."""
         from datetime import datetime
 
         mock_row = MagicMock()
+        mock_row.ramp_name = "Ramp-20260110-a1b2c3d4"
         mock_row.week_label = "Jan-1-2026"
         mock_row.start_date = "2026-01-05"
         mock_row.end_date = "2026-01-09"
@@ -434,8 +435,11 @@ class TestGetAppliedRamp:
 
         assert result["success"] is True
         assert result["ramp_applied"] is True
-        assert len(result["ramp_data"]) == 1
-        week = result["ramp_data"][0]
+        assert len(result["ramps"]) == 1
+        ramp_group = result["ramps"][0]
+        assert ramp_group["ramp_name"] == "Ramp-20260110-a1b2c3d4"
+        assert len(ramp_group["weeks"]) == 1
+        week = ramp_group["weeks"][0]
         assert week["week_label"] == "Jan-1-2026"
         assert week["employee_count"] == 10
 
@@ -501,12 +505,12 @@ class TestPreviewRamp:
         assert result["success"] is True
         assert result["month_label"] == "Jan-26"
         # Current values from mock
-        assert result["current"]["fte_avail"] == 20
+        assert result["current"]["fte_available"] == 20
         assert result["current"]["capacity"] == 1000
         # max_ramp_employees = 5
-        assert result["projected"]["fte_avail"] == 25
-        # diff fte_avail = max_ramp_employees = 5
-        assert result["diff"]["fte_avail"] == 5
+        assert result["projected"]["fte_available"] == 25
+        # diff fte_available = max_ramp_employees = 5
+        assert result["diff"]["fte_available"] == 5
         # Capacity delta > 0
         assert result["diff"]["capacity"] > 0
 
@@ -539,7 +543,7 @@ class TestPreviewRamp:
         from code.logics.ramp_calculator import preview_ramp
         result = preview_ramp(1, "2026-02", weeks)
 
-        assert result["diff"]["fte_avail"] == 0
+        assert result["diff"]["fte_available"] == 0
         assert result["diff"]["capacity"] == 0.0
 
 

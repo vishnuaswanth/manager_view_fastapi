@@ -6,8 +6,10 @@ from per-week employee ramp schedules and persist results to ForecastModel + Ram
 """
 
 import logging
+import uuid
 from calendar import month_abbr as cal_month_abbr
 from datetime import datetime
+from collections import defaultdict
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import HTTPException
@@ -170,6 +172,20 @@ def _get_ramp_month_config(
         }
 
 
+def _generate_ramp_name() -> str:
+    """
+    Generate a unique ramp name using UTC date and a UUID fragment.
+
+    Format: "Ramp-YYYYMMDD-xxxxxxxx" where the suffix is the first 8 hex chars of a UUID4.
+    Uniqueness is guaranteed by the UUID component even when multiple ramps are created
+    on the same day for the same (forecast_id, month_key).
+
+    Returns:
+        Unique ramp name string, e.g. "Ramp-20260110-a1b2c3d4"
+    """
+    return f"Ramp-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
+
+
 def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[float, int]:
     """
     Compute total additive capacity and max ramp employees across all weeks.
@@ -203,12 +219,14 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
     """
     Get previously applied ramp data for a forecast row and month.
 
+    Groups results by ramp_name to support multiple named ramps per (forecast_id, month_key).
+
     Args:
         forecast_id: ForecastModel primary key
         month_key: Target month in "YYYY-MM" format
 
     Returns:
-        Dict with ramp_applied flag and ramp_data (list of week dicts or null)
+        Dict with ramp_applied flag and ramps (list of {ramp_name, weeks} dicts)
     """
     db_manager = core_utils.get_db_manager(
         RampModel,
@@ -224,7 +242,7 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
         ramp_rows = session.query(RampModel).filter(
             RampModel.forecast_id == forecast_id,
             RampModel.month_key == month_key
-        ).order_by(RampModel.start_date).all()
+        ).order_by(RampModel.ramp_name, RampModel.start_date).all()
 
         if not ramp_rows:
             return {
@@ -232,11 +250,13 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
                 "forecast_id": forecast_id,
                 "month_key": month_key,
                 "ramp_applied": False,
-                "ramp_data": None
+                "ramps": []
             }
 
-        weeks = [
-            {
+        grouped = defaultdict(list)
+        for r in ramp_rows:
+            grouped[r.ramp_name].append({
+                "id": r.id,
                 "week_label": r.week_label,
                 "start_date": r.start_date,
                 "end_date": r.end_date,
@@ -245,8 +265,11 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
                 "employee_count": r.employee_count,
                 "applied_at": r.applied_at.isoformat() if r.applied_at else None,
                 "applied_by": r.applied_by
-            }
-            for r in ramp_rows
+            })
+
+        ramps = [
+            {"ramp_name": name, "weeks": weeks}
+            for name, weeks in grouped.items()
         ]
 
         return {
@@ -254,7 +277,7 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
             "forecast_id": forecast_id,
             "month_key": month_key,
             "ramp_applied": True,
-            "ramp_data": weeks
+            "ramps": ramps
         }
 
 
@@ -348,20 +371,24 @@ def apply_ramp(
     forecast_id: int,
     month_key: str,
     weeks: List,
-    user_notes: Optional[str]
+    user_notes: Optional[str],
 ) -> Dict:
     """
     Apply ramp calculation: update ForecastModel and persist RampModel rows.
 
+    A unique ramp_name is system-generated for each call so multiple ramps applied
+    to the same (forecast_id, month_key) on the same day are never mixed up.
+
     Steps:
-    1. Fetch forecast row and resolve month suffix/label
-    2. Compute ramp totals (server-authoritative)
-    3. Read snapshot_before from all 24 metric columns
-    4. Compute snapshot_after in memory
-    5. Write ForecastModel updates (FTE_Avail + Capacity for target month)
-    6. Upsert RampModel rows (one per week)
-    7. Write history log with field-level changes
-    8. Invalidate caches
+    1. Generate unique ramp_name
+    2. Fetch forecast row and resolve month suffix/label
+    3. Compute ramp totals (server-authoritative)
+    4. Read snapshot_before from all 24 metric columns
+    5. Compute snapshot_after in memory
+    6. Write ForecastModel updates (FTE_Avail + Capacity for target month)
+    7. Insert RampModel rows (one per week, always new — name is unique per call)
+    8. Write history log with field-level changes
+    9. Invalidate caches
 
     Args:
         forecast_id: ForecastModel primary key
@@ -370,8 +397,9 @@ def apply_ramp(
         user_notes: Optional user description for audit trail
 
     Returns:
-        Dict with success flag, fields_updated, and history_log_id
+        Dict with success flag, ramp_name, fields_updated, and history_log_id
     """
+    ramp_name = _generate_ramp_name()
     METRIC_COLUMNS = [
         "Client_Forecast_Month1", "Client_Forecast_Month2", "Client_Forecast_Month3",
         "Client_Forecast_Month4", "Client_Forecast_Month5", "Client_Forecast_Month6",
@@ -434,33 +462,21 @@ def apply_ramp(
 
     with ramp_db_manager.SessionLocal() as session:
         for w in weeks:
-            existing = session.query(RampModel).filter(
-                RampModel.forecast_id == forecast_id,
-                RampModel.month_key == month_key,
-                RampModel.ramp_percent == w.rampPercent,
-                RampModel.working_days == w.workingDays
-            ).first()
-
-            if existing:
-                existing.employee_count = w.rampEmployees
-                existing.week_label = w.label
-                existing.start_date = w.startDate
-                existing.end_date = w.endDate
-                existing.applied_at = datetime.utcnow()
-                session.add(existing)
-            else:
-                new_ramp = RampModel(
-                    forecast_id=forecast_id,
-                    month_key=month_key,
-                    week_label=w.label,
-                    start_date=w.startDate,
-                    end_date=w.endDate,
-                    working_days=w.workingDays,
-                    ramp_percent=w.rampPercent,
-                    employee_count=w.rampEmployees,
-                    applied_by="system"
-                )
-                session.add(new_ramp)
+            # Always insert — ramp_name is unique per apply_ramp call,
+            # so there can never be a pre-existing row with this name.
+            new_ramp = RampModel(
+                forecast_id=forecast_id,
+                month_key=month_key,
+                ramp_name=ramp_name,
+                week_label=w.label,
+                start_date=w.startDate,
+                end_date=w.endDate,
+                working_days=w.workingDays,
+                ramp_percent=w.rampPercent,
+                employee_count=w.rampEmployees,
+                applied_by="system"
+            )
+            session.add(new_ramp)
 
         session.commit()
 
@@ -536,10 +552,103 @@ def apply_ramp(
         "forecast_id": forecast_id,
         "month_key": month_key,
         "month_label": month_label,
+        "ramp_name": ramp_name,
         "fields_updated": [fte_avail_col, capacity_col],
         "fte_avail_before": snapshot_before[fte_avail_col],
         "fte_avail_after": new_fte_avail,
         "capacity_before": snapshot_before[capacity_col],
         "capacity_after": new_capacity,
         "history_log_id": history_log_id
+    }
+
+
+def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
+    """
+    Preview the combined impact of multiple named ramps.
+
+    Calls preview_ramp() for each ramp entry and aggregates the diffs.
+
+    Args:
+        forecast_id: ForecastModel primary key
+        month_key: Target month in "YYYY-MM" format
+        ramps: List of BulkRampEntry Pydantic objects (ramp_name, weeks, totalRampEmployees)
+
+    Returns:
+        Dict with per_ramp_previews and aggregated_diff
+    """
+    per_ramp_previews = []
+    agg_fte = 0.0
+    agg_capacity = 0.0
+    agg_gap = 0.0
+
+    for ramp in ramps:
+        result = preview_ramp(forecast_id, month_key, ramp.weeks)
+        per_ramp_previews.append({
+            "ramp_name": ramp.ramp_name,
+            "current": result["current"],
+            "projected": result["projected"],
+            "diff": result["diff"],
+        })
+        agg_fte += result["diff"]["fte_available"]
+        agg_capacity += result["diff"]["capacity"]
+        agg_gap += result["diff"]["gap"]
+
+    return {
+        "success": True,
+        "forecast_id": forecast_id,
+        "month_key": month_key,
+        "per_ramp_previews": per_ramp_previews,
+        "aggregated_diff": {
+            "fte_available": agg_fte,
+            "capacity": round(agg_capacity, 2),
+            "gap": round(agg_gap, 2),
+        }
+    }
+
+
+def bulk_apply_ramp(forecast_id: int, month_key: str, ramps: List, user_notes: Optional[str]) -> Dict:
+    """
+    Apply multiple named ramps to the forecast row.
+
+    Applies each ramp via apply_ramp() and writes a single combined history log.
+
+    Args:
+        forecast_id: ForecastModel primary key
+        month_key: Target month in "YYYY-MM" format
+        ramps: List of BulkRampEntry Pydantic objects (ramp_name, weeks, totalRampEmployees)
+        user_notes: Optional audit notes (applied to all ramps)
+
+    Returns:
+        Dict with ramps_applied, ramps_failed, fields_updated, history_log_id
+    """
+    ramps_applied = []
+    ramps_failed = []
+    fields_updated = set()
+    history_log_id = None
+
+    for ramp in ramps:
+        try:
+            result = apply_ramp(
+                forecast_id=forecast_id,
+                month_key=month_key,
+                weeks=ramp.weeks,
+                user_notes=user_notes,
+            )
+            generated_name = result.get("ramp_name", ramp.ramp_name)
+            ramps_applied.append({"label": ramp.ramp_name, "ramp_name": generated_name})
+            fields_updated.update(result.get("fields_updated", []))
+            # Keep the last history_log_id (apply_ramp writes individual logs)
+            history_log_id = result.get("history_log_id") or history_log_id
+        except Exception as e:
+            logger.error(f"bulk_apply_ramp: failed for ramp '{ramp.ramp_name}': {e}", exc_info=True)
+            ramps_failed.append(ramp.ramp_name)
+
+    return {
+        "success": len(ramps_failed) == 0,
+        "forecast_id": forecast_id,
+        "month_key": month_key,
+        "ramps_applied": ramps_applied,
+        "ramps_failed": ramps_failed,
+        "fields_updated": sorted(fields_updated),
+        "history_log_id": history_log_id,
     }

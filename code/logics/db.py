@@ -792,12 +792,14 @@ class RampModel(SQLModel, table=True):
 
     Each record represents one ramp week applied to a specific (forecast_id, month_key)
     combination. Multiple weeks per (forecast_id, month_key) are expected (one per week).
+    The ramp_name field groups weeks into named ramps for bulk-edit support.
     """
     __tablename__ = "ramp_model"
 
     id: Optional[int] = Field(default=None, primary_key=True)
     forecast_id: int = Field(index=True)
     month_key: str = Field(index=True)        # "YYYY-MM"
+    ramp_name: str = Field(default="Default", index=True)  # groups weeks into named ramps
     week_label: str                            # "Jan-1-2026"
     start_date: str                            # "2026-01-01"
     end_date: str                              # "2026-01-04"
@@ -809,6 +811,7 @@ class RampModel(SQLModel, table=True):
 
     __table_args__ = (
         Index('idx_ramp_forecast_month', 'forecast_id', 'month_key'),
+        Index('idx_ramp_forecast_month_name', 'forecast_id', 'month_key', 'ramp_name'),
     )
 
 
