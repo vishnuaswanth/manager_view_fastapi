@@ -96,19 +96,20 @@ class TestComputeRampTotals:
 
     def test_single_week_basic(self):
         """
-        Capacity = employees × CPH × work_hours × occupancy × (1-shrinkage) × working_days
-                 = 10 × 5 × 9 × 0.95 × 0.9 × 5 = 10 * 5 * 9 * 0.855 * 5
+        Capacity = employees × CPH × work_hours × (1-shrinkage) × working_days
+                 = 10 × 5 × 9 × 0.9 × 5 = 2025.0
+        Note: occupancy is NOT used in the capacity formula.
         """
         weeks = [FakeWeek("W1", "2026-01-05", "2026-01-09", 5, 100.0, 10)]
         config = make_config(working_days=21, occupancy=0.95, shrinkage=0.10, work_hours=9.0)
         total_cap, max_emp = self._call(weeks, config, 5.0)
-        # 10 * 5 * 9 * 0.95 * 0.90 * 5 = 10 * 5 * 9 * 0.855 * 5 = 1923.75
-        expected = 10 * 5.0 * 9.0 * 0.95 * 0.90 * 5
+        # 10 * 5 * 9 * 0.90 * 5 = 2025.0  (no occupancy)
+        expected = 10 * 5.0 * 9.0 * 0.90 * 5
         assert abs(total_cap - expected) < 0.001
         assert max_emp == 10
 
     def test_multiple_weeks_sum(self):
-        """Total capacity is sum across all weeks."""
+        """Total capacity is sum across all weeks. Occupancy is not included in formula."""
         weeks = [
             FakeWeek("W1", "2026-01-05", "2026-01-09", 5, 50.0, 5),
             FakeWeek("W2", "2026-01-12", "2026-01-16", 5, 75.0, 10),
@@ -118,9 +119,9 @@ class TestComputeRampTotals:
         target_cph = 10.0
         total_cap, max_emp = self._call(weeks, config, target_cph)
 
-        # Compute expected manually
+        # Compute expected manually (no occupancy in formula)
         def week_cap(emp, wd):
-            return emp * target_cph * 9.0 * 0.95 * 0.90 * wd
+            return emp * target_cph * 9.0 * 0.90 * wd
         expected = week_cap(5, 5) + week_cap(10, 5) + week_cap(15, 5)
         assert abs(total_cap - expected) < 0.001
         assert max_emp == 15  # max over all weeks
@@ -161,12 +162,13 @@ class TestComputeRampTotals:
         high_shrinkage_cap, _ = self._call(weeks, make_config(shrinkage=0.30), 10.0)
         assert high_shrinkage_cap < low_shrinkage_cap
 
-    def test_config_occupancy_scales_capacity(self):
-        """Higher occupancy increases output capacity."""
+    def test_config_occupancy_not_used_in_formula(self):
+        """Occupancy is NOT part of the capacity formula — changing it has no effect."""
         weeks = [FakeWeek("W1", "2026-01-05", "2026-01-09", 5, 100.0, 10)]
         low_occ_cap, _ = self._call(weeks, make_config(occupancy=0.80), 10.0)
         high_occ_cap, _ = self._call(weeks, make_config(occupancy=0.95), 10.0)
-        assert high_occ_cap > low_occ_cap
+        # Occupancy is excluded from capacity formula, so values must be equal
+        assert abs(high_occ_cap - low_occ_cap) < 0.001
 
     def test_mixed_zero_and_nonzero_weeks(self):
         """Max over weeks that include zero-employee weeks."""
@@ -472,30 +474,53 @@ class TestPreviewRamp:
     def _make_weeks(self, employees, working_days=5):
         return [FakeWeek("W1", "2026-01-05", "2026-01-09", working_days, 100.0, employees)]
 
+    def _make_mock_db(self, mock_cu, forecast_row, ramp_rows=None):
+        """
+        Set up core_utils mock with two separate db managers:
+        - ForecastModel db: returns forecast_row via session.get()
+        - RampModel db: returns ramp_rows via session.query().filter().all()
+        """
+        if ramp_rows is None:
+            ramp_rows = []
+
+        forecast_session = MagicMock()
+        forecast_session.__enter__ = MagicMock(return_value=forecast_session)
+        forecast_session.__exit__ = MagicMock(return_value=False)
+        forecast_session.get.return_value = forecast_row
+
+        forecast_db = MagicMock()
+        forecast_db.SessionLocal.return_value = forecast_session
+
+        ramp_session = MagicMock()
+        ramp_session.__enter__ = MagicMock(return_value=ramp_session)
+        ramp_session.__exit__ = MagicMock(return_value=False)
+        ramp_session.query.return_value.filter.return_value.all.return_value = ramp_rows
+
+        ramp_db = MagicMock()
+        ramp_db.SessionLocal.return_value = ramp_session
+
+        # get_db_manager called twice: first for ForecastModel, second for RampModel
+        mock_cu.get_db_manager.side_effect = [forecast_db, ramp_db]
+
     @patch("code.logics.ramp_calculator._get_ramp_month_config")
     @patch("code.logics.ramp_calculator._resolve_month_suffix")
     @patch("code.logics.ramp_calculator.core_utils")
     def test_projected_values_correct(self, mock_cu, mock_resolve, mock_config):
-        """preview_ramp should return correct current/projected/diff."""
+        """preview_ramp returns correct current/projected/diff (no prior ramp rows)."""
         mock_resolve.return_value = ("1", "Jan-26")
         mock_config.return_value = make_config(working_days=5)
 
-        # First DB call (fetch row + resolve)
         mock_row = MagicMock()
         mock_row.Centene_Capacity_Plan_Target_CPH = 10
         mock_row.Centene_Capacity_Plan_Main_LOB = "Amisys Medicaid DOMESTIC"
         mock_row.Centene_Capacity_Plan_Case_Type = "Claims"
         mock_row.FTE_Avail_Month1 = 20
         mock_row.Capacity_Month1 = 1000
+        mock_row.Client_Forecast_Month1 = 800
+        mock_row.FTE_Required_Month1 = 10
 
-        mock_session = MagicMock()
-        mock_session.__enter__ = MagicMock(return_value=mock_session)
-        mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.get.return_value = mock_row
-
-        mock_db = MagicMock()
-        mock_db.SessionLocal.return_value = mock_session
-        mock_cu.get_db_manager.return_value = mock_db
+        # No existing ramp rows → old contribution = 0
+        self._make_mock_db(mock_cu, mock_row, ramp_rows=[])
 
         weeks = self._make_weeks(employees=5, working_days=5)
 
@@ -504,21 +529,18 @@ class TestPreviewRamp:
 
         assert result["success"] is True
         assert result["month_label"] == "Jan-26"
-        # Current values from mock
         assert result["current"]["fte_available"] == 20
         assert result["current"]["capacity"] == 1000
-        # max_ramp_employees = 5
+        # delta_fte = 5 - 0 = 5
         assert result["projected"]["fte_available"] == 25
-        # diff fte_available = max_ramp_employees = 5
         assert result["diff"]["fte_available"] == 5
-        # Capacity delta > 0
         assert result["diff"]["capacity"] > 0
 
     @patch("code.logics.ramp_calculator._get_ramp_month_config")
     @patch("code.logics.ramp_calculator._resolve_month_suffix")
     @patch("code.logics.ramp_calculator.core_utils")
     def test_zero_employee_weeks_no_change(self, mock_cu, mock_resolve, mock_config):
-        """Weeks with 0 employees should give 0 diff."""
+        """Weeks with 0 employees and no prior rows give 0 diff."""
         mock_resolve.return_value = ("2", "Feb-26")
         mock_config.return_value = make_config()
 
@@ -528,15 +550,10 @@ class TestPreviewRamp:
         mock_row.Centene_Capacity_Plan_Case_Type = "Claims"
         mock_row.FTE_Avail_Month2 = 30
         mock_row.Capacity_Month2 = 2000
+        mock_row.Client_Forecast_Month2 = 1500
+        mock_row.FTE_Required_Month2 = 20
 
-        mock_session = MagicMock()
-        mock_session.__enter__ = MagicMock(return_value=mock_session)
-        mock_session.__exit__ = MagicMock(return_value=False)
-        mock_session.get.return_value = mock_row
-
-        mock_db = MagicMock()
-        mock_db.SessionLocal.return_value = mock_session
-        mock_cu.get_db_manager.return_value = mock_db
+        self._make_mock_db(mock_cu, mock_row, ramp_rows=[])
 
         weeks = [FakeWeek("W1", "2026-02-02", "2026-02-06", 5, 0.0, 0)]
 

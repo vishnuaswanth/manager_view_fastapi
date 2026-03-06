@@ -43,6 +43,7 @@ class RampPreviewRequest(BaseModel):
     """Request body for ramp preview endpoint."""
     model_config = ConfigDict(extra="forbid")
 
+    ramp_name: str = Field(default="Default", min_length=1, max_length=100, description="Name of the ramp group (default 'Default')")
     weeks: List[RampWeek] = Field(min_length=1, description="List of weekly ramp entries")
     totalRampEmployees: int = Field(ge=0, description="Total employees across all weeks (must equal sum of rampEmployees)")
 
@@ -239,7 +240,7 @@ async def preview_ramp_endpoint(
 
     try:
         _validate_ramp_request(request)
-        result = preview_ramp(forecast_id, month_key, request.weeks)
+        result = preview_ramp(forecast_id, month_key, request.weeks, ramp_name=request.ramp_name)
         return result
     except HTTPException:
         raise
@@ -278,12 +279,13 @@ async def apply_ramp_endpoint(
     request: RampApplyRequest = None
 ):
     """
-    Apply a ramp schedule to the forecast row and persist changes.
+    Apply a named ramp schedule to the forecast row and persist changes.
 
     Updates FTE_Avail and Capacity for the target month in ForecastModel,
     persists per-week RampModel records, and creates a history log entry.
 
-    Note: Applying twice adds the delta twice (additive-only, no reversal in scope).
+    Re-applying the same ramp_name replaces previous rows for that name (idempotent).
+    Other ramps in the same month are retained and re-contributed to the final value.
     """
     if request is None:
         raise HTTPException(
@@ -298,6 +300,7 @@ async def apply_ramp_endpoint(
             month_key=month_key,
             weeks=request.weeks,
             user_notes=request.user_notes,
+            ramp_name=request.ramp_name,
         )
         return result
     except HTTPException:

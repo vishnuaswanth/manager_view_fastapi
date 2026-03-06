@@ -1,8 +1,17 @@
 """
 Ramp calculation logic for weekly staffing ramp-ups on forecast rows.
 
-Provides preview and apply operations that compute additive capacity impact
-from per-week employee ramp schedules and persist results to ForecastModel + RampModel.
+Provides preview and apply operations that compute capacity impact from
+per-week employee ramp schedules and persist results to ForecastModel + RampModel.
+
+Capacity formula (per week):
+    capacity = employees × target_cph × work_hours × (1 - shrinkage) × working_days
+    Note: occupancy is NOT used in capacity calculations.
+
+Apply approach (base + recompute):
+    base = current_db_value - sum(all_existing_ramp_contributions)
+    final = base + sum(all_new_ramp_contributions)
+This ensures edits to existing ramps produce correct results (not additive stacking).
 """
 
 import logging
@@ -28,6 +37,17 @@ from code.logics.history_logger import create_complete_history_log
 
 logger = get_logger(__name__)
 core_utils = get_core_utils()
+
+METRIC_COLUMNS = [
+    "Client_Forecast_Month1", "Client_Forecast_Month2", "Client_Forecast_Month3",
+    "Client_Forecast_Month4", "Client_Forecast_Month5", "Client_Forecast_Month6",
+    "FTE_Required_Month1", "FTE_Required_Month2", "FTE_Required_Month3",
+    "FTE_Required_Month4", "FTE_Required_Month5", "FTE_Required_Month6",
+    "FTE_Avail_Month1", "FTE_Avail_Month2", "FTE_Avail_Month3",
+    "FTE_Avail_Month4", "FTE_Avail_Month5", "FTE_Avail_Month6",
+    "Capacity_Month1", "Capacity_Month2", "Capacity_Month3",
+    "Capacity_Month4", "Capacity_Month5", "Capacity_Month6",
+]
 
 # ============================================================================
 # INTERNAL HELPERS
@@ -177,8 +197,6 @@ def _generate_ramp_name() -> str:
     Generate a unique ramp name using UTC date and a UUID fragment.
 
     Format: "Ramp-YYYYMMDD-xxxxxxxx" where the suffix is the first 8 hex chars of a UUID4.
-    Uniqueness is guaranteed by the UUID component even when multiple ramps are created
-    on the same day for the same (forecast_id, month_key).
 
     Returns:
         Unique ramp name string, e.g. "Ramp-20260110-a1b2c3d4"
@@ -188,13 +206,14 @@ def _generate_ramp_name() -> str:
 
 def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[float, int]:
     """
-    Compute total additive capacity and max ramp employees across all weeks.
+    Compute total capacity and max ramp employees across all weeks.
 
-    Capacity per week = employees × target_cph × work_hours × occupancy × (1 - shrinkage) × working_days
+    Capacity per week = employees × target_cph × work_hours × (1 - shrinkage) × working_days
+    Note: occupancy is NOT used in this calculation.
 
     Args:
-        weeks: List of RampWeek Pydantic objects
-        config: Month config dict with working_days, occupancy, shrinkage, work_hours
+        weeks: List of RampWeek Pydantic objects (with rampEmployees, workingDays attributes)
+        config: Month config dict with shrinkage, work_hours keys
         target_cph: Cases per hour from ForecastModel
 
     Returns:
@@ -202,12 +221,78 @@ def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[
     """
     per_week = [
         w.rampEmployees * target_cph * config["work_hours"]
-        * config["occupancy"] * (1 - config["shrinkage"]) * w.workingDays
+        * (1 - config["shrinkage"]) * w.workingDays
         for w in weeks
     ]
     total_ramp_capacity = sum(per_week)
     max_ramp_employees = max((w.rampEmployees for w in weeks), default=0)
     return total_ramp_capacity, max_ramp_employees
+
+
+def _compute_old_ramp_contributions(
+    rows_data: List[Dict],
+    config: Dict,
+    target_cph: float,
+) -> Tuple[Dict[str, Dict], int, float]:
+    """
+    Group existing DB rows by ramp_name and compute FTE + capacity contributions.
+
+    Uses the same formula as _compute_ramp_totals (no occupancy):
+        capacity = employee_count × target_cph × work_hours × (1 - shrinkage) × working_days
+
+    Args:
+        rows_data: List of dicts with keys: ramp_name, employee_count, working_days
+        config: Month config dict with shrinkage, work_hours keys
+        target_cph: Cases per hour from ForecastModel
+
+    Returns:
+        stats: {ramp_name: {"fte": int, "cap": float}}
+        total_fte: sum of max-employee-count per ramp group
+        total_cap: sum of capacity contribution per ramp group
+    """
+    grouped = defaultdict(list)
+    for r in rows_data:
+        grouped[r["ramp_name"]].append(r)
+
+    stats = {}
+    total_fte = 0
+    total_cap = 0.0
+
+    for rn, rows in grouped.items():
+        g_fte = max(r["employee_count"] for r in rows)
+        g_cap = sum(
+            r["employee_count"] * target_cph * config["work_hours"]
+            * (1 - config["shrinkage"]) * r["working_days"]
+            for r in rows
+        )
+        stats[rn] = {"fte": g_fte, "cap": g_cap}
+        total_fte += g_fte
+        total_cap += g_cap
+
+    return stats, total_fte, total_cap
+
+
+def _load_ramp_rows_as_dicts(session, forecast_id: int, month_key: str) -> List[Dict]:
+    """
+    Load all RampModel rows for (forecast_id, month_key) and return as plain dicts.
+
+    Using dicts avoids DetachedInstanceError when the session closes.
+
+    Returns:
+        List of dicts with keys: ramp_name, employee_count, working_days
+    """
+    rows = session.query(RampModel).filter(
+        RampModel.forecast_id == forecast_id,
+        RampModel.month_key == month_key
+    ).all()
+    return [
+        {
+            "ramp_name": r.ramp_name,
+            "employee_count": r.employee_count,
+            "working_days": r.working_days,
+        }
+        for r in rows
+    ]
 
 
 # ============================================================================
@@ -235,10 +320,12 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
         select_columns=None
     )
 
-    with db_manager.SessionLocal() as session:
-        # Verify forecast row exists
-        _get_forecast_row(forecast_id, session)
+    # Verify forecast row exists
+    forecast_db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+    with forecast_db_manager.SessionLocal() as fsession:
+        _get_forecast_row(forecast_id, fsession)
 
+    with db_manager.SessionLocal() as session:
         ramp_rows = session.query(RampModel).filter(
             RampModel.forecast_id == forecast_id,
             RampModel.month_key == month_key
@@ -281,27 +368,34 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
         }
 
 
-def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
+def preview_ramp(
+    forecast_id: int,
+    month_key: str,
+    weeks: List,
+    ramp_name: str = "Default",
+) -> Dict:
     """
-    Preview the impact of a ramp without writing to the database.
+    Preview the impact of applying/replacing a named ramp without writing to the database.
 
-    Computes projected FTE_Avail and Capacity values for the target month.
+    Uses aggregate delta approach:
+        delta = new_contribution(for this ramp_name) - old_contribution(for this ramp_name)
+        projected = current_db_value + delta
+
+    This correctly handles edits to existing ramps (replacing, not stacking).
 
     Args:
         forecast_id: ForecastModel primary key
         month_key: Target month in "YYYY-MM" format
         weeks: List of RampWeek Pydantic objects
+        ramp_name: Name of the ramp being previewed (default "Default")
 
     Returns:
         Dict with current, projected, and diff values
     """
-    db_manager = core_utils.get_db_manager(
-        ForecastModel,
-        limit=1,
-        skip=0,
-        select_columns=None
-    )
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+    ramp_db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
 
+    # Read forecast row fields
     with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
         suffix, month_label = _resolve_month_suffix(row, month_key)
@@ -309,13 +403,6 @@ def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
         target_cph = float(row.Centene_Capacity_Plan_Target_CPH or 0)
         main_lob = row.Centene_Capacity_Plan_Main_LOB or ""
         case_type = row.Centene_Capacity_Plan_Case_Type or ""
-
-    config = _get_ramp_month_config(month_label, main_lob, case_type)
-    total_ramp_capacity, max_ramp_employees = _compute_ramp_totals(weeks, config, target_cph)
-
-    # Re-open session to read current values (avoids detached instance)
-    with db_manager.SessionLocal() as session:
-        row = _get_forecast_row(forecast_id, session)
 
         forecast_col = get_forecast_column_name("forecast", suffix)
         fte_req_col = get_forecast_column_name("fte_req", suffix)
@@ -327,8 +414,37 @@ def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
         current_fte_avail = getattr(row, fte_avail_col) or 0
         current_capacity = getattr(row, capacity_col) or 0
 
-    projected_fte_avail = current_fte_avail + max_ramp_employees
-    projected_capacity = round(current_capacity + total_ramp_capacity, 2)
+    # Get config once (used for both old reverse-calc and new forward-calc)
+    config = _get_ramp_month_config(month_label, main_lob, case_type)
+
+    # Load existing rows for THIS ramp_name only
+    with ramp_db_manager.SessionLocal() as session:
+        old_rows_data = [
+            {"ramp_name": r.ramp_name, "employee_count": r.employee_count, "working_days": r.working_days}
+            for r in session.query(RampModel).filter(
+                RampModel.forecast_id == forecast_id,
+                RampModel.month_key == month_key,
+                RampModel.ramp_name == ramp_name
+            ).all()
+        ]
+
+    # Compute old contribution for this ramp_name
+    old_fte = max((r["employee_count"] for r in old_rows_data), default=0)
+    old_cap = sum(
+        r["employee_count"] * target_cph * config["work_hours"]
+        * (1 - config["shrinkage"]) * r["working_days"]
+        for r in old_rows_data
+    )
+
+    # Compute new contribution from payload
+    new_cap, new_fte = _compute_ramp_totals(weeks, config, target_cph)
+
+    # Aggregate delta
+    delta_fte = new_fte - old_fte
+    delta_cap = new_cap - old_cap
+
+    projected_fte_avail = current_fte_avail + delta_fte
+    projected_capacity = round(current_capacity + delta_cap, 2)
     current_gap = round(current_capacity - current_forecast, 2)
     projected_gap = round(projected_capacity - current_forecast, 2)
 
@@ -337,10 +453,11 @@ def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
         "forecast_id": forecast_id,
         "month_key": month_key,
         "month_label": month_label,
+        "ramp_name": ramp_name,
         "config_used": config,
         "ramp_summary": {
-            "total_ramp_capacity": round(total_ramp_capacity, 2),
-            "max_ramp_employees": max_ramp_employees,
+            "total_ramp_capacity": round(new_cap, 2),
+            "max_ramp_employees": new_fte,
             "weeks_count": len(weeks)
         },
         "current": {
@@ -360,8 +477,8 @@ def preview_ramp(forecast_id: int, month_key: str, weeks: List) -> Dict:
         "diff": {
             "forecast": 0,
             "fte_required": 0,
-            "fte_available": max_ramp_employees,
-            "capacity": round(total_ramp_capacity, 2),
+            "fte_available": delta_fte,
+            "capacity": round(delta_cap, 2),
             "gap": round(projected_gap - current_gap, 2),
         }
     }
@@ -372,52 +489,35 @@ def apply_ramp(
     month_key: str,
     weeks: List,
     user_notes: Optional[str],
+    ramp_name: str = "Default",
 ) -> Dict:
     """
-    Apply ramp calculation: update ForecastModel and persist RampModel rows.
+    Apply a named ramp: update ForecastModel and persist RampModel rows.
 
-    A unique ramp_name is system-generated for each call so multiple ramps applied
-    to the same (forecast_id, month_key) on the same day are never mixed up.
+    Uses base + recompute approach:
+        1. Load ALL existing RampModel rows → compute total_old contributions
+        2. base = current_db - total_old  (strips all prior ramp contributions)
+        3. Delete rows for this ramp_name; insert new rows
+        4. Load ALL remaining rows → compute total_new contributions
+        5. final = base + total_new
 
-    Steps:
-    1. Generate unique ramp_name
-    2. Fetch forecast row and resolve month suffix/label
-    3. Compute ramp totals (server-authoritative)
-    4. Read snapshot_before from all 24 metric columns
-    5. Compute snapshot_after in memory
-    6. Write ForecastModel updates (FTE_Avail + Capacity for target month)
-    7. Insert RampModel rows (one per week, always new — name is unique per call)
-    8. Write history log with field-level changes
-    9. Invalidate caches
+    This correctly handles both new ramps and edits to existing ramps.
 
     Args:
         forecast_id: ForecastModel primary key
         month_key: Target month in "YYYY-MM" format
         weeks: List of RampWeek Pydantic objects
         user_notes: Optional user description for audit trail
+        ramp_name: Name of the ramp (default "Default"). Existing rows with this
+                   name are replaced; other ramps in the same month are untouched.
 
     Returns:
         Dict with success flag, ramp_name, fields_updated, and history_log_id
     """
-    ramp_name = _generate_ramp_name()
-    METRIC_COLUMNS = [
-        "Client_Forecast_Month1", "Client_Forecast_Month2", "Client_Forecast_Month3",
-        "Client_Forecast_Month4", "Client_Forecast_Month5", "Client_Forecast_Month6",
-        "FTE_Required_Month1", "FTE_Required_Month2", "FTE_Required_Month3",
-        "FTE_Required_Month4", "FTE_Required_Month5", "FTE_Required_Month6",
-        "FTE_Avail_Month1", "FTE_Avail_Month2", "FTE_Avail_Month3",
-        "FTE_Avail_Month4", "FTE_Avail_Month5", "FTE_Avail_Month6",
-        "Capacity_Month1", "Capacity_Month2", "Capacity_Month3",
-        "Capacity_Month4", "Capacity_Month5", "Capacity_Month6",
-    ]
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+    ramp_db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
 
-    db_manager = core_utils.get_db_manager(
-        ForecastModel,
-        limit=1,
-        skip=0,
-        select_columns=None
-    )
-
+    # --- Step 1: Read forecast row ---
     with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
         suffix, month_label = _resolve_month_suffix(row, month_key)
@@ -427,44 +527,57 @@ def apply_ramp(
         case_type = row.Centene_Capacity_Plan_Case_Type or ""
         report_month = row.Month
         report_year = row.Year
+        # Capture for history log (avoid DetachedInstanceError later)
+        row_state = row.Centene_Capacity_Plan_State or ""
+        row_case_id = str(row.Centene_Capacity_Plan_Call_Type_ID or row.id)
 
-        # Snapshot before
-        snapshot_before = {col: (getattr(row, col) or 0) for col in METRIC_COLUMNS}
-
-        # Compute ramp totals
-        config = _get_ramp_month_config(month_label, main_lob, case_type)
-        total_ramp_capacity, max_ramp_employees = _compute_ramp_totals(weeks, config, target_cph)
-
-        # Compute snapshot after in memory
-        snapshot_after = dict(snapshot_before)
         fte_avail_col = get_forecast_column_name("fte_avail", suffix)
         capacity_col = get_forecast_column_name("capacity", suffix)
+        forecast_col = get_forecast_column_name("forecast", suffix)
+        fte_req_col = get_forecast_column_name("fte_req", suffix)
 
-        new_fte_avail = snapshot_before[fte_avail_col] + max_ramp_employees
-        new_capacity = round(snapshot_before[capacity_col] + total_ramp_capacity)
-        snapshot_after[fte_avail_col] = new_fte_avail
-        snapshot_after[capacity_col] = new_capacity
+        snapshot_before = {col: (getattr(row, col) or 0) for col in METRIC_COLUMNS}
+        before_fte = snapshot_before[fte_avail_col]
+        before_cap = snapshot_before[capacity_col]
 
-        # Write ForecastModel updates
-        setattr(row, fte_avail_col, new_fte_avail)
-        setattr(row, capacity_col, new_capacity)
-        session.add(row)
-        session.commit()
-        session.refresh(row)
+    # --- Step 2: Get config once ---
+    config = _get_ramp_month_config(month_label, main_lob, case_type)
 
-    # Upsert RampModel rows
-    ramp_db_manager = core_utils.get_db_manager(
-        RampModel,
-        limit=10000,
-        skip=0,
-        select_columns=None
+    # --- Step 3: Load ALL existing rows to compute base ---
+    with ramp_db_manager.SessionLocal() as session:
+        existing_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+
+    _, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
+        existing_rows_data, config, target_cph
     )
 
+    # base = current_db - total_old (strips all prior ramp contributions)
+    base_fte = before_fte - total_old_fte
+    base_cap = before_cap - total_old_cap
+
+    if base_fte < 0:
+        logger.warning(
+            f"apply_ramp: base_fte={base_fte} < 0 for forecast_id={forecast_id}, "
+            f"month_key={month_key}. Data inconsistency — clamping to 0."
+        )
+        base_fte = 0
+    if base_cap < 0:
+        logger.warning(
+            f"apply_ramp: base_cap={base_cap} < 0 for forecast_id={forecast_id}, "
+            f"month_key={month_key}. Data inconsistency — clamping to 0."
+        )
+        base_cap = 0
+
+    # --- Step 4: Delete old rows for this ramp_name; insert new rows ---
     with ramp_db_manager.SessionLocal() as session:
+        session.query(RampModel).filter(
+            RampModel.forecast_id == forecast_id,
+            RampModel.month_key == month_key,
+            RampModel.ramp_name == ramp_name
+        ).delete(synchronize_session=False)
+
         for w in weeks:
-            # Always insert — ramp_name is unique per apply_ramp call,
-            # so there can never be a pre-existing row with this name.
-            new_ramp = RampModel(
+            session.add(RampModel(
                 forecast_id=forecast_id,
                 month_key=month_key,
                 ramp_name=ramp_name,
@@ -475,45 +588,50 @@ def apply_ramp(
                 ramp_percent=w.rampPercent,
                 employee_count=w.rampEmployees,
                 applied_by="system"
-            )
-            session.add(new_ramp)
-
+            ))
         session.commit()
 
-    # Build history record
+    # --- Step 5: Load ALL remaining rows → compute total_new ---
+    with ramp_db_manager.SessionLocal() as session:
+        remaining_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+
+    _, total_new_fte, total_new_cap = _compute_old_ramp_contributions(
+        remaining_rows_data, config, target_cph
+    )
+
+    # final = base + total_new
+    final_fte = base_fte + total_new_fte
+    final_cap = round(base_cap + total_new_cap, 2)
+
+    # --- Step 6: Write ForecastModel ---
+    with db_manager.SessionLocal() as session:
+        row = _get_forecast_row(forecast_id, session)
+        setattr(row, fte_avail_col, final_fte)
+        setattr(row, capacity_col, final_cap)
+        session.add(row)
+        session.commit()
+
+    # --- Step 7: Write history log ---
     months_dict = get_months_dict(report_month, report_year, core_utils)
 
-    # Find the label key for the target month
-    target_month_key = None
-    for k, v in months_dict.items():
-        if v == month_label:
-            target_month_key = k
-            break
-
-    # Collect modified_fields for the changed month
-    modified_fields = [
-        f"{month_label}.fte_avail",
-        f"{month_label}.capacity"
-    ]
-
-    # Build month data dict for extract_specific_changes
     month_data_for_record = {
-        "fte_avail": new_fte_avail,
-        "fte_avail_change": max_ramp_employees,
-        "capacity": new_capacity,
-        "capacity_change": round(total_ramp_capacity),
-        "forecast": snapshot_before.get(get_forecast_column_name("forecast", suffix), 0),
+        "fte_avail": final_fte,
+        "fte_avail_change": final_fte - before_fte,
+        "capacity": final_cap,
+        "capacity_change": round(final_cap - before_cap, 2),
+        "forecast": snapshot_before.get(forecast_col, 0),
         "forecast_change": 0,
-        "fte_req": snapshot_before.get(get_forecast_column_name("fte_req", suffix), 0),
+        "fte_req": snapshot_before.get(fte_req_col, 0),
         "fte_req_change": 0
     }
 
     record = {
         "main_lob": main_lob,
-        "state": row.Centene_Capacity_Plan_State or "",
+        "state": row_state,
         "case_type": case_type,
-        "case_id": str(row.Centene_Capacity_Plan_Call_Type_ID or row.id),
-        "modified_fields": modified_fields,
+        "case_id": row_case_id,
+        "ramp_name": ramp_name,
+        "modified_fields": [f"{month_label}.fte_avail", f"{month_label}.capacity"],
         month_label: month_data_for_record
     }
 
@@ -521,12 +639,13 @@ def apply_ramp(
         "forecast_id": forecast_id,
         "month_key": month_key,
         "month_label": month_label,
-        "fte_avail_before": snapshot_before[fte_avail_col],
-        "fte_avail_after": new_fte_avail,
-        "capacity_before": snapshot_before[capacity_col],
-        "capacity_after": new_capacity,
-        "total_ramp_capacity": round(total_ramp_capacity, 2),
-        "max_ramp_employees": max_ramp_employees
+        "ramp_name": ramp_name,
+        "fte_avail_before": before_fte,
+        "fte_avail_after": final_fte,
+        "capacity_before": round(before_cap, 2),
+        "capacity_after": final_cap,
+        "total_ramp_fte_delta": final_fte - before_fte,
+        "total_ramp_cap_delta": round(final_cap - before_cap, 2),
     }
 
     try:
@@ -554,19 +673,24 @@ def apply_ramp(
         "month_label": month_label,
         "ramp_name": ramp_name,
         "fields_updated": [fte_avail_col, capacity_col],
-        "fte_avail_before": snapshot_before[fte_avail_col],
-        "fte_avail_after": new_fte_avail,
-        "capacity_before": snapshot_before[capacity_col],
-        "capacity_after": new_capacity,
+        "fte_avail_before": before_fte,
+        "fte_avail_after": final_fte,
+        "capacity_before": round(before_cap, 2),
+        "capacity_after": final_cap,
         "history_log_id": history_log_id
     }
 
 
 def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
     """
-    Preview the combined impact of multiple named ramps.
+    Preview the combined impact of multiple named ramps using full aggregate delta.
 
-    Calls preview_ramp() for each ramp entry and aggregates the diffs.
+    Single config fetch and single DB query for all old rows ensures consistent
+    calculation across all ramps.
+
+    Formula:
+        delta = sum(new_contributions) - sum(old_contributions)
+        projected = current_db_value + delta
 
     Args:
         forecast_id: ForecastModel primary key
@@ -574,24 +698,82 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
         ramps: List of BulkRampEntry Pydantic objects (ramp_name, weeks, totalRampEmployees)
 
     Returns:
-        Dict with per_ramp_previews and aggregated_diff
+        Dict with per_ramp_previews and aggregated diff vs current DB values
     """
-    per_ramp_previews = []
-    agg_fte = 0.0
-    agg_capacity = 0.0
-    agg_gap = 0.0
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+    ramp_db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
+
+    # --- Setup: read forecast row fields ---
+    with db_manager.SessionLocal() as session:
+        row = _get_forecast_row(forecast_id, session)
+        suffix, month_label = _resolve_month_suffix(row, month_key)
+
+        target_cph = float(row.Centene_Capacity_Plan_Target_CPH or 0)
+        main_lob = row.Centene_Capacity_Plan_Main_LOB or ""
+        case_type = row.Centene_Capacity_Plan_Case_Type or ""
+
+        fte_avail_col = get_forecast_column_name("fte_avail", suffix)
+        capacity_col = get_forecast_column_name("capacity", suffix)
+        forecast_col = get_forecast_column_name("forecast", suffix)
+
+        current_fte = getattr(row, fte_avail_col) or 0
+        current_cap = getattr(row, capacity_col) or 0
+
+    # --- Config once (single call for all contributions) ---
+    config = _get_ramp_month_config(month_label, main_lob, case_type)
+
+    # --- Load ALL existing DB rows in ONE query ---
+    with ramp_db_manager.SessionLocal() as session:
+        old_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+
+    old_ramp_stats, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
+        old_rows_data, config, target_cph
+    )
+
+    # --- Compute new totals from payload ---
+    new_ramp_stats = {}
+    total_new_fte = 0
+    total_new_cap = 0.0
 
     for ramp in ramps:
-        result = preview_ramp(forecast_id, month_key, ramp.weeks)
+        ramp_cap, ramp_max_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
+        new_ramp_stats[ramp.ramp_name] = {"fte": ramp_max_fte, "cap": ramp_cap}
+        total_new_fte += ramp_max_fte
+        total_new_cap += ramp_cap
+
+    # --- Compute aggregate deltas ---
+    delta_fte = total_new_fte - total_old_fte
+    delta_cap = total_new_cap - total_old_cap
+
+    projected_fte = current_fte + delta_fte
+    projected_cap = round(current_cap + delta_cap, 2)
+
+    # --- Build per-ramp previews ---
+    per_ramp_previews = []
+    for ramp in ramps:
+        old_stat = old_ramp_stats.get(ramp.ramp_name, {"fte": 0, "cap": 0.0})
+        new_stat = new_ramp_stats[ramp.ramp_name]
+
+        old_fte = old_stat["fte"]
+        old_cap_val = old_stat["cap"]
+        new_fte = new_stat["fte"]
+        new_cap_val = new_stat["cap"]
+
         per_ramp_previews.append({
             "ramp_name": ramp.ramp_name,
-            "current": result["current"],
-            "projected": result["projected"],
-            "diff": result["diff"],
+            "current": {
+                "fte_available": old_fte,
+                "capacity": round(old_cap_val, 2),
+            },
+            "projected": {
+                "fte_available": new_fte,
+                "capacity": round(new_cap_val, 2),
+            },
+            "diff": {
+                "fte_available": new_fte - old_fte,
+                "capacity": round(new_cap_val - old_cap_val, 2),
+            },
         })
-        agg_fte += result["diff"]["fte_available"]
-        agg_capacity += result["diff"]["capacity"]
-        agg_gap += result["diff"]["gap"]
 
     return {
         "success": True,
@@ -599,56 +781,205 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
         "month_key": month_key,
         "per_ramp_previews": per_ramp_previews,
         "aggregated_diff": {
-            "fte_available": agg_fte,
-            "capacity": round(agg_capacity, 2),
-            "gap": round(agg_gap, 2),
+            "fte_available": delta_fte,
+            "capacity": round(delta_cap, 2),
+        },
+        "aggregated": {
+            "fte_available_before": current_fte,
+            "fte_available_after": projected_fte,
+            "fte_available_delta": delta_fte,
+            "capacity_before": round(current_cap, 2),
+            "capacity_after": projected_cap,
+            "capacity_delta": round(delta_cap, 2),
         }
     }
 
 
-def bulk_apply_ramp(forecast_id: int, month_key: str, ramps: List, user_notes: Optional[str]) -> Dict:
+def bulk_apply_ramp(
+    forecast_id: int,
+    month_key: str,
+    ramps: List,
+    user_notes: Optional[str],
+) -> Dict:
     """
-    Apply multiple named ramps to the forecast row.
+    Apply multiple named ramps using delete-all + insert-all approach.
 
-    Applies each ramp via apply_ramp() and writes a single combined history log.
+    Algorithm:
+        1. Compute base = current_db - sum(all old ramp contributions)
+        2. Delete ALL existing RampModel rows for (forecast_id, month_key)
+        3. Insert new rows for all submitted ramps
+        4. final = base + sum(all new ramp contributions)
+        5. Write ForecastModel once; write ONE history log for all ramps
 
     Args:
         forecast_id: ForecastModel primary key
         month_key: Target month in "YYYY-MM" format
         ramps: List of BulkRampEntry Pydantic objects (ramp_name, weeks, totalRampEmployees)
-        user_notes: Optional audit notes (applied to all ramps)
+        user_notes: Optional audit notes
 
     Returns:
         Dict with ramps_applied, ramps_failed, fields_updated, history_log_id
     """
-    ramps_applied = []
-    ramps_failed = []
-    fields_updated = set()
-    history_log_id = None
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+    ramp_db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
 
+    # --- Step 1: Read forecast row ---
+    with db_manager.SessionLocal() as session:
+        row = _get_forecast_row(forecast_id, session)
+        suffix, month_label = _resolve_month_suffix(row, month_key)
+
+        target_cph = float(row.Centene_Capacity_Plan_Target_CPH or 0)
+        main_lob = row.Centene_Capacity_Plan_Main_LOB or ""
+        case_type = row.Centene_Capacity_Plan_Case_Type or ""
+        report_month = row.Month
+        report_year = row.Year
+        # Capture for history log
+        row_state = row.Centene_Capacity_Plan_State or ""
+        row_case_id = str(row.Centene_Capacity_Plan_Call_Type_ID or row.id)
+
+        fte_avail_col = get_forecast_column_name("fte_avail", suffix)
+        capacity_col = get_forecast_column_name("capacity", suffix)
+        forecast_col = get_forecast_column_name("forecast", suffix)
+        fte_req_col = get_forecast_column_name("fte_req", suffix)
+
+        snapshot_before = {col: (getattr(row, col) or 0) for col in METRIC_COLUMNS}
+        before_fte = snapshot_before[fte_avail_col]
+        before_cap = snapshot_before[capacity_col]
+
+    # --- Step 2: Config once ---
+    config = _get_ramp_month_config(month_label, main_lob, case_type)
+
+    # --- Step 3: Load ALL existing rows to compute base ---
+    with ramp_db_manager.SessionLocal() as session:
+        existing_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+
+    _, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
+        existing_rows_data, config, target_cph
+    )
+
+    base_fte = before_fte - total_old_fte
+    base_cap = before_cap - total_old_cap
+
+    if base_fte < 0:
+        logger.warning(
+            f"bulk_apply_ramp: base_fte={base_fte} < 0 for forecast_id={forecast_id}, "
+            f"month_key={month_key}. Data inconsistency — clamping to 0."
+        )
+        base_fte = 0
+    if base_cap < 0:
+        logger.warning(
+            f"bulk_apply_ramp: base_cap={base_cap} < 0 for forecast_id={forecast_id}, "
+            f"month_key={month_key}. Data inconsistency — clamping to 0."
+        )
+        base_cap = 0
+
+    # --- Step 4: DELETE ALL rows; INSERT all new rows (single transaction) ---
+    now = datetime.utcnow()
+    with ramp_db_manager.SessionLocal() as session:
+        session.query(RampModel).filter(
+            RampModel.forecast_id == forecast_id,
+            RampModel.month_key == month_key
+        ).delete(synchronize_session=False)
+
+        for ramp in ramps:
+            for w in ramp.weeks:
+                session.add(RampModel(
+                    forecast_id=forecast_id,
+                    month_key=month_key,
+                    ramp_name=ramp.ramp_name,
+                    week_label=w.label,
+                    start_date=w.startDate,
+                    end_date=w.endDate,
+                    working_days=w.workingDays,
+                    ramp_percent=w.rampPercent,
+                    employee_count=w.rampEmployees,
+                    applied_at=now,
+                    applied_by="system"
+                ))
+        session.commit()
+
+    # --- Step 5: Compute total_new directly from payload (same config) ---
+    total_new_fte = 0
+    total_new_cap = 0.0
     for ramp in ramps:
-        try:
-            result = apply_ramp(
-                forecast_id=forecast_id,
-                month_key=month_key,
-                weeks=ramp.weeks,
-                user_notes=user_notes,
-            )
-            generated_name = result.get("ramp_name", ramp.ramp_name)
-            ramps_applied.append({"label": ramp.ramp_name, "ramp_name": generated_name})
-            fields_updated.update(result.get("fields_updated", []))
-            # Keep the last history_log_id (apply_ramp writes individual logs)
-            history_log_id = result.get("history_log_id") or history_log_id
-        except Exception as e:
-            logger.error(f"bulk_apply_ramp: failed for ramp '{ramp.ramp_name}': {e}", exc_info=True)
-            ramps_failed.append(ramp.ramp_name)
+        ramp_cap, ramp_max_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
+        total_new_fte += ramp_max_fte
+        total_new_cap += ramp_cap
 
-    return {
-        "success": len(ramps_failed) == 0,
+    # final = base + total_new
+    final_fte = base_fte + total_new_fte
+    final_cap = round(base_cap + total_new_cap, 2)
+
+    # --- Step 6: Write ForecastModel (single write) ---
+    with db_manager.SessionLocal() as session:
+        row = _get_forecast_row(forecast_id, session)
+        setattr(row, fte_avail_col, final_fte)
+        setattr(row, capacity_col, final_cap)
+        session.add(row)
+        session.commit()
+
+    # --- Step 7: Write ONE history log for all ramps ---
+    months_dict = get_months_dict(report_month, report_year, core_utils)
+    ramp_names = [r.ramp_name for r in ramps]
+
+    month_data_for_record = {
+        "fte_avail": final_fte,
+        "fte_avail_change": final_fte - before_fte,
+        "capacity": final_cap,
+        "capacity_change": round(final_cap - before_cap, 2),
+        "forecast": snapshot_before.get(forecast_col, 0),
+        "forecast_change": 0,
+        "fte_req": snapshot_before.get(fte_req_col, 0),
+        "fte_req_change": 0
+    }
+
+    record = {
+        "main_lob": main_lob,
+        "state": row_state,
+        "case_type": case_type,
+        "case_id": row_case_id,
+        "ramp_names": ramp_names,
+        "modified_fields": [f"{month_label}.fte_avail", f"{month_label}.capacity"],
+        month_label: month_data_for_record
+    }
+
+    summary_data = {
         "forecast_id": forecast_id,
         "month_key": month_key,
-        "ramps_applied": ramps_applied,
-        "ramps_failed": ramps_failed,
-        "fields_updated": sorted(fields_updated),
+        "month_label": month_label,
+        "ramp_names": ramp_names,
+        "fte_avail_before": before_fte,
+        "fte_avail_after": final_fte,
+        "capacity_before": round(before_cap, 2),
+        "capacity_after": final_cap,
+        "total_ramp_fte_delta": final_fte - before_fte,
+        "total_ramp_cap_delta": round(final_cap - before_cap, 2),
+    }
+
+    try:
+        history_log_id = create_complete_history_log(
+            month=report_month,
+            year=report_year,
+            change_type=CHANGE_TYPE_RAMP_CALCULATION,
+            user="system",
+            user_notes=user_notes,
+            modified_records=[record],
+            months_dict=months_dict,
+            summary_data=summary_data
+        )
+    except Exception as e:
+        logger.error(f"History log creation failed (bulk ramp was applied): {e}", exc_info=True)
+        history_log_id = None
+
+    # Invalidate caches
+    clear_all_caches()
+
+    return {
+        "success": True,
+        "forecast_id": forecast_id,
+        "month_key": month_key,
+        "ramps_applied": ramp_names,
+        "ramps_failed": [],
+        "fields_updated": [fte_avail_col, capacity_col],
         "history_log_id": history_log_id,
     }
