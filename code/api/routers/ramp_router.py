@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from code.api.dependencies import get_core_utils, get_logger
-from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp
+from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp, _generate_ramp_name
 
 logger = get_logger(__name__)
 
@@ -43,7 +43,7 @@ class RampPreviewRequest(BaseModel):
     """Request body for ramp preview endpoint."""
     model_config = ConfigDict(extra="forbid")
 
-    ramp_name: str = Field(default="Default", min_length=1, max_length=100, description="Name of the ramp group (default 'Default')")
+    ramp_name: Optional[str] = Field(default=None, min_length=1, max_length=100, description="Name of the ramp group (auto-generated if not provided)")
     weeks: List[RampWeek] = Field(min_length=1, description="List of weekly ramp entries")
     totalRampEmployees: int = Field(ge=0, description="Total employees across all weeks (must equal sum of rampEmployees)")
 
@@ -59,7 +59,7 @@ class BulkRampEntry(BaseModel):
     """A single named ramp within a bulk request."""
     model_config = ConfigDict(extra="forbid")
 
-    ramp_name: str = Field(min_length=1, max_length=100, description="Unique name for this ramp group")
+    ramp_name: Optional[str] = Field(default=None, min_length=1, max_length=100, description="Unique name for this ramp group (auto-generated if not provided)")
     weeks: List[RampWeek] = Field(min_length=1, description="List of weekly ramp entries")
     totalRampEmployees: int = Field(ge=0, description="Total employees across all weeks (must equal sum of rampEmployees)")
 
@@ -93,6 +93,17 @@ def _validate_ramp_request(request: RampPreviewRequest) -> None:
     Raises:
         HTTPException 400: If validation fails
     """
+    # All weeks cannot be zero employees
+    if sum(w.rampEmployees for w in request.weeks) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "success": False,
+                "error": "All rampEmployees values are zero; ramp has no effect",
+                "recommendation": "Provide at least one week with rampEmployees > 0"
+            }
+        )
+
     # totalRampEmployees must equal sum of rampEmployees
     computed_total = sum(w.rampEmployees for w in request.weeks)
     if request.totalRampEmployees != computed_total:
@@ -119,9 +130,9 @@ def _validate_bulk_ramp_request(request: BulkRampPreviewRequest) -> None:
     Raises:
         HTTPException 400: If validation fails
     """
-    # ramp_name values must be unique within the request
-    ramp_names = [r.ramp_name for r in request.ramps]
-    if len(ramp_names) != len(set(ramp_names)):
+    # ramp_name values must be unique within the request (None entries get auto-generated names)
+    named_ramp_names = [r.ramp_name for r in request.ramps if r.ramp_name is not None]
+    if len(named_ramp_names) != len(set(named_ramp_names)):
         raise HTTPException(
             status_code=400,
             detail={
@@ -133,6 +144,15 @@ def _validate_bulk_ramp_request(request: BulkRampPreviewRequest) -> None:
 
     # Validate each ramp entry individually
     for ramp in request.ramps:
+        if sum(w.rampEmployees for w in ramp.weeks) == 0:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "success": False,
+                    "error": f"Ramp '{ramp.ramp_name}': all rampEmployees values are zero; ramp has no effect",
+                    "recommendation": "Provide at least one week with rampEmployees > 0"
+                }
+            )
         computed_total = sum(w.rampEmployees for w in ramp.weeks)
         if ramp.totalRampEmployees != computed_total:
             raise HTTPException(
@@ -220,7 +240,8 @@ async def preview_ramp_endpoint(
 
     try:
         _validate_ramp_request(request)
-        result = preview_ramp(forecast_id, month_key, request.weeks, ramp_name=request.ramp_name)
+        ramp_name = request.ramp_name if request.ramp_name is not None else _generate_ramp_name()
+        result = preview_ramp(forecast_id, month_key, request.weeks, ramp_name=ramp_name)
         return result
     except HTTPException:
         raise
@@ -275,12 +296,13 @@ async def apply_ramp_endpoint(
 
     try:
         _validate_ramp_request(request)
+        ramp_name = request.ramp_name if request.ramp_name is not None else _generate_ramp_name()
         result = apply_ramp(
             forecast_id=forecast_id,
             month_key=month_key,
             weeks=request.weeks,
             user_notes=request.user_notes,
-            ramp_name=request.ramp_name,
+            ramp_name=ramp_name,
         )
         return result
     except HTTPException:
@@ -333,6 +355,9 @@ async def bulk_preview_ramp_endpoint(
 
     try:
         _validate_bulk_ramp_request(request)
+        for ramp in request.ramps:
+            if ramp.ramp_name is None:
+                ramp.ramp_name = _generate_ramp_name()
         result = bulk_preview_ramp(forecast_id, month_key, request.ramps)
         return result
     except HTTPException:
@@ -375,6 +400,9 @@ async def bulk_apply_ramp_endpoint(
 
     try:
         _validate_bulk_ramp_request(request)
+        for ramp in request.ramps:
+            if ramp.ramp_name is None:
+                ramp.ramp_name = _generate_ramp_name()
         result = bulk_apply_ramp(forecast_id, month_key, request.ramps, user_notes=request.user_notes)
         return result
     except HTTPException:

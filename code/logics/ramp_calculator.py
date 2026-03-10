@@ -9,10 +9,12 @@ Capacity formula (per week):
     capacity = effective_employees × target_cph × work_hours × (1 - shrinkage) × working_days
     Note: occupancy is NOT used in capacity calculations.
 
-Apply approach (base + recompute):
-    base = current_db_value - sum(all_existing_ramp_contributions)
-    final = base + sum(all_new_ramp_contributions)
-This ensures edits to existing ramps produce correct results (not additive stacking).
+Per-ramp delta approach (single and bulk):
+    For each ramp_name in the payload:
+        delta = new_contribution(ramp_name) - old_contribution(ramp_name)
+    final = current_db_value + sum(all deltas)
+This ensures edits to existing ramps are non-additive and ramps NOT in the payload
+are left completely untouched.
 """
 
 import logging
@@ -230,50 +232,6 @@ def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[
     total_ramp_capacity = sum(per_week)
     peak_fte = max((w.rampEmployees for w in weeks), default=0)
     return total_ramp_capacity, peak_fte
-
-
-def _compute_old_ramp_contributions(
-    rows_data: List[Dict],
-    config: Dict,
-    target_cph: float,
-) -> Tuple[Dict[str, Dict], int, float]:
-    """
-    Group existing DB rows by ramp_name and compute FTE + capacity contributions.
-
-    Uses the same formula as _compute_ramp_totals (no occupancy):
-        effective = employee_count × (ramp_percent / 100)
-        capacity  = effective × target_cph × work_hours × (1 - shrinkage) × working_days
-
-    Args:
-        rows_data: List of dicts with keys: ramp_name, employee_count, working_days
-        config: Month config dict with shrinkage, work_hours keys
-        target_cph: Cases per hour from ForecastModel
-
-    Returns:
-        stats: {ramp_name: {"fte": int, "cap": float}}
-        total_fte: sum of max-employee-count per ramp group
-        total_cap: sum of capacity contribution per ramp group
-    """
-    grouped = defaultdict(list)
-    for r in rows_data:
-        grouped[r["ramp_name"]].append(r)
-
-    stats = {}
-    total_fte = 0
-    total_cap = 0.0
-
-    for rn, rows in grouped.items():
-        g_fte = max(r["employee_count"] for r in rows)
-        g_cap = sum(
-            r["employee_count"] * (r["ramp_percent"] / 100) * target_cph * config["work_hours"]
-            * (1 - config["shrinkage"]) * r["working_days"]
-            for r in rows
-        )
-        stats[rn] = {"fte": g_fte, "cap": g_cap}
-        total_fte += g_fte
-        total_cap += g_cap
-
-    return stats, total_fte, total_cap
 
 
 def _load_ramp_rows_as_dicts(session, forecast_id: int, month_key: str) -> List[Dict]:
@@ -831,14 +789,15 @@ def apply_ramp(
 
 def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
     """
-    Preview the combined impact of multiple named ramps using full aggregate delta.
+    Preview the combined impact of multiple named ramps using per-ramp delta.
 
     Single config fetch and single DB query for all old rows ensures consistent
-    calculation across all ramps.
+    calculation across all ramps. Only ramp_names present in the payload contribute
+    to the delta — other existing ramps are untouched.
 
-    Formula:
-        delta = sum(new_contributions) - sum(old_contributions)
-        projected = current_db_value + delta
+    Formula (per ramp_name):
+        delta = new_contribution(ramp_name) - old_contribution(ramp_name)
+        projected = current_db_value + sum(all deltas)
 
     Args:
         forecast_id: ForecastModel primary key
@@ -873,42 +832,36 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
     # --- Config once (single call for all contributions) ---
     config = _get_ramp_month_config(month_label, main_lob, case_type)
 
-    # --- Load ALL existing DB rows in ONE query ---
+    # --- Load ALL existing DB rows in ONE query, then group by ramp_name ---
     with ramp_db_manager.SessionLocal() as session:
         old_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
 
-    old_ramp_stats, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
-        old_rows_data, config, target_cph
-    )
+    old_by_name: Dict[str, List[Dict]] = defaultdict(list)
+    for r in old_rows_data:
+        old_by_name[r["ramp_name"]].append(r)
 
-    # --- Compute new totals from payload ---
-    new_ramp_stats = {}
-    total_new_fte = 0
-    total_new_cap = 0.0
-
-    for ramp in ramps:
-        ramp_cap, ramp_max_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
-        new_ramp_stats[ramp.ramp_name] = {"fte": ramp_max_fte, "cap": ramp_cap}
-        total_new_fte += ramp_max_fte
-        total_new_cap += ramp_cap
-
-    # --- Compute aggregate deltas ---
-    delta_fte = total_new_fte - total_old_fte
-    delta_cap = total_new_cap - total_old_cap
-
-    projected_fte = current_fte + delta_fte
-    projected_cap = round(current_cap + delta_cap, 2)
-
-    # --- Build per-ramp previews ---
+    # --- Per-ramp delta: only ramp_names in payload contribute to the delta ---
     per_ramp_previews = []
-    for ramp in ramps:
-        old_stat = old_ramp_stats.get(ramp.ramp_name, {"fte": 0, "cap": 0.0})
-        new_stat = new_ramp_stats[ramp.ramp_name]
+    agg_delta_fte = 0
+    agg_delta_cap = 0.0
 
-        old_fte = old_stat["fte"]
-        old_cap_val = old_stat["cap"]
-        new_fte = new_stat["fte"]
-        new_cap_val = new_stat["cap"]
+    for ramp in ramps:
+        # Old contribution scoped to this ramp_name
+        old_rows = old_by_name.get(ramp.ramp_name, [])
+        old_fte = max((r["employee_count"] for r in old_rows), default=0)
+        old_cap_val = sum(
+            r["employee_count"] * (r["ramp_percent"] / 100) * target_cph
+            * config["work_hours"] * (1 - config["shrinkage"]) * r["working_days"]
+            for r in old_rows
+        )
+
+        # New contribution from payload
+        new_cap_val, new_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
+
+        delta_fte = new_fte - old_fte
+        delta_cap = new_cap_val - old_cap_val
+        agg_delta_fte += delta_fte
+        agg_delta_cap += delta_cap
 
         per_ramp_previews.append({
             "ramp_name": ramp.ramp_name,
@@ -921,10 +874,13 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
                 "capacity": round(new_cap_val, 2),
             },
             "diff": {
-                "fte_available": new_fte - old_fte,
-                "capacity": round(new_cap_val - old_cap_val, 2),
+                "fte_available": delta_fte,
+                "capacity": round(delta_cap, 2),
             },
         })
+
+    projected_fte = current_fte + agg_delta_fte
+    projected_cap = round(current_cap + agg_delta_cap, 2)
 
     return {
         "success": True,
@@ -932,18 +888,18 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
         "month_key": month_key,
         "per_ramp_previews": per_ramp_previews,
         "aggregated_diff": {
-            "fte_available": delta_fte,
-            "capacity": round(delta_cap, 2),
+            "fte_available": agg_delta_fte,
+            "capacity": round(agg_delta_cap, 2),
         },
         "aggregated": {
             "forecast": round(current_forecast, 2),
             "fte_required": current_fte_req,
             "fte_available_before": current_fte,
             "fte_available_after": projected_fte,
-            "fte_available_delta": delta_fte,
+            "fte_available_delta": agg_delta_fte,
             "capacity_before": round(current_cap, 2),
             "capacity_after": projected_cap,
-            "capacity_delta": round(delta_cap, 2),
+            "capacity_delta": round(agg_delta_cap, 2),
             "gap_before": round(current_cap - current_forecast, 2),
             "gap_after": round(projected_cap - current_forecast, 2),
             "gap_delta": round(projected_cap - current_cap, 2),
@@ -966,12 +922,13 @@ def bulk_apply_ramp(
         Read ForecastModel fields, month config, and ALL existing RampModel rows.
 
     Phase 2 — compute in memory (no DB access):
-        base = current_db - sum(all existing ramp contributions)
-        total_new = sum(new ramp contributions from payload)
-        final = base + total_new
+        For each ramp_name in payload:
+            delta = new_contribution(ramp_name) - old_contribution(ramp_name)
+        final = current_db_value + sum(all deltas)
+        Ramp names NOT in the payload are left completely untouched.
 
     Phase 3 — single atomic transaction:
-        DELETE all existing RampModel rows for (forecast_id, month_key)
+        DELETE existing RampModel rows only for ramp_names in the payload
         INSERT new rows for every ramp in the payload
         UPDATE ForecastModel (fte_avail + capacity)
         COMMIT  ← all writes land together; any failure rolls back all three
@@ -1016,48 +973,45 @@ def bulk_apply_ramp(
     with ramp_db_manager.SessionLocal() as session:
         existing_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
 
-    # ── Phase 2: compute final values in memory — no DB ───────────────────────
+    # ── Phase 2: per-ramp delta — no DB ───────────────────────────────────────
 
-    _, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
-        existing_rows_data, config, target_cph
-    )
+    old_by_name: Dict[str, List[Dict]] = defaultdict(list)
+    for r in existing_rows_data:
+        old_by_name[r["ramp_name"]].append(r)
 
-    base_fte = before_fte - total_old_fte
-    base_cap = before_cap - total_old_cap
+    payload_ramp_names = []
+    agg_delta_fte = 0
+    agg_delta_cap = 0.0
 
-    if base_fte < 0:
-        logger.warning(
-            f"bulk_apply_ramp: base_fte={base_fte} < 0 for forecast_id={forecast_id}, "
-            f"month_key={month_key}. Data inconsistency — clamping to 0."
-        )
-        base_fte = 0
-    if base_cap < 0:
-        logger.warning(
-            f"bulk_apply_ramp: base_cap={base_cap} < 0 for forecast_id={forecast_id}, "
-            f"month_key={month_key}. Data inconsistency — clamping to 0."
-        )
-        base_cap = 0
-
-    total_new_fte = 0
-    total_new_cap = 0.0
     for ramp in ramps:
-        ramp_cap, ramp_max_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
-        total_new_fte += ramp_max_fte
-        total_new_cap += ramp_cap
+        payload_ramp_names.append(ramp.ramp_name)
 
-    final_fte = base_fte + total_new_fte
-    final_cap = round(base_cap + total_new_cap, 2)
+        old_rows = old_by_name.get(ramp.ramp_name, [])
+        old_fte = max((r["employee_count"] for r in old_rows), default=0)
+        old_cap = sum(
+            r["employee_count"] * (r["ramp_percent"] / 100) * target_cph
+            * config["work_hours"] * (1 - config["shrinkage"]) * r["working_days"]
+            for r in old_rows
+        )
+
+        new_cap, new_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
+        agg_delta_fte += new_fte - old_fte
+        agg_delta_cap += new_cap - old_cap
+
+    final_fte = before_fte + agg_delta_fte
+    final_cap = round(before_cap + agg_delta_cap, 2)
 
     # ── Phase 3: single atomic transaction ────────────────────────────────────
-    # All three writes (delete-all, insert-all, update) commit together.
-    # If any operation raises, SQLAlchemy rolls back the entire transaction —
-    # ForecastModel and RampModel are left unchanged.
+    # Only the ramp_names in the payload are deleted and re-inserted.
+    # Ramps NOT in the payload remain in the DB, and their capacity contribution
+    # is preserved in final_fte/final_cap via the per-ramp delta approach above.
 
     now = datetime.utcnow()
     with db_manager.SessionLocal() as session:
         session.query(RampModel).filter(
             RampModel.forecast_id == forecast_id,
-            RampModel.month_key == month_key
+            RampModel.month_key == month_key,
+            RampModel.ramp_name.in_(payload_ramp_names)
         ).delete(synchronize_session=False)
 
         for ramp in ramps:
