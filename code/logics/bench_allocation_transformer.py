@@ -8,7 +8,7 @@ field-level change data for history tracking.
 import logging
 from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from code.logics.core_utils import CoreUtils
 from code.logics.edit_view_utils import (
     get_months_dict,
@@ -102,8 +102,7 @@ class MonthDataResponse(BaseModel):
     fte_avail_change: int = Field(description="Change in FTE available")
     capacity_change: int = Field(description="Change in capacity")
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class ModifiedRecordResponse(BaseModel):
@@ -123,8 +122,7 @@ class ModifiedRecordResponse(BaseModel):
         description="Month-specific data keyed by month label (e.g., 'Jun-25')"
     )
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class SummaryResponse(BaseModel):
@@ -132,8 +130,7 @@ class SummaryResponse(BaseModel):
     total_fte_change: int = Field(ge=0, description="Total absolute FTE changes")
     total_capacity_change: int = Field(ge=0, description="Total absolute capacity changes")
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class PreviewResponse(BaseModel):
@@ -150,8 +147,7 @@ class PreviewResponse(BaseModel):
     summary: SummaryResponse = Field(description="Aggregated summary data")
     message: Optional[str] = Field(default=None, description="Optional status message")
 
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 # ============================================================================
