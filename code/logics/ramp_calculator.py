@@ -219,7 +219,8 @@ def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[
         target_cph: Cases per hour from ForecastModel
 
     Returns:
-        Tuple of (total_ramp_capacity: float, peak_effective_fte: float)
+        Tuple of (total_ramp_capacity: float, peak_fte: int)
+        peak_fte = max raw rampEmployees across all weeks (not scaled by %)
     """
     per_week = [
         w.rampEmployees * (w.rampPercent / 100) * target_cph * config["work_hours"]
@@ -227,8 +228,8 @@ def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[
         for w in weeks
     ]
     total_ramp_capacity = sum(per_week)
-    peak_effective_fte = max((w.rampEmployees * w.rampPercent / 100 for w in weeks), default=0)
-    return total_ramp_capacity, peak_effective_fte
+    peak_fte = max((w.rampEmployees for w in weeks), default=0)
+    return total_ramp_capacity, peak_fte
 
 
 def _compute_old_ramp_contributions(
@@ -262,7 +263,7 @@ def _compute_old_ramp_contributions(
     total_cap = 0.0
 
     for rn, rows in grouped.items():
-        g_fte = max(r["employee_count"] * r["ramp_percent"] / 100 for r in rows)
+        g_fte = max(r["employee_count"] for r in rows)
         g_cap = sum(
             r["employee_count"] * (r["ramp_percent"] / 100) * target_cph * config["work_hours"]
             * (1 - config["shrinkage"]) * r["working_days"]

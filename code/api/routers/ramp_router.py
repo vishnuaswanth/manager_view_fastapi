@@ -93,17 +93,6 @@ def _validate_ramp_request(request: RampPreviewRequest) -> None:
     Raises:
         HTTPException 400: If validation fails
     """
-    # At least one week must have employees > 0
-    if all(w.rampEmployees == 0 for w in request.weeks):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "success": False,
-                "error": "All rampEmployees are zero — no ramp to apply",
-                "recommendation": "At least one week must have rampEmployees > 0"
-            }
-        )
-
     # totalRampEmployees must equal sum of rampEmployees
     computed_total = sum(w.rampEmployees for w in request.weeks)
     if request.totalRampEmployees != computed_total:
@@ -144,15 +133,6 @@ def _validate_bulk_ramp_request(request: BulkRampPreviewRequest) -> None:
 
     # Validate each ramp entry individually
     for ramp in request.ramps:
-        if all(w.rampEmployees == 0 for w in ramp.weeks):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "success": False,
-                    "error": f"Ramp '{ramp.ramp_name}': all rampEmployees are zero",
-                    "recommendation": "At least one week must have rampEmployees > 0"
-                }
-            )
         computed_total = sum(w.rampEmployees for w in ramp.weeks)
         if ramp.totalRampEmployees != computed_total:
             raise HTTPException(
