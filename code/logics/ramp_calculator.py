@@ -448,6 +448,9 @@ def preview_ramp(
     current_gap = round(current_capacity - current_forecast, 2)
     projected_gap = round(projected_capacity - current_forecast, 2)
 
+    capacity_coverage_before = round(current_capacity / current_forecast * 100, 1) if current_forecast else None
+    capacity_coverage_after = round(projected_capacity / current_forecast * 100, 1) if current_forecast else None
+
     return {
         "success": True,
         "forecast_id": forecast_id,
@@ -459,6 +462,17 @@ def preview_ramp(
             "total_ramp_capacity": round(new_cap, 2),
             "max_ramp_employees": new_fte,
             "weeks_count": len(weeks)
+        },
+        "gap_analysis": {
+            "forecast_demand": current_forecast,
+            "capacity_before": current_capacity,
+            "capacity_after": projected_capacity,
+            "capacity_added": round(delta_cap, 2),
+            "gap_before": current_gap,            # capacity - forecast; positive = surplus
+            "gap_after": projected_gap,
+            "gap_change": round(projected_gap - current_gap, 2),
+            "capacity_coverage_before_pct": capacity_coverage_before,
+            "capacity_coverage_after_pct": capacity_coverage_after,
         },
         "current": {
             "forecast": current_forecast,
@@ -494,14 +508,23 @@ def apply_ramp(
     """
     Apply a named ramp: update ForecastModel and persist RampModel rows.
 
-    Uses base + recompute approach:
-        1. Load ALL existing RampModel rows → compute total_old contributions
-        2. base = current_db - total_old  (strips all prior ramp contributions)
-        3. Delete rows for this ramp_name; insert new rows
-        4. Load ALL remaining rows → compute total_new contributions
-        5. final = base + total_new
+    Structured as three phases to guarantee atomicity:
 
-    This correctly handles both new ramps and edits to existing ramps.
+    Phase 1 — reads only (no side effects, safe to retry):
+        Read ForecastModel fields, month config, and existing RampModel rows
+        for this ramp_name.
+
+    Phase 2 — compute in memory (no DB access):
+        delta_fte = new_max_employees - old_max_employees (for this ramp_name)
+        delta_cap = new_capacity    - old_capacity        (for this ramp_name)
+        final_fte = before_fte + delta_fte
+        final_cap = before_cap + delta_cap
+
+    Phase 3 — single atomic transaction:
+        DELETE old RampModel rows for this ramp_name
+        INSERT new RampModel rows
+        UPDATE ForecastModel (fte_avail + capacity)
+        COMMIT  ← all writes land together; any failure rolls back all three
 
     Args:
         forecast_id: ForecastModel primary key
@@ -517,7 +540,8 @@ def apply_ramp(
     db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
     ramp_db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
 
-    # --- Step 1: Read forecast row ---
+    # ── Phase 1: reads — no writes, safe ──────────────────────────────────────
+
     with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
         suffix, month_label = _resolve_month_suffix(row, month_key)
@@ -527,7 +551,6 @@ def apply_ramp(
         case_type = row.Centene_Capacity_Plan_Case_Type or ""
         report_month = row.Month
         report_year = row.Year
-        # Capture for history log (avoid DetachedInstanceError later)
         row_state = row.Centene_Capacity_Plan_State or ""
         row_case_id = str(row.Centene_Capacity_Plan_Call_Type_ID or row.id)
 
@@ -540,36 +563,38 @@ def apply_ramp(
         before_fte = snapshot_before[fte_avail_col]
         before_cap = snapshot_before[capacity_col]
 
-    # --- Step 2: Get config once ---
     config = _get_ramp_month_config(month_label, main_lob, case_type)
 
-    # --- Step 3: Load ALL existing rows to compute base ---
+    # Read only THIS ramp_name's existing rows (other ramps are untouched)
     with ramp_db_manager.SessionLocal() as session:
-        existing_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+        old_rows_data = [
+            {"employee_count": r.employee_count, "working_days": r.working_days}
+            for r in session.query(RampModel).filter(
+                RampModel.forecast_id == forecast_id,
+                RampModel.month_key == month_key,
+                RampModel.ramp_name == ramp_name
+            ).all()
+        ]
 
-    _, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
-        existing_rows_data, config, target_cph
+    # ── Phase 2: compute final values in memory — no DB ───────────────────────
+
+    old_fte = max((r["employee_count"] for r in old_rows_data), default=0)
+    old_cap = sum(
+        r["employee_count"] * target_cph * config["work_hours"]
+        * (1 - config["shrinkage"]) * r["working_days"]
+        for r in old_rows_data
     )
+    new_cap, new_fte = _compute_ramp_totals(weeks, config, target_cph)
 
-    # base = current_db - total_old (strips all prior ramp contributions)
-    base_fte = before_fte - total_old_fte
-    base_cap = before_cap - total_old_cap
+    final_fte = before_fte + (new_fte - old_fte)
+    final_cap = round(before_cap + (new_cap - old_cap), 2)
 
-    if base_fte < 0:
-        logger.warning(
-            f"apply_ramp: base_fte={base_fte} < 0 for forecast_id={forecast_id}, "
-            f"month_key={month_key}. Data inconsistency — clamping to 0."
-        )
-        base_fte = 0
-    if base_cap < 0:
-        logger.warning(
-            f"apply_ramp: base_cap={base_cap} < 0 for forecast_id={forecast_id}, "
-            f"month_key={month_key}. Data inconsistency — clamping to 0."
-        )
-        base_cap = 0
+    # ── Phase 3: single atomic transaction ────────────────────────────────────
+    # All three writes (delete, insert, update) commit together.
+    # If any operation raises, SQLAlchemy rolls back the entire transaction —
+    # ForecastModel and RampModel are left unchanged.
 
-    # --- Step 4: Delete old rows for this ramp_name; insert new rows ---
-    with ramp_db_manager.SessionLocal() as session:
+    with db_manager.SessionLocal() as session:
         session.query(RampModel).filter(
             RampModel.forecast_id == forecast_id,
             RampModel.month_key == month_key,
@@ -589,27 +614,12 @@ def apply_ramp(
                 employee_count=w.rampEmployees,
                 applied_by="system"
             ))
-        session.commit()
 
-    # --- Step 5: Load ALL remaining rows → compute total_new ---
-    with ramp_db_manager.SessionLocal() as session:
-        remaining_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
-
-    _, total_new_fte, total_new_cap = _compute_old_ramp_contributions(
-        remaining_rows_data, config, target_cph
-    )
-
-    # final = base + total_new
-    final_fte = base_fte + total_new_fte
-    final_cap = round(base_cap + total_new_cap, 2)
-
-    # --- Step 6: Write ForecastModel ---
-    with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
         setattr(row, fte_avail_col, final_fte)
         setattr(row, capacity_col, final_cap)
         session.add(row)
-        session.commit()
+        session.commit()  # atomic — raises on failure, rolls back everything above
 
     # --- Step 7: Write history log ---
     months_dict = get_months_dict(report_month, report_year, core_utils)
@@ -802,14 +812,23 @@ def bulk_apply_ramp(
     user_notes: Optional[str],
 ) -> Dict:
     """
-    Apply multiple named ramps using delete-all + insert-all approach.
+    Apply multiple named ramps atomically.
 
-    Algorithm:
-        1. Compute base = current_db - sum(all old ramp contributions)
-        2. Delete ALL existing RampModel rows for (forecast_id, month_key)
-        3. Insert new rows for all submitted ramps
-        4. final = base + sum(all new ramp contributions)
-        5. Write ForecastModel once; write ONE history log for all ramps
+    Structured as three phases to guarantee atomicity:
+
+    Phase 1 — reads only (no side effects):
+        Read ForecastModel fields, month config, and ALL existing RampModel rows.
+
+    Phase 2 — compute in memory (no DB access):
+        base = current_db - sum(all existing ramp contributions)
+        total_new = sum(new ramp contributions from payload)
+        final = base + total_new
+
+    Phase 3 — single atomic transaction:
+        DELETE all existing RampModel rows for (forecast_id, month_key)
+        INSERT new rows for every ramp in the payload
+        UPDATE ForecastModel (fte_avail + capacity)
+        COMMIT  ← all writes land together; any failure rolls back all three
 
     Args:
         forecast_id: ForecastModel primary key
@@ -823,7 +842,8 @@ def bulk_apply_ramp(
     db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
     ramp_db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
 
-    # --- Step 1: Read forecast row ---
+    # ── Phase 1: reads — no writes, safe ──────────────────────────────────────
+
     with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
         suffix, month_label = _resolve_month_suffix(row, month_key)
@@ -833,7 +853,6 @@ def bulk_apply_ramp(
         case_type = row.Centene_Capacity_Plan_Case_Type or ""
         report_month = row.Month
         report_year = row.Year
-        # Capture for history log
         row_state = row.Centene_Capacity_Plan_State or ""
         row_case_id = str(row.Centene_Capacity_Plan_Call_Type_ID or row.id)
 
@@ -846,12 +865,12 @@ def bulk_apply_ramp(
         before_fte = snapshot_before[fte_avail_col]
         before_cap = snapshot_before[capacity_col]
 
-    # --- Step 2: Config once ---
     config = _get_ramp_month_config(month_label, main_lob, case_type)
 
-    # --- Step 3: Load ALL existing rows to compute base ---
     with ramp_db_manager.SessionLocal() as session:
         existing_rows_data = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+
+    # ── Phase 2: compute final values in memory — no DB ───────────────────────
 
     _, total_old_fte, total_old_cap = _compute_old_ramp_contributions(
         existing_rows_data, config, target_cph
@@ -873,9 +892,23 @@ def bulk_apply_ramp(
         )
         base_cap = 0
 
-    # --- Step 4: DELETE ALL rows; INSERT all new rows (single transaction) ---
+    total_new_fte = 0
+    total_new_cap = 0.0
+    for ramp in ramps:
+        ramp_cap, ramp_max_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
+        total_new_fte += ramp_max_fte
+        total_new_cap += ramp_cap
+
+    final_fte = base_fte + total_new_fte
+    final_cap = round(base_cap + total_new_cap, 2)
+
+    # ── Phase 3: single atomic transaction ────────────────────────────────────
+    # All three writes (delete-all, insert-all, update) commit together.
+    # If any operation raises, SQLAlchemy rolls back the entire transaction —
+    # ForecastModel and RampModel are left unchanged.
+
     now = datetime.utcnow()
-    with ramp_db_manager.SessionLocal() as session:
+    with db_manager.SessionLocal() as session:
         session.query(RampModel).filter(
             RampModel.forecast_id == forecast_id,
             RampModel.month_key == month_key
@@ -896,27 +929,12 @@ def bulk_apply_ramp(
                     applied_at=now,
                     applied_by="system"
                 ))
-        session.commit()
 
-    # --- Step 5: Compute total_new directly from payload (same config) ---
-    total_new_fte = 0
-    total_new_cap = 0.0
-    for ramp in ramps:
-        ramp_cap, ramp_max_fte = _compute_ramp_totals(ramp.weeks, config, target_cph)
-        total_new_fte += ramp_max_fte
-        total_new_cap += ramp_cap
-
-    # final = base + total_new
-    final_fte = base_fte + total_new_fte
-    final_cap = round(base_cap + total_new_cap, 2)
-
-    # --- Step 6: Write ForecastModel (single write) ---
-    with db_manager.SessionLocal() as session:
         row = _get_forecast_row(forecast_id, session)
         setattr(row, fte_avail_col, final_fte)
         setattr(row, capacity_col, final_cap)
         session.add(row)
-        session.commit()
+        session.commit()  # atomic — raises on failure, rolls back everything above
 
     # --- Step 7: Write ONE history log for all ramps ---
     months_dict = get_months_dict(report_month, report_year, core_utils)
