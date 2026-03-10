@@ -1125,6 +1125,7 @@ def bulk_apply_ramp(
     # Invalidate caches
     clear_all_caches()
 
+    ramp_names = [r.ramp_name for r in ramps]
     return {
         "success": True,
         "forecast_id": forecast_id,
