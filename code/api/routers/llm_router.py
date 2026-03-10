@@ -509,8 +509,8 @@ def get_llm_forecast_data(
 
             # Parse Main_LOB
             parsed = parse_main_lob(main_lob_val)
-            platform_val = parsed.get("platform", "")
-            market_val = parsed.get("market", "")
+            platform_val = parsed.get("platform") or ""
+            market_val = parsed.get("market") or ""
             locality_val = determine_locality(main_lob_val, case_type_val)
 
             # Build months data

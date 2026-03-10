@@ -10,6 +10,7 @@ Covers:
 """
 
 import pytest
+from unittest.mock import patch
 
 from code.logics.llm_utils import (
     apply_forecast_filters,
@@ -243,6 +244,108 @@ class TestApplyForecastFiltersPlatformLocality:
         result = apply_forecast_filters(SAMPLE_RECORDS, filters)
         assert len(result) == 1
         assert result[0]["Centene_Capacity_Plan_Main_LOB"] == "Facets Medicare Global"
+
+    def test_platform_case_insensitive(self):
+        filters = {"platform": ["amisys"], "market": [], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(SAMPLE_RECORDS, filters)
+        assert all("Amisys" in r["Centene_Capacity_Plan_Main_LOB"] for r in result)
+
+    def test_market_filter_medicaid(self):
+        filters = {"platform": [], "market": ["Medicaid"], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(SAMPLE_RECORDS, filters)
+        assert all("Medicaid" in r["Centene_Capacity_Plan_Main_LOB"] for r in result)
+
+
+# ---------------------------------------------------------------------------
+# NoneType bug regression — platform/market from parse_main_lob can be None
+# ---------------------------------------------------------------------------
+
+class TestNoneTypePlatformMarket:
+    """
+    Regression tests for AttributeError: 'NoneType' object has no attribute 'lower'.
+
+    parse_main_lob returns {"platform": None, "market": None, ...} when the
+    main_lob string is unrecognised. apply_forecast_filters must handle these
+    None values without crashing.
+    """
+
+    @patch("code.logics.llm_utils.parse_main_lob")
+    @patch("code.logics.llm_utils.determine_locality")
+    def test_none_platform_with_platform_filter_no_crash(self, mock_loc, mock_parse):
+        """parse_main_lob returns None platform → record excluded, no AttributeError."""
+        mock_parse.return_value = {"platform": None, "market": None, "locality": None}
+        mock_loc.return_value = "Global"
+
+        records = [_make_record(main_lob="Unknown LOB XYZ")]
+        filters = {"platform": ["Amisys"], "market": [], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(records, filters)
+        assert result == []  # Excluded — no crash
+
+    @patch("code.logics.llm_utils.parse_main_lob")
+    @patch("code.logics.llm_utils.determine_locality")
+    def test_none_market_with_market_filter_no_crash(self, mock_loc, mock_parse):
+        """parse_main_lob returns None market → record excluded, no AttributeError."""
+        mock_parse.return_value = {"platform": "Amisys", "market": None, "locality": None}
+        mock_loc.return_value = "Global"
+
+        records = [_make_record(main_lob="Amisys")]
+        filters = {"platform": [], "market": ["Medicaid"], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(records, filters)
+        assert result == []  # Excluded — no crash
+
+    @patch("code.logics.llm_utils.parse_main_lob")
+    @patch("code.logics.llm_utils.determine_locality")
+    def test_none_platform_no_platform_filter_record_included(self, mock_loc, mock_parse):
+        """
+        When platform filter is empty, platform=None is acceptable —
+        the record should still pass through.
+        """
+        mock_parse.return_value = {"platform": None, "market": None, "locality": None}
+        mock_loc.return_value = "Global"
+
+        records = [_make_record(main_lob="Unknown LOB XYZ")]
+        filters = {"platform": [], "market": [], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(records, filters)
+        assert len(result) == 1  # No filters active → record passes
+
+    @patch("code.logics.llm_utils.parse_main_lob")
+    @patch("code.logics.llm_utils.determine_locality")
+    def test_mixed_none_and_valid_platform_only_valid_included(self, mock_loc, mock_parse):
+        """
+        Dataset with some None-platform records and some valid ones.
+        Only valid-platform records should survive the platform filter.
+        """
+        def parse_side_effect(main_lob):
+            if "Amisys" in main_lob:
+                return {"platform": "Amisys", "market": "Medicaid", "locality": "Domestic"}
+            return {"platform": None, "market": None, "locality": None}
+
+        mock_parse.side_effect = parse_side_effect
+        mock_loc.return_value = "Domestic"
+
+        records = [
+            _make_record(main_lob="Amisys Medicaid Domestic", state="TX"),
+            _make_record(main_lob="Unknown LOB", state="CA"),
+        ]
+        filters = {"platform": ["Amisys"], "market": [], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(records, filters)
+        assert len(result) == 1
+        assert result[0]["Centene_Capacity_Plan_Main_LOB"] == "Amisys Medicaid Domestic"
+
+    @patch("code.logics.llm_utils.parse_main_lob")
+    @patch("code.logics.llm_utils.determine_locality")
+    def test_empty_string_main_lob_in_record_no_crash(self, mock_loc, mock_parse):
+        """
+        Records with empty main_lob string are passed to parse_main_lob;
+        the None result must not crash when a platform filter is applied.
+        """
+        mock_parse.return_value = {"platform": None, "market": None, "locality": None}
+        mock_loc.return_value = "Global"
+
+        records = [_make_record(main_lob="")]
+        filters = {"platform": ["Amisys"], "market": [], "locality": [], "main_lob": [], "state": [], "case_type": [], "forecast_months": []}
+        result = apply_forecast_filters(records, filters)
+        assert result == []  # No crash, record excluded
 
 
 # ---------------------------------------------------------------------------

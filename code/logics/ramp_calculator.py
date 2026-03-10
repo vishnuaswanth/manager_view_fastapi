@@ -5,7 +5,8 @@ Provides preview and apply operations that compute capacity impact from
 per-week employee ramp schedules and persist results to ForecastModel + RampModel.
 
 Capacity formula (per week):
-    capacity = employees × target_cph × work_hours × (1 - shrinkage) × working_days
+    effective_employees = rampEmployees × (rampPercent / 100)
+    capacity = effective_employees × target_cph × work_hours × (1 - shrinkage) × working_days
     Note: occupancy is NOT used in capacity calculations.
 
 Apply approach (base + recompute):
@@ -204,29 +205,30 @@ def _generate_ramp_name() -> str:
     return f"Ramp-{datetime.utcnow().strftime('%Y%m%d')}-{str(uuid.uuid4())[:8]}"
 
 
-def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[float, int]:
+def _compute_ramp_totals(weeks: List, config: Dict, target_cph: float) -> Tuple[float, float]:
     """
-    Compute total capacity and max ramp employees across all weeks.
+    Compute total capacity and peak effective FTE across all weeks.
 
-    Capacity per week = employees × target_cph × work_hours × (1 - shrinkage) × working_days
+    Effective employees per week = rampEmployees × (rampPercent / 100)
+    Capacity per week = effective_employees × target_cph × work_hours × (1 - shrinkage) × working_days
     Note: occupancy is NOT used in this calculation.
 
     Args:
-        weeks: List of RampWeek Pydantic objects (with rampEmployees, workingDays attributes)
+        weeks: List of RampWeek Pydantic objects (with rampEmployees, rampPercent, workingDays)
         config: Month config dict with shrinkage, work_hours keys
         target_cph: Cases per hour from ForecastModel
 
     Returns:
-        Tuple of (total_ramp_capacity: float, max_ramp_employees: int)
+        Tuple of (total_ramp_capacity: float, peak_effective_fte: float)
     """
     per_week = [
-        w.rampEmployees * target_cph * config["work_hours"]
+        w.rampEmployees * (w.rampPercent / 100) * target_cph * config["work_hours"]
         * (1 - config["shrinkage"]) * w.workingDays
         for w in weeks
     ]
     total_ramp_capacity = sum(per_week)
-    max_ramp_employees = max((w.rampEmployees for w in weeks), default=0)
-    return total_ramp_capacity, max_ramp_employees
+    peak_effective_fte = max((w.rampEmployees * w.rampPercent / 100 for w in weeks), default=0)
+    return total_ramp_capacity, peak_effective_fte
 
 
 def _compute_old_ramp_contributions(
@@ -238,7 +240,8 @@ def _compute_old_ramp_contributions(
     Group existing DB rows by ramp_name and compute FTE + capacity contributions.
 
     Uses the same formula as _compute_ramp_totals (no occupancy):
-        capacity = employee_count × target_cph × work_hours × (1 - shrinkage) × working_days
+        effective = employee_count × (ramp_percent / 100)
+        capacity  = effective × target_cph × work_hours × (1 - shrinkage) × working_days
 
     Args:
         rows_data: List of dicts with keys: ramp_name, employee_count, working_days
@@ -259,9 +262,9 @@ def _compute_old_ramp_contributions(
     total_cap = 0.0
 
     for rn, rows in grouped.items():
-        g_fte = max(r["employee_count"] for r in rows)
+        g_fte = max(r["employee_count"] * r["ramp_percent"] / 100 for r in rows)
         g_cap = sum(
-            r["employee_count"] * target_cph * config["work_hours"]
+            r["employee_count"] * (r["ramp_percent"] / 100) * target_cph * config["work_hours"]
             * (1 - config["shrinkage"]) * r["working_days"]
             for r in rows
         )
@@ -289,6 +292,7 @@ def _load_ramp_rows_as_dicts(session, forecast_id: int, month_key: str) -> List[
         {
             "ramp_name": r.ramp_name,
             "employee_count": r.employee_count,
+            "ramp_percent": r.ramp_percent,
             "working_days": r.working_days,
         }
         for r in rows

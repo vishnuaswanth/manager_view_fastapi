@@ -148,8 +148,8 @@ def apply_forecast_filters(records: List[Dict], filters: Dict) -> List[Dict]:
             # Apply platform/market/locality filters only if main_lob filter not provided
             if platform_filter_lower or market_filter_lower or locality_filter_lower:
                 parsed = parse_main_lob(main_lob)
-                platform = parsed.get("platform", "")
-                market = parsed.get("market", "")
+                platform = parsed.get("platform") or ""
+                market = parsed.get("market") or ""
                 locality = determine_locality(main_lob, case_type)
 
                 # Check platform filter
