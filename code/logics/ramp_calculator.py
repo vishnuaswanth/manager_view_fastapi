@@ -295,6 +295,146 @@ def _load_ramp_rows_as_dicts(session, forecast_id: int, month_key: str) -> List[
     ]
 
 
+def _build_record_months_data(
+    months_dict: Dict[str, str],
+    snapshot_before: Dict,
+    snapshot_after: Dict,
+) -> Tuple[Dict, List[str]]:
+    """
+    Build per-month data covering all 6 months in the report period.
+
+    For each metric in each month, stores the new (after) value and the delta
+    (after - before).  A non-zero delta flags that field as changed; the export
+    renderer shows ``new_value (old_value)`` for changed fields and ``new_value``
+    alone for unchanged ones.
+
+    Args:
+        months_dict: {"month1": "Jan-26", "month2": "Feb-26", ...}
+        snapshot_before: 24 METRIC_COLUMNS values before the change
+        snapshot_after:  same 24 columns after the change (only changed cols differ)
+
+    Returns:
+        months_data:     {month_label: {forecast, fte_req, fte_avail, capacity + _change fields}}
+        modified_fields: dot-notation list of fields with non-zero delta, e.g. ["Jan-26.fte_avail"]
+    """
+    months_data: Dict = {}
+    modified_fields: List[str] = []
+
+    for key, month_label in months_dict.items():
+        suffix = key.replace("month", "")
+
+        cols = {
+            "forecast": get_forecast_column_name("forecast", suffix),
+            "fte_req":  get_forecast_column_name("fte_req",  suffix),
+            "fte_avail": get_forecast_column_name("fte_avail", suffix),
+            "capacity":  get_forecast_column_name("capacity",  suffix),
+        }
+
+        month_entry: Dict = {}
+        for field, col in cols.items():
+            new_val = snapshot_after.get(col, 0)
+            delta   = new_val - snapshot_before.get(col, 0)
+            if field == "capacity":
+                new_val = round(new_val, 2)
+                delta   = round(delta, 2)
+            month_entry[field]              = new_val
+            month_entry[f"{field}_change"]  = delta
+            if delta != 0:
+                modified_fields.append(f"{month_label}.{field}")
+
+        months_data[month_label] = month_entry
+
+    return months_data, modified_fields
+
+
+def _compute_report_totals(
+    report_month: str,
+    report_year: int,
+    months_dict: Dict[str, str],
+    changed_forecast_id: int,
+    snapshot_before: Dict,
+    snapshot_after: Dict,
+) -> Dict:
+    """
+    Compute aggregated totals across ALL forecast rows for the report period.
+
+    For the changed row, uses snapshot_before/after for accurate before/after numbers.
+    For all other rows the values are the same before and after (they were not touched).
+
+    Returns:
+        summary_data compatible with create_complete_history_log():
+        {
+            "report_month": str,
+            "report_year": int,
+            "months": ["Jan-26", ...],
+            "totals": {
+                "Jan-26": {
+                    "total_forecast":      {"old": int, "new": int},
+                    "total_fte_required":  {"old": int, "new": int},
+                    "total_fte_available": {"old": int, "new": int},
+                    "total_capacity":      {"old": float, "new": float},
+                },
+                ...
+            }
+        }
+    """
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=10000, skip=0, select_columns=None)
+
+    with db_manager.SessionLocal() as session:
+        all_rows = session.query(ForecastModel).filter(
+            ForecastModel.Month == report_month,
+            ForecastModel.Year == report_year
+        ).all()
+
+        totals: Dict = {}
+        for key, month_label in months_dict.items():
+            suffix = key.replace("month", "")
+
+            forecast_col  = get_forecast_column_name("forecast",  suffix)
+            fte_req_col   = get_forecast_column_name("fte_req",   suffix)
+            fte_avail_col = get_forecast_column_name("fte_avail", suffix)
+            capacity_col  = get_forecast_column_name("capacity",  suffix)
+
+            tf_b = tf_a = 0
+            tr_b = tr_a = 0
+            ta_b = ta_a = 0
+            tc_b = tc_a = 0.0
+
+            for row in all_rows:
+                if row.id == changed_forecast_id:
+                    tf_b += snapshot_before.get(forecast_col,  0)
+                    tr_b += snapshot_before.get(fte_req_col,   0)
+                    ta_b += snapshot_before.get(fte_avail_col, 0)
+                    tc_b += snapshot_before.get(capacity_col,  0)
+                    tf_a += snapshot_after.get(forecast_col,  0)
+                    tr_a += snapshot_after.get(fte_req_col,   0)
+                    ta_a += snapshot_after.get(fte_avail_col, 0)
+                    tc_a += snapshot_after.get(capacity_col,  0)
+                else:
+                    v_f = getattr(row, forecast_col,  None) or 0
+                    v_r = getattr(row, fte_req_col,   None) or 0
+                    v_a = getattr(row, fte_avail_col, None) or 0
+                    v_c = getattr(row, capacity_col,  None) or 0
+                    tf_b += v_f; tf_a += v_f
+                    tr_b += v_r; tr_a += v_r
+                    ta_b += v_a; ta_a += v_a
+                    tc_b += v_c; tc_a += v_c
+
+            totals[month_label] = {
+                "total_forecast":      {"old": tf_b,              "new": tf_a},
+                "total_fte_required":  {"old": tr_b,              "new": tr_a},
+                "total_fte_available": {"old": ta_b,              "new": ta_a},
+                "total_capacity":      {"old": round(tc_b, 2),    "new": round(tc_a, 2)},
+            }
+
+    return {
+        "report_month": report_month,
+        "report_year":  report_year,
+        "months":       list(months_dict.values()),
+        "totals":       totals,
+    }
+
+
 # ============================================================================
 # PUBLIC API
 # ============================================================================
@@ -624,39 +764,32 @@ def apply_ramp(
     # --- Step 7: Write history log ---
     months_dict = get_months_dict(report_month, report_year, core_utils)
 
-    month_data_for_record = {
-        "fte_avail": final_fte,
-        "fte_avail_change": final_fte - before_fte,
-        "capacity": final_cap,
-        "capacity_change": round(final_cap - before_cap, 2),
-        "forecast": snapshot_before.get(forecast_col, 0),
-        "forecast_change": 0,
-        "fte_req": snapshot_before.get(fte_req_col, 0),
-        "fte_req_change": 0
-    }
+    # Build snapshot_after (only the target month's two columns differ)
+    snapshot_after = dict(snapshot_before)
+    snapshot_after[fte_avail_col] = final_fte
+    snapshot_after[capacity_col]  = final_cap
+
+    months_data, modified_fields = _build_record_months_data(
+        months_dict, snapshot_before, snapshot_after
+    )
 
     record = {
-        "main_lob": main_lob,
-        "state": row_state,
-        "case_type": case_type,
-        "case_id": row_case_id,
-        "ramp_name": ramp_name,
-        "modified_fields": [f"{month_label}.fte_avail", f"{month_label}.capacity"],
-        month_label: month_data_for_record
+        "main_lob":        main_lob,
+        "state":           row_state,
+        "case_type":       case_type,
+        "case_id":         row_case_id,
+        "modified_fields": modified_fields,
+        "months":          months_data,
     }
 
-    summary_data = {
-        "forecast_id": forecast_id,
-        "month_key": month_key,
-        "month_label": month_label,
-        "ramp_name": ramp_name,
-        "fte_avail_before": before_fte,
-        "fte_avail_after": final_fte,
-        "capacity_before": round(before_cap, 2),
-        "capacity_after": final_cap,
-        "total_ramp_fte_delta": final_fte - before_fte,
-        "total_ramp_cap_delta": round(final_cap - before_cap, 2),
-    }
+    summary_data = _compute_report_totals(
+        report_month=report_month,
+        report_year=report_year,
+        months_dict=months_dict,
+        changed_forecast_id=forecast_id,
+        snapshot_before=snapshot_before,
+        snapshot_after=snapshot_after,
+    )
 
     try:
         history_log_id = create_complete_history_log(
@@ -725,9 +858,12 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
         fte_avail_col = get_forecast_column_name("fte_avail", suffix)
         capacity_col = get_forecast_column_name("capacity", suffix)
         forecast_col = get_forecast_column_name("forecast", suffix)
+        fte_req_col = get_forecast_column_name("fte_req", suffix)
 
         current_fte = getattr(row, fte_avail_col) or 0
         current_cap = getattr(row, capacity_col) or 0
+        current_forecast = getattr(row, forecast_col) or 0
+        current_fte_req = getattr(row, fte_req_col) or 0
 
     # --- Config once (single call for all contributions) ---
     config = _get_ramp_month_config(month_label, main_lob, case_type)
@@ -795,12 +931,17 @@ def bulk_preview_ramp(forecast_id: int, month_key: str, ramps: List) -> Dict:
             "capacity": round(delta_cap, 2),
         },
         "aggregated": {
+            "forecast": round(current_forecast, 2),
+            "fte_required": current_fte_req,
             "fte_available_before": current_fte,
             "fte_available_after": projected_fte,
             "fte_available_delta": delta_fte,
             "capacity_before": round(current_cap, 2),
             "capacity_after": projected_cap,
             "capacity_delta": round(delta_cap, 2),
+            "gap_before": round(current_cap - current_forecast, 2),
+            "gap_after": round(projected_cap - current_forecast, 2),
+            "gap_delta": round(projected_cap - current_cap, 2),
         }
     }
 
@@ -938,41 +1079,33 @@ def bulk_apply_ramp(
 
     # --- Step 7: Write ONE history log for all ramps ---
     months_dict = get_months_dict(report_month, report_year, core_utils)
-    ramp_names = [r.ramp_name for r in ramps]
 
-    month_data_for_record = {
-        "fte_avail": final_fte,
-        "fte_avail_change": final_fte - before_fte,
-        "capacity": final_cap,
-        "capacity_change": round(final_cap - before_cap, 2),
-        "forecast": snapshot_before.get(forecast_col, 0),
-        "forecast_change": 0,
-        "fte_req": snapshot_before.get(fte_req_col, 0),
-        "fte_req_change": 0
-    }
+    # Build snapshot_after (only the target month's two columns differ)
+    snapshot_after = dict(snapshot_before)
+    snapshot_after[fte_avail_col] = final_fte
+    snapshot_after[capacity_col]  = final_cap
+
+    months_data, modified_fields = _build_record_months_data(
+        months_dict, snapshot_before, snapshot_after
+    )
 
     record = {
-        "main_lob": main_lob,
-        "state": row_state,
-        "case_type": case_type,
-        "case_id": row_case_id,
-        "ramp_names": ramp_names,
-        "modified_fields": [f"{month_label}.fte_avail", f"{month_label}.capacity"],
-        month_label: month_data_for_record
+        "main_lob":        main_lob,
+        "state":           row_state,
+        "case_type":       case_type,
+        "case_id":         row_case_id,
+        "modified_fields": modified_fields,
+        "months":          months_data,
     }
 
-    summary_data = {
-        "forecast_id": forecast_id,
-        "month_key": month_key,
-        "month_label": month_label,
-        "ramp_names": ramp_names,
-        "fte_avail_before": before_fte,
-        "fte_avail_after": final_fte,
-        "capacity_before": round(before_cap, 2),
-        "capacity_after": final_cap,
-        "total_ramp_fte_delta": final_fte - before_fte,
-        "total_ramp_cap_delta": round(final_cap - before_cap, 2),
-    }
+    summary_data = _compute_report_totals(
+        report_month=report_month,
+        report_year=report_year,
+        months_dict=months_dict,
+        changed_forecast_id=forecast_id,
+        snapshot_before=snapshot_before,
+        snapshot_after=snapshot_after,
+    )
 
     try:
         history_log_id = create_complete_history_log(
