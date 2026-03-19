@@ -350,8 +350,20 @@ def calculate_cph_preview(
                     # Calculate FTE Required using utility function
                     new_fte_req = calculate_fte_required(forecast, config, new_cph)
 
-                    # Calculate Capacity using utility function
-                    new_capacity = calculate_capacity(fte_avail, config, new_cph)
+                    # Split base FTE from ramp FTE for accurate capacity calculation
+                    # (lazy import to avoid circular dependency with ramp_calculator)
+                    from code.logics.ramp_calculator import (
+                        get_ramp_contribution_for_month, _month_label_to_key
+                    )
+                    ramp_month_key = _month_label_to_key(month_label)
+                    ramp_fte, new_ramp_capacity = get_ramp_contribution_for_month(
+                        forecast_id=forecast_row.id,
+                        month_key=ramp_month_key,
+                        target_cph=new_cph,
+                        config=config,
+                    )
+                    base_fte = (fte_avail or 0) - ramp_fte
+                    new_capacity = calculate_capacity(base_fte, config, new_cph) + new_ramp_capacity
 
                     # Calculate changes
                     fte_req_change = new_fte_req - old_fte_req
@@ -482,6 +494,9 @@ def update_forecast_from_cph_changes(
             )
         return month_config_cache[work_type]
 
+    # Fetch month label mapping once (needed for ramp-aware capacity split)
+    months_dict = get_months_dict(month, year, core_utils)
+
     with db_manager.SessionLocal() as session:
         for cph_record in actual_changes:
             # Find all forecast records matching LOB/CaseType
@@ -531,8 +546,24 @@ def update_forecast_from_cph_changes(
                     # Calculate FTE Required using utility function
                     new_fte_req = calculate_fte_required(forecast, config, new_cph)
 
-                    # Calculate Capacity using utility function
-                    new_capacity = calculate_capacity(fte_avail, config, new_cph)
+                    # Split base FTE from ramp FTE for accurate capacity calculation
+                    # (lazy import to avoid circular dependency with ramp_calculator)
+                    from code.logics.ramp_calculator import (
+                        get_ramp_contribution_for_month, _month_label_to_key
+                    )
+                    month_label = months_dict.get(f'month{suffix}')
+                    month_key = _month_label_to_key(month_label) if month_label else None
+                    if month_key:
+                        ramp_fte, new_ramp_capacity = get_ramp_contribution_for_month(
+                            forecast_id=forecast_row.id,
+                            month_key=month_key,
+                            target_cph=new_cph,
+                            config=config,
+                        )
+                        base_fte = (fte_avail or 0) - ramp_fte
+                        new_capacity = calculate_capacity(base_fte, config, new_cph) + new_ramp_capacity
+                    else:
+                        new_capacity = calculate_capacity(fte_avail, config, new_cph)
 
                     # Update using utility function for column name lookup
                     setattr(

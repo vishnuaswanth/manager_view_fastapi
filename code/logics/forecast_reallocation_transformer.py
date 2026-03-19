@@ -7,6 +7,7 @@ Forecast Reallocation feature (Edit View Sections 10-13).
 
 import logging
 from typing import Dict, List, Optional, Tuple, Union
+from fastapi import HTTPException
 from code.logics.db import ForecastModel
 from code.logics.core_utils import CoreUtils
 from code.logics.edit_view_utils import (
@@ -14,6 +15,7 @@ from code.logics.edit_view_utils import (
     get_forecast_column_name
 )
 from code.logics.capacity_calculations import calculate_fte_required, calculate_capacity
+from code.logics.ramp_calculator import get_ramp_contribution_for_month, _month_label_to_key
 from code.logics.cph_update_transformer import (
     get_month_config_for_forecast,
     _get_work_type_from_main_lob
@@ -315,6 +317,37 @@ def calculate_reallocation_preview(
                         f"reported={input_fte_change}, calculated={calc_change}"
                     )
 
+            # Ramp protection: validate FTE reduction doesn't steal ramp headcount
+            ramp_month_key = _month_label_to_key(month_label)
+            ramp_month_idx = next(k for k, v in months_dict.items() if v == month_label)
+            ramp_fte, _ = get_ramp_contribution_for_month(
+                forecast_id=db_rec.id,
+                month_key=ramp_month_key,
+                target_cph=old_data['target_cph'],
+                config=month_config[ramp_month_idx],
+            )
+            if ramp_fte > 0:
+                base_fte_before = old_data['months'][month_label]['fte_avail'] - ramp_fte
+                reduction = old_data['months'][month_label]['fte_avail'] - new_fte_avail
+                if reduction > base_fte_before:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "success": False,
+                            "error": (
+                                f"Cannot reduce FTE_Avail for {month_label} by {reduction}: only "
+                                f"{base_fte_before} base (non-ramp) FTEs are available for reduction. "
+                                "Please use the ramp edit feature to modify ramp headcount."
+                            ),
+                            "recommendation": (
+                                f"For {month_label}: old_fte_avail={old_data['months'][month_label]['fte_avail']}, "
+                                f"ramp_fte={ramp_fte}, base_fte={base_fte_before}. "
+                                f"Maximum allowed reduction is {base_fte_before}; "
+                                f"minimum new_fte_avail is {ramp_fte}."
+                            )
+                        }
+                    )
+
             new_data['months'][month_label]['fte_avail'] = new_fte_avail
 
         # Step 5: If target_cph changed, recalculate fte_required for all 6 months
@@ -345,8 +378,17 @@ def calculate_reallocation_preview(
                 f"shrinkage={config.get('shrinkage')}"
             )
 
-            # Calculate
-            new_capacity = int(calculate_capacity(fte_avail, config, target_cph))
+            # Split base FTE from ramp FTE for accurate capacity calculation
+            ramp_month_key = _month_label_to_key(month_label)
+            ramp_fte, ramp_capacity = get_ramp_contribution_for_month(
+                forecast_id=db_rec.id,
+                month_key=ramp_month_key,
+                target_cph=target_cph,
+                config=config,
+            )
+            base_fte = (fte_avail or 0) - ramp_fte
+            base_capacity = calculate_capacity(base_fte, config, target_cph)
+            new_capacity = int(base_capacity + ramp_capacity)
             old_capacity = old_data['months'][month_label]['capacity']
 
             # Log outputs

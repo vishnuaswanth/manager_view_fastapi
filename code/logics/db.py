@@ -797,20 +797,19 @@ class RampModel(SQLModel, table=True):
     __tablename__ = "ramp_model"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    forecast_id: int = Field(index=True)
-    month_key: str = Field(index=True)        # "YYYY-MM"
-    ramp_name: str = Field(default="Default", index=True)  # groups weeks into named ramps
-    week_label: str                            # "Jan-1-2026"
-    start_date: str                            # "2026-01-01"
-    end_date: str                              # "2026-01-04"
+    forecast_id: int
+    month_key: str = Field(sa_column=Column(String(7), nullable=False))    # "YYYY-MM"
+    ramp_name: str = Field(sa_column=Column(String(100), nullable=False, server_default="Default"))  # groups weeks into named ramps
+    week_label: str = Field(sa_column=Column(String(20), nullable=False))  # "Jan-1-2026"
+    start_date: str = Field(sa_column=Column(String(10), nullable=False))  # "2026-01-01"
+    end_date: str = Field(sa_column=Column(String(10), nullable=False))    # "2026-01-04"
     working_days: int
     ramp_percent: float
     employee_count: int
     applied_at: datetime = Field(default_factory=datetime.utcnow)
-    applied_by: str = Field(default="system")
+    applied_by: str = Field(sa_column=Column(String(100), nullable=False, server_default="system"))
 
     __table_args__ = (
-        Index('idx_ramp_forecast_month', 'forecast_id', 'month_key'),
         Index('idx_ramp_forecast_month_name', 'forecast_id', 'month_key', 'ramp_name'),
     )
 

@@ -71,6 +71,20 @@ def _parse_month_key_to_label(month_key: str) -> str:
     return f"{cal_month_abbr[dt.month]}-{str(dt.year)[-2:]}"
 
 
+def _month_label_to_key(month_label: str) -> str:
+    """
+    Convert abbreviated label to "YYYY-MM" key.
+
+    Args:
+        month_label: Abbreviated label (e.g., "Jan-26")
+
+    Returns:
+        Date string in "YYYY-MM" format (e.g., "2026-01")
+    """
+    dt = datetime.strptime(month_label, "%b-%y")
+    return dt.strftime("%Y-%m")
+
+
 def _get_forecast_row(forecast_id: int, session) -> ForecastModel:
     """
     Fetch ForecastModel by primary key.
@@ -396,6 +410,52 @@ def _compute_report_totals(
         "months":       list(months_dict.values()),
         "totals":       totals,
     }
+
+
+def get_ramp_contribution_for_month(
+    forecast_id: int,
+    month_key: str,
+    target_cph: float,
+    config: dict,
+) -> Tuple[int, float]:
+    """
+    Get the total ramp FTE floor and ramp capacity for a (forecast_id, month_key) pair.
+
+    Used by FTE edit and CPH update transformers to split base and ramp contributions
+    so that edits to base FTEs/CPH do not inadvertently affect ramp capacity.
+
+    Args:
+        forecast_id: ForecastModel primary key
+        month_key: Target month in "YYYY-MM" format
+        target_cph: Cases per hour (used in capacity formula)
+        config: Month config dict with work_hours and shrinkage keys
+
+    Returns:
+        Tuple of (ramp_fte: int, ramp_capacity: float)
+        - ramp_fte: sum of max(employee_count) per distinct ramp_name group
+        - ramp_capacity: sum of per-row capacity contributions
+        Returns (0, 0.0) when no ramp rows exist.
+    """
+    db_manager = core_utils.get_db_manager(RampModel, limit=10000, skip=0, select_columns=None)
+    with db_manager.SessionLocal() as session:
+        rows = session.query(RampModel).filter(
+            RampModel.forecast_id == forecast_id,
+            RampModel.month_key == month_key
+        ).all()
+        if not rows:
+            return 0, 0.0
+        # ramp_fte = sum of max employee_count per ramp_name
+        by_name: Dict[str, list] = defaultdict(list)
+        for r in rows:
+            by_name[r.ramp_name].append(r.employee_count)
+        ramp_fte = sum(max(counts) for counts in by_name.values())
+        # ramp_capacity = sum over all rows
+        ramp_capacity = sum(
+            r.employee_count * (r.ramp_percent / 100) * target_cph
+            * config["work_hours"] * (1 - config["shrinkage"]) * r.working_days
+            for r in rows
+        )
+    return ramp_fte, ramp_capacity
 
 
 # ============================================================================
