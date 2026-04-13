@@ -33,7 +33,8 @@ from code.logics.export_utils import (
     update_forecast_data,
     get_forecast_months_list,
     get_all_model_dataframes_dict,
-    get_calculations_data
+    get_calculations_data,
+    get_forecast_demand_from_db,
 )
 from code.logics.summary_utils import update_summary_data
 from code.logics.manager_view import parse_main_lob
@@ -1675,397 +1676,271 @@ def process_files(data_month: str, data_year: int, forecast_file_uploaded_by: st
 
         month_headers = get_forecast_months_list(data_month, data_year, forecast_filename)
         calculations = Calculations(data_month=data_month, data_year=data_year)
-        initialize_output_excel(month_headers)
-        output_dfs = []
-        file_types = get_all_model_dataframes_dict(data_month, data_year)
+        # Read demand directly from pre-populated ForecastModel (Client Forecast already there from upload)
+        consolidated_df = get_forecast_demand_from_db(data_month, data_year)
+        if consolidated_df.empty:
+            raise ValueError(
+                f"No forecast demand found in ForecastModel for {data_month} {data_year}. "
+                "Ensure forecast file was uploaded and demand pre-populated successfully."
+            )
 
-        for file_type, directory in file_types.items():
-            for file_name, df in directory.items():
-                logger.info(f"Processing {file_type} file: {file_name}")
-                client_names, states, work_types = [], [], []
-                # logger.debug(f"Column values: ")
-                # for col in df.columns:
-                #     logger.debug(f"column value ---- {col}")
-                if file_type == 'medicare_medicaid_mmp':
-                    try:
-                        work_types = get_columns_between_column_names(df,0,'Mo St', 'Year')
-                        logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}, top 5 worktypes: {work_types[:5]}")
-                        states = list(set(s for s in df[('State', 'State')].dropna() if s != 0 and isinstance(s, str)))
-                        logging.info(f"Extracted states: {states}, length: {len(states)}")
-                        if not work_types or not states:
-                            logging.warning(f"No valid work types or states for {file_name}. Skipping.")
-                            continue
-                        total_rows = len(states) * len(work_types)
-                        states_expanded = [s for s in states for _ in work_types]
-                        work_types_expanded = work_types * len(states)
-                        client_names = [file_name] * total_rows
-                        logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-                    except Exception as e:
-                        logging.error(f"Error reading MMP file {file_name}: {e}")
-                        continue
+        logging.info(f"Loaded {len(consolidated_df)} demand rows from ForecastModel for {data_month} {data_year}")
 
-                elif file_type == 'medicare_medicaid_nonmmp':
-                    try:
-                        df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
+        # Compute FTE Required (Client Forecast and Target CPH already in consolidated_df from upload pre-population)
+        for month in month_headers:
+            consolidated_df[('FTE Required', month)] = consolidated_df.apply(
+                lambda row, m=month: get_fte_required(row, m, calculations), axis=1
+            )
+            consolidated_df[('FTE Required', month)] = consolidated_df[('FTE Required', month)].apply(
+                lambda x: 0.5 if 0 < x < 0.5 else x
+            )
 
-                        work_types = get_nonmmp_columns(df)
-                        logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-                        states = list(set(df[('', '', 'State')].dropna()))
-                        logging.info(f"Extracted states: {states}, length: {len(states)}")
-                        total_rows = len(states) * len(work_types)
-                        states_expanded = [s for s in states for _ in work_types]
-                        work_types_expanded = work_types * len(states)
-                        client_names = [file_name] * total_rows
-                        logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-                    except Exception as e:
-                        logging.error(f"Error reading non-MMP file {file_name}: {e}")
-                        continue
+        # Initialize FTE Avail columns (populated by allocator)
+        for month in month_headers:
+            consolidated_df[('FTE Avail', month)] = 0
 
-                elif file_type == 'medicare_medicaid_summary' and 'mmp' not in file_name.lower():
-                    try:
-                        if df.empty:
-                            logging.warning(f"Empty DataFrame for {file_name}. Skipping.")
-                            continue
-                        logging.info(f"DataFrame shape for {file_name}: {df.shape}")
-                        df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
-                        # df.columns = df.columns.sort_values()
-                        first_col = file_name.split("-summary")[0]
-                        logging.info(f"Summary file columns: {df.columns.tolist()}")
-                        work_type_col = None
-                        for col in df.columns:
-                            if col[2].lower() in ['work type', 'worktype', 'case type']:
-                                work_type_col = col
-                                break
-                        if work_type_col:
-                            try:
-                                work_type_values = list(df[work_type_col].dropna())
-                                logging.info(f"Work Type column values: {work_type_values}")
-                            except Exception as e:
-                                logging.warning(f"Failed to log Work Type values for {file_name}: {e}")
-                                work_type_values = []
-                            work_types = [str(wkt) for wkt in df[work_type_col].fillna('') if str(wkt).lower() != "total" and str(wkt).strip()]
-                        else:
-                            logging.warning(f"No 'Work Type' column found in {file_name}. Available columns: {df.columns.tolist()}")
-                            continue
-                        logging.info(f"Extracted work_types: {work_types}, length: {len(work_types)}")
-                        states = ["N/A"] * len(work_types)
-                        client_names = [first_col] * len(work_types)
-                        total_rows = len(work_types)
-                        states_expanded = states
-                        work_types_expanded = work_types
-                        logging.info(f"Expected rows: {total_rows}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}, client_names: {len(client_names)}")
-                    except Exception as e:
-                        logging.error(f"Error reading summary file {file_name}: {e}")
-                        continue
+        consolidated_df = consolidated_df.fillna(0).infer_objects(copy=False)
+        consolidated_df[consolidated_df.select_dtypes(include=['number']).columns] = (
+            consolidated_df.select_dtypes(include=['number']).round().astype(int)
+        )
+        logging.info(f"Consolidated DataFrame shape: {consolidated_df.shape}")
 
-                if not work_types_expanded:
-                    logging.warning(f"No valid work types found for {file_name}. Skipping.")
-                    continue
+        # Debug: Show sample demand data
+        logging.info("=== DEMAND DATA SAMPLE ===")
+        logging.info(f"Unique platforms in demand: {consolidated_df[('Centene Capacity plan', 'Main LOB')].unique()[:10]}")
+        logging.info(f"Unique states in demand: {consolidated_df[('Centene Capacity plan', 'State')].unique()[:10]}")
+        logging.info(f"Unique worktypes in demand (first 10): {consolidated_df[('Centene Capacity plan', 'Case type')].unique()[:10]}")
 
-                # Initialize output_df with correct number of rows
-                column_template = pd.read_excel(output_file, header=[0, 1]).columns
-                output_df = pd.DataFrame(index=range(total_rows), columns=column_template)
-                try:
-                    output_df[('Centene Capacity plan', 'Main LOB')] = client_names
-                    output_df[('Centene Capacity plan', 'State')] = states_expanded
-                    output_df[('Centene Capacity plan', 'Case type')] = work_types_expanded
-                    output_df[('Centene Capacity plan', 'temp_Case type')] = output_df[('Centene Capacity plan', 'Case type')].apply(get_temp_casetype)
-                    output_df[('Centene Capacity plan', 'Call Type ID')] = output_df[('Centene Capacity plan', 'Main LOB')].astype(str)+ " " + output_df[('Centene Capacity plan', 'temp_Case type')].astype(str)
-                    output_df.drop(columns=[('Centene Capacity plan', 'temp_Case type')], inplace=True)
-                except ValueError as e:
-                    logging.error(f"Length mismatch in {file_name}: {e}")
-                    logging.info(f"client_names: {len(client_names)}, states: {len(states_expanded)}, work_types: {len(work_types_expanded)}")
-                    continue
-                for month in month_headers:
-                    if file_type == 'medicare_medicaid_mmp':
-                        output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_mmp', df), axis=1)
-                    elif file_type == 'medicare_medicaid_nonmmp':
-                        output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_nonmmp', df), axis=1)
-                    elif file_type == 'medicare_medicaid_summary':
-                        output_df[('Client Forecast', month)] = output_df.apply(lambda row: get_value(row, month, 'medicare_medicaid_summary', df), axis=1)
+        # Initialize ResourceAllocator with complete demand data
+        logging.info("=== INITIALIZING RESOURCE ALLOCATOR ===")
+        allocator = ResourceAllocator(vendor_df, consolidated_df, month_headers)
 
-                # Clean forecast data: Replace NaN with 0 BEFORE calculations
-                # This ensures FTE Required and Capacity calculations work correctly
-                for month in month_headers:
-                    output_df[('Client Forecast', month)] = output_df[('Client Forecast', month)].fillna(0)
+        # Apply allocation row by row
+        logging.info("Starting resource allocation...")
+        allocation_start = datetime.now()
+        for idx, row in consolidated_df.iterrows():
+            platform = row[('Centene Capacity plan', 'Main LOB')]
+            state = row[('Centene Capacity plan', 'State')]
+            worktype = row[('Centene Capacity plan', 'Case type')]
 
-                # Get Target CPH and clean any NaN values
-                output_df[('Centene Capacity plan', 'Target CPH')] = output_df.apply(calculations.get_target_cph, axis=1)
-                output_df[('Centene Capacity plan', 'Target CPH')] = output_df[('Centene Capacity plan', 'Target CPH')].fillna(0)
-
-                # Calculate FTE Required (now using clean forecast and target_cph data)
-                for month in month_headers:
-                    output_df[('FTE Required', month)] = output_df.apply(lambda row: get_fte_required(row, month, calculations), axis=1)
-                    output_df[('FTE Required', month)] = output_df[('FTE Required', month)].apply(lambda x: 0.5 if 0 < x < 0.5 else x)
-                output_df = output_df.fillna(0).infer_objects(copy=False)
-                output_df[output_df.select_dtypes(include=['number']).columns] = output_df.select_dtypes(include=['number']).round().astype(int)
-
-                # Initialize FTE Avail columns (will be populated after consolidation)
-                for month in month_headers:
-                    output_df[('FTE Avail', month)] = 0
-
-                output_dfs.append(output_df)
-
-        if output_dfs:
-            logging.info(f"Collected {len(output_dfs)} file outputs, consolidating...")
-            consolidated_df = pd.concat(output_dfs, ignore_index=True)
-            logging.info(f"Consolidated DataFrame shape: {consolidated_df.shape}")
-
-            # Debug: Show sample demand data
-            logging.info("=== DEMAND DATA SAMPLE ===")
-            logging.info(f"Unique platforms in demand: {consolidated_df[('Centene Capacity plan', 'Main LOB')].unique()[:10]}")
-            logging.info(f"Unique states in demand: {consolidated_df[('Centene Capacity plan', 'State')].unique()[:10]}")
-            logging.info(f"Unique worktypes in demand (first 10): {consolidated_df[('Centene Capacity plan', 'Case type')].unique()[:10]}")
-
-            # Initialize ResourceAllocator with complete demand data
-            logging.info("=== INITIALIZING RESOURCE ALLOCATOR ===")
-            allocator = ResourceAllocator(vendor_df, consolidated_df, month_headers)
-
-            # Apply allocation row by row
-            logging.info("Starting resource allocation...")
-            allocation_start = datetime.now()
-            for idx, row in consolidated_df.iterrows():
-                platform = row[('Centene Capacity plan', 'Main LOB')]
-                state = row[('Centene Capacity plan', 'State')]
-                worktype = row[('Centene Capacity plan', 'Case type')]
-
-                for month in month_headers:
-                    fte_required = row[('FTE Required', month)]
-                    allocated, _ = allocator.allocate(platform, state, month, worktype, fte_required)
-                    consolidated_df.at[idx, ('FTE Avail', month)] = allocated
-
-            allocation_end = datetime.now()
-            logging.info(f"Allocation completed in {allocation_end - allocation_start}")
-
-            # Export buckets after allocation for debugging (Excel files)
-            logging.info("Exporting post-allocation bucket state...")
-            allocator.export_buckets_after_allocation()
-
-            # Export roster allotment report (Excel file)
-            logging.info("Exporting roster allotment report...")
-            allocator.export_roster_allotment_report()
-
-            # Save allocation reports to database
-            logging.info("Saving allocation reports to database...")
-            try:
-                from code.logics.allocation_reports import (
-                    AllocationReportManager,
-                    ReportType
-                )
-
-                report_manager = AllocationReportManager(core_utils)
-
-                # Generate and save bucket summary report (with details)
-                summary_df, details_df = allocator.generate_buckets_summary()
-                # Combine summary and details into single report for storage
-                # Add a 'Type' column to distinguish summary from details
-                summary_df['ReportSection'] = 'Summary'
-                details_df['ReportSection'] = 'Details'
-                bucket_summary_combined = pd.concat([summary_df, details_df], ignore_index=True)
-
-                report_manager.save_report(
-                    df=bucket_summary_combined,
-                    report_type=ReportType.BUCKET_SUMMARY,
-                    execution_id=execution_id,
-                    month=data_month,
-                    year=data_year,
-                    created_by=forecast_file_uploaded_by,
-                    updated_by=forecast_file_uploaded_by
-                )
-
-                # Generate and save buckets after allocation report
-                buckets_after_df = allocator.generate_buckets_after_allocation()
-                report_manager.save_report(
-                    df=buckets_after_df,
-                    report_type=ReportType.BUCKET_AFTER_ALLOCATION,
-                    execution_id=execution_id,
-                    month=data_month,
-                    year=data_year,
-                    created_by=forecast_file_uploaded_by,
-                    updated_by=forecast_file_uploaded_by
-                )
-
-                # Generate and save roster allotment report
-                roster_allotment_df = allocator.generate_roster_allotment()
-                report_manager.save_report(
-                    df=roster_allotment_df,
-                    report_type=ReportType.ROSTER_ALLOTMENT,
-                    execution_id=execution_id,
-                    month=data_month,
-                    year=data_year,
-                    created_by=forecast_file_uploaded_by,
-                    updated_by=forecast_file_uploaded_by
-                )
-
-                logging.info("✓ All allocation reports saved successfully")
-
-                # Populate FTE allocation mapping table for LLM queries
-                try:
-                    from code.logics.fte_allocation_mapping import populate_fte_mapping_from_primary
-                    fte_mapping_count = populate_fte_mapping_from_primary(
-                        execution_id=execution_id,
-                        month=data_month,
-                        year=data_year,
-                        vendor_allocations=allocator.vendor_allocations,
-                        vendor_df=allocator.vendor_df_original,
-                        month_headers=month_headers,
-                        worktype_vocab=allocator.worktype_vocab,
-                        core_utils=core_utils
-                    )
-                    logging.info(f"✓ Populated {fte_mapping_count} FTE allocation mappings (primary)")
-                except Exception as e:
-                    logging.warning(f"Failed to populate FTE allocation mappings: {e}")
-
-                # Create allocation validity record
-                logging.info("Creating allocation validity record...")
-                validity_result = create_validity_record(
-                    month=data_month,
-                    year=data_year,
-                    execution_id=execution_id,
-                    core_utils=core_utils
-                )
-                if validity_result.get('success'):
-                    logging.info(f"✓ {validity_result.get('message')}")
-                else:
-                    logging.warning(f"Failed to create validity record: {validity_result.get('error')}")
-
-            except Exception as e:
-                logging.error(f"Failed to save allocation reports to database: {e}")
-                logging.warning("Continuing with forecast processing despite database save failure...")
-
-            # Calculate capacity
             for month in month_headers:
-                consolidated_df[('Capacity', month)] = consolidated_df.apply(lambda row: get_capacity(row, month, calculations), axis=1)
+                fte_required = row[('FTE Required', month)]
+                allocated, _ = allocator.allocate(platform, state, month, worktype, fte_required)
+                consolidated_df.at[idx, ('FTE Avail', month)] = allocated
 
-            # Final cleanup
-            consolidated_df = consolidated_df.fillna(0).infer_objects(copy=False)
-            consolidated_df[consolidated_df.select_dtypes(include=['number']).columns] = consolidated_df.select_dtypes(include=['number']).round().astype(int)
+        allocation_end = datetime.now()
+        logging.info(f"Allocation completed in {allocation_end - allocation_start}")
 
-            # Generate reports
-            logging.info("Generating allocation reports...")
-            summary_report = allocator.get_summary_report()
-            logging.info(f"=== ALLOCATION SUMMARY ===")
-            logging.info(f"Total Initial FTE: {summary_report['summary']['total_initial_fte']}")
-            logging.info(f"Total Allocated FTE: {summary_report['summary']['total_allocated_fte']}")
-            logging.info(f"Total Unutilized FTE: {summary_report['summary']['total_unutilized_fte']}")
-            logging.info(f"Allocation Success Rate: {summary_report['summary']['allocation_success_rate']:.2%}")
+        # Export buckets after allocation for debugging (Excel files)
+        logging.info("Exporting post-allocation bucket state...")
+        allocator.export_buckets_after_allocation()
 
-            unmet_demand_df = allocator.get_unmet_demand_report()
-            if not unmet_demand_df.empty:
-                logging.warning(f"Found {len(unmet_demand_df)} allocation shortages")
-                unmet_output_path = os.path.join(curpth, "unmet_demand_report.xlsx")
-                unmet_demand_df.to_excel(unmet_output_path, index=False)
-                logging.info(f"Saved unmet demand report to {unmet_output_path}")
-            else:
-                logging.info("No allocation shortages - all demand met!")
+        # Export roster allotment report (Excel file)
+        logging.info("Exporting roster allotment report...")
+        allocator.export_roster_allotment_report()
 
-            unutilized_df = allocator.get_unutilized_report(consolidated_df)
-            if not unutilized_df.empty:
-                logging.info(f"Found {len(unutilized_df)} unutilized resource groups")
-                unutilized_output_path = os.path.join(curpth, "unutilized_resources_report.xlsx")
-                unutilized_df.to_excel(unutilized_output_path, index=False)
-                logging.info(f"Saved unutilized resources report to {unutilized_output_path}")
-            else:
-                logging.info("All vendor resources utilized!")
+        # Save allocation reports to database
+        logging.info("Saving allocation reports to database...")
+        try:
+            from code.logics.allocation_reports import (
+                AllocationReportManager,
+                ReportType
+            )
 
-            # Save processed data
-            # STEP: Capture forecast snapshot before update (for history tracking)
-            logging.info("Capturing forecast snapshot before update...")
-            before_snapshot = capture_forecast_snapshot(
+            report_manager = AllocationReportManager(core_utils)
+
+            # Generate and save bucket summary report (with details)
+            summary_df, details_df = allocator.generate_buckets_summary()
+            # Combine summary and details into single report for storage
+            # Add a 'Type' column to distinguish summary from details
+            summary_df['ReportSection'] = 'Summary'
+            details_df['ReportSection'] = 'Details'
+            bucket_summary_combined = pd.concat([summary_df, details_df], ignore_index=True)
+
+            report_manager.save_report(
+                df=bucket_summary_combined,
+                report_type=ReportType.BUCKET_SUMMARY,
+                execution_id=execution_id,
                 month=data_month,
                 year=data_year,
+                created_by=forecast_file_uploaded_by,
+                updated_by=forecast_file_uploaded_by
+            )
+
+            # Generate and save buckets after allocation report
+            buckets_after_df = allocator.generate_buckets_after_allocation()
+            report_manager.save_report(
+                df=buckets_after_df,
+                report_type=ReportType.BUCKET_AFTER_ALLOCATION,
+                execution_id=execution_id,
+                month=data_month,
+                year=data_year,
+                created_by=forecast_file_uploaded_by,
+                updated_by=forecast_file_uploaded_by
+            )
+
+            # Generate and save roster allotment report
+            roster_allotment_df = allocator.generate_roster_allotment()
+            report_manager.save_report(
+                df=roster_allotment_df,
+                report_type=ReportType.ROSTER_ALLOTMENT,
+                execution_id=execution_id,
+                month=data_month,
+                year=data_year,
+                created_by=forecast_file_uploaded_by,
+                updated_by=forecast_file_uploaded_by
+            )
+
+            logging.info("✓ All allocation reports saved successfully")
+
+            # Populate FTE allocation mapping table for LLM queries
+            try:
+                from code.logics.fte_allocation_mapping import populate_fte_mapping_from_primary
+                fte_mapping_count = populate_fte_mapping_from_primary(
+                    execution_id=execution_id,
+                    month=data_month,
+                    year=data_year,
+                    vendor_allocations=allocator.vendor_allocations,
+                    vendor_df=allocator.vendor_df_original,
+                    month_headers=month_headers,
+                    worktype_vocab=allocator.worktype_vocab,
+                    core_utils=core_utils
+                )
+                logging.info(f"✓ Populated {fte_mapping_count} FTE allocation mappings (primary)")
+            except Exception as e:
+                logging.warning(f"Failed to populate FTE allocation mappings: {e}")
+
+            # Create allocation validity record
+            logging.info("Creating allocation validity record...")
+            validity_result = create_validity_record(
+                month=data_month,
+                year=data_year,
+                execution_id=execution_id,
+                core_utils=core_utils
+            )
+            if validity_result.get('success'):
+                logging.info(f"✓ {validity_result.get('message')}")
+            else:
+                logging.warning(f"Failed to create validity record: {validity_result.get('error')}")
+
+        except Exception as e:
+            logging.error(f"Failed to save allocation reports to database: {e}")
+            logging.warning("Continuing with forecast processing despite database save failure...")
+
+        # Calculate capacity
+        for month in month_headers:
+            consolidated_df[('Capacity', month)] = consolidated_df.apply(lambda row: get_capacity(row, month, calculations), axis=1)
+
+        # Final cleanup
+        consolidated_df = consolidated_df.fillna(0).infer_objects(copy=False)
+        consolidated_df[consolidated_df.select_dtypes(include=['number']).columns] = consolidated_df.select_dtypes(include=['number']).round().astype(int)
+
+        # Generate reports
+        logging.info("Generating allocation reports...")
+        summary_report = allocator.get_summary_report()
+        logging.info(f"=== ALLOCATION SUMMARY ===")
+        logging.info(f"Total Initial FTE: {summary_report['summary']['total_initial_fte']}")
+        logging.info(f"Total Allocated FTE: {summary_report['summary']['total_allocated_fte']}")
+        logging.info(f"Total Unutilized FTE: {summary_report['summary']['total_unutilized_fte']}")
+        logging.info(f"Allocation Success Rate: {summary_report['summary']['allocation_success_rate']:.2%}")
+
+        unmet_demand_df = allocator.get_unmet_demand_report()
+        if not unmet_demand_df.empty:
+            logging.warning(f"Found {len(unmet_demand_df)} allocation shortages")
+            unmet_output_path = os.path.join(curpth, "unmet_demand_report.xlsx")
+            unmet_demand_df.to_excel(unmet_output_path, index=False)
+            logging.info(f"Saved unmet demand report to {unmet_output_path}")
+        else:
+            logging.info("No allocation shortages - all demand met!")
+
+        unutilized_df = allocator.get_unutilized_report(consolidated_df)
+        if not unutilized_df.empty:
+            logging.info(f"Found {len(unutilized_df)} unutilized resource groups")
+            unutilized_output_path = os.path.join(curpth, "unutilized_resources_report.xlsx")
+            unutilized_df.to_excel(unutilized_output_path, index=False)
+            logging.info(f"Saved unutilized resources report to {unutilized_output_path}")
+        else:
+            logging.info("All vendor resources utilized!")
+
+        # Save processed data
+        # STEP: Capture forecast snapshot before update (for history tracking)
+        logging.info("Capturing forecast snapshot before update...")
+        before_snapshot = capture_forecast_snapshot(
+            month=data_month,
+            year=data_year,
+            core_utils=core_utils
+        )
+
+        if before_snapshot is not None:
+            logging.info(f"Captured before snapshot: {len(before_snapshot)} existing records")
+        else:
+            logging.info("No existing forecast data (new upload)")
+
+        preprocessor = PreProcessing("forecast")
+        mod_consolitated_df = preprocessor.preprocess_forecast_df(consolidated_df.copy())
+        update_forecast_data(mod_consolitated_df, data_month, data_year, forecast_file_uploaded_by, forecast_filename)
+        logging.info("Forecast data updated successfully.")
+
+        # STEP: Create history log to track forecast changes
+        logging.info("Creating history log for forecast changes...")
+        try:
+            # Determine operation type based on before snapshot existence
+            operation_type = "updated" if before_snapshot is not None else "created"
+            description = f"Forecast data {operation_type} from allocation: {forecast_filename}"
+
+            history_result = create_forecast_upload_history_log(
+                month=data_month,
+                year=data_year,
+                user=forecast_file_uploaded_by,
+                description=description,
+                before_df=before_snapshot,  # None for new uploads
+                after_df=mod_consolitated_df,  # Preprocessed DataFrame
                 core_utils=core_utils
             )
 
-            if before_snapshot is not None:
-                logging.info(f"Captured before snapshot: {len(before_snapshot)} existing records")
-            else:
-                logging.info("No existing forecast data (new upload)")
-
-            preprocessor = PreProcessing("forecast")
-            mod_consolitated_df = preprocessor.preprocess_forecast_df(consolidated_df.copy())
-            update_forecast_data(mod_consolitated_df, data_month, data_year, forecast_file_uploaded_by, forecast_filename)
-            logging.info("Forecast data updated successfully.")
-
-            # STEP: Create history log to track forecast changes
-            logging.info("Creating history log for forecast changes...")
-            try:
-                # Determine operation type based on before snapshot existence
-                operation_type = "updated" if before_snapshot is not None else "created"
-                description = f"Forecast data {operation_type} from allocation: {forecast_filename}"
-
-                history_result = create_forecast_upload_history_log(
-                    month=data_month,
-                    year=data_year,
-                    user=forecast_file_uploaded_by,
-                    description=description,
-                    before_df=before_snapshot,  # None for new uploads
-                    after_df=mod_consolitated_df,  # Preprocessed DataFrame
-                    core_utils=core_utils
+            if history_result['success']:
+                logging.info(
+                    f"✓ Created history log {history_result['history_log_id']}: "
+                    f"{history_result['records_modified']} records modified"
                 )
+            else:
+                logging.warning(
+                    f"Failed to create history log: {history_result.get('error')}"
+                )
+        except Exception as e:
+            # Don't fail allocation if history logging fails
+            logging.error(f"Error creating forecast history log: {e}", exc_info=True)
+            logging.warning("Continuing despite history logging failure...")
 
-                if history_result['success']:
-                    logging.info(
-                        f"✓ Created history log {history_result['history_log_id']}: "
-                        f"{history_result['records_modified']} records modified"
-                    )
-                else:
-                    logging.warning(
-                        f"Failed to create history log: {history_result.get('error')}"
-                    )
-            except Exception as e:
-                # Don't fail allocation if history logging fails
-                logging.error(f"Error creating forecast history log: {e}", exc_info=True)
-                logging.warning("Continuing despite history logging failure...")
+        update_summary_data(data_month, data_year)
+        consolidated_df.to_excel(output_file)
+        logging.info(f"Saved consolidated output to {output_file}")
 
-            update_summary_data(data_month, data_year)
-            consolidated_df.to_excel(output_file)
-            logging.info(f"Saved consolidated output to {output_file}")
+        # SUCCESS: Complete execution tracking
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        stats = {
+            'records_processed': len(consolidated_df) if not consolidated_df.empty else 0,
+            'allocation_success_rate': summary_report['summary'].get('allocation_success_rate', 0) if summary_report else 0
+        }
 
-            # SUCCESS: Complete execution tracking
-            end_time = datetime.now()
-            duration = (end_time - start_time).total_seconds()
-            stats = {
-                'records_processed': len(consolidated_df) if not consolidated_df.empty else 0,
-                'allocation_success_rate': summary_report['summary'].get('allocation_success_rate', 0) if summary_report else 0
-            }
+        # Capture configuration snapshot for audit trail
+        config_snapshot = build_config_snapshot(calculations)
+        if config_snapshot.get('month_config'):
+            update_status(execution_id, 'SUCCESS', config_snapshot=config_snapshot)
+            logging.info(f"Captured config snapshot: {list(config_snapshot['month_config'].keys())}")
 
-            # Capture configuration snapshot for audit trail
-            config_snapshot = build_config_snapshot(calculations)
-            if config_snapshot.get('month_config'):
-                update_status(execution_id, 'SUCCESS', config_snapshot=config_snapshot)
-                logging.info(f"Captured config snapshot: {list(config_snapshot['month_config'].keys())}")
+        # Cleanup old reports (retention policy - keep last 10 executions)
+        try:
+            cleanup_db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=1000, skip=0, select_columns=None)
+            cleanup_db_manager.cleanup_old_reports(data_month, data_year, keep_last_n=10)
+            logging.info("✓ Retention policy cleanup completed")
+        except Exception as cleanup_error:
+            logging.warning(f"Failed to cleanup old reports: {cleanup_error}")
+            # Don't fail the execution if cleanup fails
 
-            # Cleanup old reports (retention policy - keep last 10 executions)
-            try:
-                cleanup_db_manager = core_utils.get_db_manager(AllocationReportsModel, limit=1000, skip=0, select_columns=None)
-                cleanup_db_manager.cleanup_old_reports(data_month, data_year, keep_last_n=10)
-                logging.info("✓ Retention policy cleanup completed")
-            except Exception as cleanup_error:
-                logging.warning(f"Failed to cleanup old reports: {cleanup_error}")
-                # Don't fail the execution if cleanup fails
-
-            complete_execution(execution_id, success=True, stats=stats)
-            logging.info(f"Processing completed successfully. Total time: {duration:.2f}s")
-
-        else:
-            # NO VALID DATAFRAMES: Mark as partial failure
-            logging.error("No valid DataFrames generated. Check input files.")
-
-            # Capture config snapshot if available
-            try:
-                config_snapshot = build_config_snapshot(calculations)
-                if config_snapshot.get('month_config'):
-                    update_status(execution_id, 'FAILED', config_snapshot=config_snapshot)
-            except Exception as snapshot_error:
-                logging.warning(f"Failed to capture config snapshot: {snapshot_error}")
-
-            complete_execution(
-                execution_id,
-                success=False,
-                error="No valid DataFrames generated. Check input files.",
-                error_type='VALIDATION_ERROR'
-            )
+        complete_execution(execution_id, success=True, stats=stats)
+        logging.info(f"Processing completed successfully. Total time: {duration:.2f}s")
 
     except ValueError as e:
         # VALIDATION ERROR (Missing month config, missing columns, etc.)

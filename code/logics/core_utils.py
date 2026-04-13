@@ -306,8 +306,12 @@ def extract_summary_tables(filestream) -> dict[str, pd.DataFrame]:
         total_mask = ~str_df.apply(lambda x: x.str.contains("Total", case=False, na=False)).any(axis=1)
         table_df = table_df[yyyy_mask & total_mask]
 
-        # Skip storing if safe_filename contains 'MMP' or 'Combined'
-        if any(x in safe_filename.upper() for x in ["MMP", "COMBINED"]):
+        # Skip tables that defer to another tab for capacity (e.g., "Use Amisys MMP Tab to provide...")
+        if 'tab to provide' in str(header_value).lower():
+            start_index = end_index + 2
+            continue
+        # Skip rollup/formula-only summary tables
+        if any(x in safe_filename.upper() for x in ["COMBINED", "ROLLUP"]):
             start_index = end_index + 2
             continue
 
@@ -514,6 +518,71 @@ class PreProcessing:
         return self.model_keys.get(self.file_id,[])
 
     @staticmethod
+    def _read_aligned_dual_sheet(file_stream) -> Dict[str, pd.DataFrame]:
+        """
+        Parse 'Amisys Aligned Dual State Level' sheet into normalized flat DataFrames.
+
+        Medicare section (col6=Area) and Medicaid section (col23=Area) each have
+        Global/Domestic rows per state. Returns up to 4 DataFrames keyed by LOB name.
+
+        Columns in each returned DF: Month, State, Area, <case_type_1>, ..., <case_type_5>
+        """
+        df_raw = pd.read_excel(
+            file_stream,
+            sheet_name='Amisys Aligned Dual State Level',
+            header=None, skiprows=5, dtype=str
+        )
+
+        mcare_types = [
+            'FTC-Medicare Aligned Duals', 'ADJ-Medicare Aligned Duals',
+            'COR-Medicare Aligned Duals', 'OMN-Medicare Aligned Duals',
+            'APP-Medicare Aligned Duals'
+        ]
+        mcaid_types = [
+            'FTC-Medicaid Aligned Duals', 'ADJ-Medicaid Aligned Duals',
+            'COR-Medicaid Aligned Duals', 'OMN-Medicaid Aligned Duals',
+            'APP-Medicaid Aligned Duals'
+        ]
+
+        mcare_col_map = {
+            2: 'Month', 4: 'State', 6: 'Area',
+            7: mcare_types[0], 10: mcare_types[1],
+            13: mcare_types[2], 16: mcare_types[3], 19: mcare_types[4]
+        }
+        mcaid_col_map = {
+            2: 'Month', 4: 'State', 23: 'Area',
+            24: mcaid_types[0], 27: mcaid_types[1],
+            30: mcaid_types[2], 33: mcaid_types[3], 36: mcaid_types[4]
+        }
+
+        def _build_section(col_map: dict) -> pd.DataFrame:
+            available_cols = [c for c in sorted(col_map.keys()) if c < len(df_raw.columns)]
+            sub = df_raw.iloc[:, available_cols].copy()
+            sub.columns = [col_map[c] for c in available_cols]
+            sub = sub.dropna(subset=['State', 'Month'])
+            num_cols = [v for k, v in col_map.items() if v not in ('Month', 'State', 'Area') and k in available_cols]
+            for c in num_cols:
+                if c in sub.columns:
+                    sub[c] = pd.to_numeric(sub[c], errors='coerce').fillna(0)
+            return sub.reset_index(drop=True)
+
+        def _split_by_area(df: pd.DataFrame, section: str) -> dict:
+            result = {}
+            if df.empty or 'Area' not in df.columns:
+                return result
+            for area in ['Global', 'Domestic']:
+                mask = df['Area'].str.strip().str.lower() == area.lower()
+                subset = df[mask].reset_index(drop=True)
+                if not subset.empty:
+                    result[f'AMISYS Aligned Dual {section} {area}'] = subset
+            return result
+
+        parts = {}
+        parts.update(_split_by_area(_build_section(mcare_col_map), 'Medicare'))
+        parts.update(_split_by_area(_build_section(mcaid_col_map), 'Medicaid'))
+        return parts
+
+    @staticmethod
     def _read_multi_sheet(
         file_stream: Union[str, BinaryIO],
         sheet: str,
@@ -566,69 +635,169 @@ class PreProcessing:
         Raises:
             ValueError: If any required sheet is missing.
         """
-        # Check for required sheets
-        required_sheets = [
-            non_mmp_domestic_sheet,
-            non_mmp_global_sheet,
-            mmp_sheet,
-            "Forecast v Capacity Summary"
-        ]
-        # Get sheet names
+        aligned_dual_sheet = "Amisys Aligned Dual State Level"
+        summary_sheet = "Forecast v Capacity Summary"
+
+        # Discover available sheets — warn about missing ones, never hard-fail
         xl = pd.ExcelFile(file_stream)
-        missing = [sheet for sheet in required_sheets if sheet not in xl.sheet_names]
+        available = set(xl.sheet_names)
+        all_known = [non_mmp_domestic_sheet, non_mmp_global_sheet, mmp_sheet, summary_sheet, aligned_dual_sheet]
+        missing = [s for s in all_known if s not in available]
         if missing:
-            raise ValueError(f"Missing required sheet(s): {', '.join(missing)}")
+            logger.warning(f"Sheet(s) not found in file (will be skipped): {', '.join(missing)}")
 
         dfs = {}
-        non_mmp = {}
 
-        non_mmp[non_mmp_domestic_sheet] = self._read_multi_sheet(
-            file_stream, non_mmp_domestic_sheet, header_depth=3, skiprows=1
-        )
-        non_mmp[non_mmp_global_sheet] = self._read_multi_sheet(
-            file_stream, non_mmp_global_sheet, header_depth=3, skiprows=1
-        )
+        # ── NonMMP sheets (missing = skip; present but bad = error) ─────────────
+        non_mmp = {}
+        for sheet_name in [non_mmp_domestic_sheet, non_mmp_global_sheet]:
+            if sheet_name in available:
+                try:
+                    non_mmp[sheet_name] = self._read_multi_sheet(
+                        file_stream, sheet_name, header_depth=3, skiprows=1
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to parse sheet '{sheet_name}': {e}", exc_info=True)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Sheet '{sheet_name}' could not be parsed. "
+                            f"Please check that the sheet structure matches the expected format "
+                            f"(3 header rows, data starting at row 2). Error: {e}"
+                        )
+                    )
+            else:
+                logger.warning(f"Sheet '{sheet_name}' not found in file — skipping")
         dfs["medicare_medicaid_nonmmp"] = non_mmp
 
-        mmp_df = self._read_multi_sheet(
-            file_stream, mmp_sheet, header_depth=2, skiprows=1, skipfooter=1
-        )
-        # mmp_df = mmp_df.sort_index(axis=1)
-        if ("State", "State") not in mmp_df.columns:
-            raise KeyError("Expected ('State','State') column not found in MMP sheet.")
-
-        state_col = mmp_df[("State", "State")]
-        state_series = state_col if isinstance(state_col, pd.Series) else state_col.iloc[:, 0]
-
-        domestic_mask = state_series.isin(domestic_states)
-        global_mask = state_series.isin(global_states)
-
-        mmp_parts = {
-            "AMISYS MMP Domestic": mmp_df.loc[domestic_mask].reset_index(drop=True),
-            "AMISYS MMP Global": mmp_df.loc[global_mask].reset_index(drop=True),
-        }
+        # ── MMP sheet (missing = skip; present but bad = error) ───────────────
+        mmp_parts = {}
+        if mmp_sheet in available:
+            try:
+                mmp_df = self._read_multi_sheet(
+                    file_stream, mmp_sheet, header_depth=2, skiprows=1, skipfooter=1
+                )
+            except Exception as e:
+                logger.error(f"Failed to parse MMP sheet '{mmp_sheet}': {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Sheet '{mmp_sheet}' could not be parsed. "
+                        f"Please check that it has 2 header rows and data starting at row 2. Error: {e}"
+                    )
+                )
+            if ("State", "State") not in mmp_df.columns:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Sheet '{mmp_sheet}' is missing the expected 'State' column. "
+                        f"Please verify the sheet headers are intact and the State column has not been moved or renamed."
+                    )
+                )
+            state_col = mmp_df[("State", "State")]
+            state_series = state_col if isinstance(state_col, pd.Series) else state_col.iloc[:, 0]
+            domestic_mask = state_series.isin(domestic_states)
+            global_mask = state_series.isin(global_states)
+            mmp_parts = {
+                "AMISYS MMP Domestic": mmp_df.loc[domestic_mask].reset_index(drop=True),
+                "AMISYS MMP Global": mmp_df.loc[global_mask].reset_index(drop=True),
+            }
+        else:
+            logger.warning(f"Sheet '{mmp_sheet}' not found in file — skipping")
         dfs["medicare_medicaid_mmp"] = mmp_parts
 
-        try:
-            dfs["medicare_medicaid_summary"] = extract_summary_tables(file_stream)
-        except Exception as e:
-            logger.error(f"Error extracting summary tables: {e}")
-            raise HTTPException(status_code=400, detail=str(e))
+        # ── Summary sheet (missing = skip; present but bad = error) ───────────
+        dfs["medicare_medicaid_summary"] = {}
+        if summary_sheet in available:
+            try:
+                dfs["medicare_medicaid_summary"] = extract_summary_tables(file_stream)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to parse summary sheet '{summary_sheet}': {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Sheet '{summary_sheet}' could not be parsed. "
+                        f"Please verify the sheet layout has not changed (table headers, column structure). Error: {e}"
+                    )
+                )
+            for safe_filename in dfs["medicare_medicaid_summary"].keys():
+                lob_components = parse_main_lob(safe_filename)
+                if lob_components.get("platform") is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Could not determine platform (Amisys/Facets/Xcelys) for table '{safe_filename}' "
+                            f"in sheet '{summary_sheet}'. Please check the table header name."
+                        )
+                    )
+        else:
+            logger.warning(f"Sheet '{summary_sheet}' not found in file — summary LOBs will be skipped")
 
-        for safe_filename in dfs["medicare_medicaid_summary"].keys():
-            lob_components = parse_main_lob(safe_filename)
-            if lob_components.get("platform") is None:
-                raise HTTPException(status_code=400, detail=f"Platform is missing in summary: {safe_filename}")
+        # ── Aligned Dual sheet (missing = skip; present but bad = error) ──────
+        dfs["medicare_medicaid_aligned_dual"] = {}
+        if aligned_dual_sheet in available:
+            try:
+                dfs["medicare_medicaid_aligned_dual"] = self._read_aligned_dual_sheet(file_stream)
+            except Exception as e:
+                logger.error(f"Failed to parse Aligned Dual sheet '{aligned_dual_sheet}': {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Sheet '{aligned_dual_sheet}' could not be parsed. "
+                        f"Please verify it has 5 header rows and the Medicare/Medicaid column positions are unchanged. Error: {e}"
+                    )
+                )
+
+        # ── Month code extraction: summary → nonmmp → mmp → aligned_dual ──────
         unique_months = []
+
+        # 1. Try summary column headers (preferred)
         for _, df in dfs["medicare_medicaid_summary"].items():
-            if not df.empty:
-                if df.columns.nlevels == 4:
-                    unique_months = get_columns_between_column_names(df, 2, 'CPH', 'Work Type')
+            if not df.empty and df.columns.nlevels == 4:
+                unique_months = get_columns_between_column_names(df, 2, 'CPH', 'Work Type')
+                if unique_months:
                     break
 
-        # Error if no months found
-        if not unique_months or len(unique_months) == 0:
-            raise ValueError("No forecast months found in summary file")
+        # 2. Fallback: month names from NonMMP data rows
+        if not unique_months:
+            for df in dfs["medicare_medicaid_nonmmp"].values():
+                if not df.empty and ('', '', 'Month') in df.columns:
+                    months_in_data = [
+                        m for m in df[('', '', 'Month')].dropna().unique()
+                        if isinstance(m, str) and m.strip()
+                    ]
+                    if months_in_data:
+                        unique_months = months_in_data
+                        break
+
+        # 3. Fallback: month names from MMP data rows
+        if not unique_months:
+            for df in dfs["medicare_medicaid_mmp"].values():
+                if not df.empty and ('Month', 'Month') in df.columns:
+                    months_in_data = [
+                        m for m in df[('Month', 'Month')].dropna().unique()
+                        if isinstance(m, str) and m.strip()
+                    ]
+                    if months_in_data:
+                        unique_months = months_in_data
+                        break
+
+        # 4. Fallback: month names from Aligned Dual data rows
+        if not unique_months:
+            for df in dfs["medicare_medicaid_aligned_dual"].values():
+                if not df.empty and 'Month' in df.columns:
+                    months_in_data = [
+                        m for m in df['Month'].dropna().unique()
+                        if isinstance(m, str) and m.strip()
+                    ]
+                    if months_in_data:
+                        unique_months = months_in_data
+                        break
+
+        if not unique_months:
+            raise ValueError("No forecast months found in any available sheet")
 
         # Generate exactly 6 consecutive months from first month found
         first_month = unique_months[0]
@@ -638,6 +807,251 @@ class PreProcessing:
         self.month_codes = month_codes
         return dfs
 
+    @staticmethod
+    def _get_temp_casetype(casetype: str) -> str:
+        """Convert case type prefix to short form for Call Type ID."""
+        casetype = str(casetype)
+        if not casetype or casetype == 'nan':
+            return ''
+        ct = casetype.split("-")[0].lower()
+        return {'app': 'appeal', 'omn': 'omni'}.get(ct, ct)
+
+    def _get_extractor(self, data_model: str):
+        """Return sheet-specific extractor function."""
+        extractors = {
+            'medicare_medicaid_nonmmp': self._extract_nonmmp_demand,
+            'medicare_medicaid_mmp': self._extract_mmp_demand,
+            'medicare_medicaid_aligned_dual': self._extract_aligned_dual_demand,
+            'medicare_medicaid_summary': self._extract_summary_demand,
+        }
+        return extractors.get(data_model)
+
+    def _build_forecast_row(
+        self, lob: str, state: str, work_type: str,
+        df: pd.DataFrame, month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
+        target_cph_lookup: Dict, sheet_type: str
+    ) -> Dict:
+        """Build a single ForecastModel-compatible row dict with Client Forecast values."""
+        target_cph = target_cph_lookup.get((lob.strip().lower(), work_type.strip().lower()), 0)
+        call_type_id = f"{lob} {self._get_temp_casetype(work_type)}"
+
+        row = {
+            'Centene_Capacity_Plan_Main_LOB': lob,
+            'Centene_Capacity_Plan_State': state,
+            'Centene_Capacity_Plan_Case_Type': work_type,
+            'Centene_Capacity_Plan_Call_Type_ID': call_type_id,
+            'Centene_Capacity_Plan_Target_CPH': target_cph,
+        }
+
+        for m_key, month_name in month_codes.items():
+            val = 0
+            try:
+                if sheet_type == 'mmp':
+                    filtered = df[
+                        (df[('State', 'State')] == state) & (df[('Month', 'Month')] == month_name)
+                    ]
+                    if not filtered.empty:
+                        for col in filtered.columns:
+                            if work_type == col[0]:
+                                val = pd.to_numeric(filtered[col].values[0], errors='coerce') or 0
+                                break
+                elif sheet_type == 'nonmmp':
+                    filtered = df[
+                        (df[('', '', 'State')] == state) & (df[('', '', 'Month')] == month_name)
+                    ]
+                    if not filtered.empty:
+                        for col in filtered.columns:
+                            if 'WFM TO PROVIDE' in str(col[0]).upper() and work_type in col:
+                                val = pd.to_numeric(filtered[col].values[0], errors='coerce') or 0
+                                break
+                elif sheet_type == 'aligned_dual':
+                    filtered = df[df['Month'] == month_name]
+                    if not filtered.empty and work_type in filtered.columns:
+                        val = pd.to_numeric(filtered[work_type].values[0], errors='coerce') or 0
+                elif sheet_type == 'summary':
+                    work_type_col = None
+                    for col in df.columns:
+                        if len(col) >= 3 and str(col[2]).lower() in ['work type', 'worktype', 'case type']:
+                            work_type_col = col
+                            break
+                    if work_type_col is not None:
+                        filtered = df[df[work_type_col] == work_type]
+                        if not filtered.empty:
+                            for col in df.columns:
+                                if len(col) >= 3 and col[2] == month_name:
+                                    val = pd.to_numeric(filtered[col].values[0], errors='coerce') or 0
+                                    break
+            except Exception:
+                val = 0
+
+            row[f'Client_Forecast_{m_key}'] = int(round(float(val))) if val else 0
+            row[f'FTE_Required_{m_key}'] = 0
+            row[f'FTE_Avail_{m_key}'] = 0
+            row[f'Capacity_{m_key}'] = 0
+
+        return row
+
+    def _extract_mmp_demand(
+        self, lob_name: str, df: pd.DataFrame,
+        month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
+        target_cph_lookup: Dict
+    ) -> list:
+        rows = []
+        try:
+            work_types = get_columns_between_column_names(df, 0, 'Mo St', 'Year')
+            if ('State', 'State') not in df.columns:
+                return rows
+            states = list(set(
+                s for s in df[('State', 'State')].dropna()
+                if s != 0 and isinstance(s, str)
+            ))
+            if not work_types or not states:
+                return rows
+            for state in states:
+                for work_type in work_types:
+                    rows.append(self._build_forecast_row(
+                        lob=lob_name, state=state, work_type=work_type,
+                        df=df, month_codes=month_codes, month_name_to_key=month_name_to_key,
+                        target_cph_lookup=target_cph_lookup, sheet_type='mmp'
+                    ))
+        except Exception as e:
+            logger.error(f"Error extracting MMP demand for {lob_name}: {e}")
+        return rows
+
+    def _extract_nonmmp_demand(
+        self, lob_name: str, df: pd.DataFrame,
+        month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
+        target_cph_lookup: Dict
+    ) -> list:
+        rows = []
+        try:
+            df = df.copy()
+            df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
+            work_types = sorted(set(
+                col[2] for col in df.columns
+                if 'Forecast - Volume' in str(col[0]) and 'Total' not in str(col[2])
+            ))
+            if ('', '', 'State') not in df.columns:
+                return rows
+            states = list(set(df[('', '', 'State')].dropna()))
+            if not work_types or not states:
+                return rows
+            for state in states:
+                for work_type in work_types:
+                    rows.append(self._build_forecast_row(
+                        lob=lob_name, state=state, work_type=work_type,
+                        df=df, month_codes=month_codes, month_name_to_key=month_name_to_key,
+                        target_cph_lookup=target_cph_lookup, sheet_type='nonmmp'
+                    ))
+        except Exception as e:
+            logger.error(f"Error extracting NonMMP demand for {lob_name}: {e}")
+        return rows
+
+    def _extract_aligned_dual_demand(
+        self, lob_name: str, df: pd.DataFrame,
+        month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
+        target_cph_lookup: Dict
+    ) -> list:
+        rows = []
+        try:
+            meta_cols = {'Month', 'State', 'Area'}
+            work_types = [c for c in df.columns if c not in meta_cols]
+            if 'State' not in df.columns or not work_types:
+                return rows
+            states = df['State'].dropna().unique().tolist()
+            for state in states:
+                state_df = df[df['State'] == state]
+                for work_type in work_types:
+                    rows.append(self._build_forecast_row(
+                        lob=lob_name, state=state, work_type=work_type,
+                        df=state_df, month_codes=month_codes, month_name_to_key=month_name_to_key,
+                        target_cph_lookup=target_cph_lookup, sheet_type='aligned_dual'
+                    ))
+        except Exception as e:
+            logger.error(f"Error extracting Aligned Dual demand for {lob_name}: {e}")
+        return rows
+
+    def _extract_summary_demand(
+        self, lob_name: str, df: pd.DataFrame,
+        month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
+        target_cph_lookup: Dict
+    ) -> list:
+        rows = []
+        try:
+            if df.empty:
+                return rows
+            df = df.copy()
+            df.columns = df.columns.map(lambda x: tuple(i if 'Unnamed' not in str(i) else '' for i in x))
+            first_col = lob_name.split("-summary")[0]
+            work_type_col = None
+            for col in df.columns:
+                if len(col) >= 3 and str(col[2]).lower() in ['work type', 'worktype', 'case type']:
+                    work_type_col = col
+                    break
+            if work_type_col is None:
+                return rows
+            work_types = [
+                str(wkt) for wkt in df[work_type_col].fillna('')
+                if str(wkt).lower() != 'total' and str(wkt).strip()
+            ]
+            for work_type in work_types:
+                rows.append(self._build_forecast_row(
+                    lob=first_col, state='N/A', work_type=work_type,
+                    df=df, month_codes=month_codes, month_name_to_key=month_name_to_key,
+                    target_cph_lookup=target_cph_lookup, sheet_type='summary'
+                ))
+        except Exception as e:
+            logger.error(f"Error extracting Summary demand for {lob_name}: {e}")
+        return rows
+
+    def extract_forecast_demand(
+        self,
+        dfs: Dict,
+        month_codes: Dict[str, str],
+        target_cph_lookup: Optional[Dict] = None,
+    ) -> pd.DataFrame:
+        """
+        Produce a flat DataFrame with ForecastModel columns (Client Forecast populated, FTE=0).
+
+        Each row = one (LOB, State, WorkType) combination.
+        Handles: nonmmp, mmp, aligned_dual, summary sheet types.
+
+        Args:
+            dfs: Output of process_forecast_file
+            month_codes: {"Month1": "April", ..., "Month6": "September"}
+            target_cph_lookup: Optional preloaded CPH dict. If None, loads from DB.
+
+        Returns:
+            DataFrame with 29 ForecastModel columns ready for DB insertion.
+        """
+        if target_cph_lookup is None:
+            try:
+                from code.logics.target_cph_utils import get_all_target_cph_as_dict
+                target_cph_lookup = get_all_target_cph_as_dict()
+            except Exception as e:
+                logger.warning(f"Could not load Target CPH from DB: {e}. Using empty lookup.")
+                target_cph_lookup = {}
+
+        month_name_to_key = {v: k for k, v in month_codes.items()}
+        rows = []
+
+        for data_model, model_dict in dfs.items():
+            if not model_dict:
+                continue
+            extractor = self._get_extractor(data_model)
+            if extractor is None:
+                continue
+            for lob_name, df in model_dict.items():
+                if df is None or (hasattr(df, 'empty') and df.empty):
+                    continue
+                lob_rows = extractor(lob_name, df, month_codes, month_name_to_key, target_cph_lookup)
+                rows.extend(lob_rows)
+
+        if not rows:
+            return pd.DataFrame()
+
+        columns = self.MAPPING['forecast']
+        return pd.DataFrame(rows, columns=columns)
 
 
 def insert_file_id(db_manager:DBManager, file_id):

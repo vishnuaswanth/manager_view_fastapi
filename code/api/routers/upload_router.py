@@ -34,6 +34,7 @@ from code.logics.allocation_validity import invalidate_allocation
 from code.logics.db import (
     InValidSearchException,
     ForecastMonthsModel,
+    ForecastModel,
     RawData,
     UploadDataTimeDetails
 )
@@ -391,6 +392,25 @@ async def upload_file(
             raise HTTPException(
                 status_code=500,
                 detail=error_response("Error updating forecast months metadata", str(e))
+            )
+
+        # Pre-populate ForecastModel with Client Forecast values (FTE columns = 0)
+        # so the download page shows forecast data before allocation completes
+        try:
+            demand_df = pre_processor.extract_forecast_demand(dfs, pre_processor.month_codes)
+            if not demand_df.empty:
+                for col, val in meta_info.items():
+                    demand_df[col] = val
+                forecast_db_manager = core_utils.get_db_manager(ForecastModel)
+                forecast_db_manager.save_to_db(demand_df, replace=True)
+                logger.info(f"Pre-populated ForecastModel with {len(demand_df)} demand rows for {month_year['Month']} {month_year['Year']}")
+            else:
+                logger.warning("extract_forecast_demand returned empty DataFrame — skipping pre-population")
+        except Exception as e:
+            logger.error(f"Error pre-populating forecast demand: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=error_response("Error extracting forecast demand", str(e))
             )
 
         # Trigger background allocation processing

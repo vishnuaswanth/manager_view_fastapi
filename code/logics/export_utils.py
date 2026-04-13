@@ -531,8 +531,9 @@ def get_all_combinations(month: str = None, year: int = None):
 
 def get_all_model_dataframes_dict(month: str, year: int) -> dict[str, dict[str, pd.DataFrame]]:
     """
-    Returns a nested dictionary of dataframes for the three main models:
-    ["medicare_medicaid_summary", "medicare_medicaid_nonmmp", "medicare_medicaid_mmp"]
+    Returns a nested dictionary of dataframes for the four main models:
+    ["medicare_medicaid_summary", "medicare_medicaid_nonmmp", "medicare_medicaid_mmp",
+     "medicare_medicaid_aligned_dual"]
     Structure: {model: {model_type: dataframe}}
     Tries with month/year first, falls back to all data if empty.
     """
@@ -540,6 +541,7 @@ def get_all_model_dataframes_dict(month: str, year: int) -> dict[str, dict[str, 
         "medicare_medicaid_mmp",
         "medicare_medicaid_nonmmp",
         "medicare_medicaid_summary",
+        "medicare_medicaid_aligned_dual",
     ]
     result = {}
 
@@ -557,9 +559,6 @@ def get_all_model_dataframes_dict(month: str, year: int) -> dict[str, dict[str, 
             result[model] = {}
             for mt in model_types:
                 try:
-                    # dataframe_json is assumed to be a DataFrame
-                    if model == 'medicare_medicaid_summary' and mt.data_model_type in ['AMISYS MMP Domestic', 'AMISYS MMP Global' ,'Amisys Medicaid DOMESTIC', 'Amisys Medicaid GLOBAL']:
-                        continue
                     result[model][mt.data_model_type] = mt.dataframe_json
                 except Exception as e:
                     logger.error(f"Error extracting dataframe for {model} type {getattr(mt, 'data_model_type', None)}: {e}")
@@ -568,6 +567,86 @@ def get_all_model_dataframes_dict(month: str, year: int) -> dict[str, dict[str, 
             result[model] = {}
 
     return result
+
+
+def get_forecast_demand_from_db(month: str, year: int) -> pd.DataFrame:
+    """
+    Read ForecastModel for given month/year and return a MultiIndex DataFrame
+    matching the format expected by process_files() (ResourceAllocator compatible).
+
+    MultiIndex levels:
+    - Level 0: 'Centene Capacity plan', 'Client Forecast', 'FTE Required', 'FTE Avail', 'Capacity'
+    - Level 1: field name or actual month name (from ForecastMonthsModel)
+
+    Returns:
+        MultiIndex DataFrame or empty DataFrame if no data found.
+    """
+    try:
+        db_manager = core_utils.get_db_manager(ForecastModel)
+        total = db_manager.get_totals()
+        if not total:
+            logger.warning(f"No forecast records in DB for {month} {year}")
+            return pd.DataFrame()
+
+        db_manager = core_utils.get_db_manager(ForecastModel, limit=total, skip=0)
+        df_flat = db_manager.download_db(month, year)
+        if df_flat is None or df_flat.empty:
+            logger.warning(f"ForecastModel returned empty for {month} {year}")
+            return pd.DataFrame()
+
+        # Get actual month names from ForecastMonthsModel
+        months_list = get_forecast_months_list(month, year)
+        if not months_list or len(months_list) < 6:
+            logger.warning(f"Could not get 6 forecast months for {month} {year}, got: {months_list}")
+            return pd.DataFrame()
+
+        # Build MultiIndex columns
+        meta_tuples = [
+            ('Centene Capacity plan', 'Main LOB'),
+            ('Centene Capacity plan', 'State'),
+            ('Centene Capacity plan', 'Case type'),
+            ('Centene Capacity plan', 'Call Type ID'),
+            ('Centene Capacity plan', 'Target CPH'),
+        ]
+        flat_cols = [
+            'Centene_Capacity_Plan_Main_LOB',
+            'Centene_Capacity_Plan_State',
+            'Centene_Capacity_Plan_Case_Type',
+            'Centene_Capacity_Plan_Call_Type_ID',
+            'Centene_Capacity_Plan_Target_CPH',
+        ]
+
+        month_tuples = []
+        month_flat_cols = []
+        for i, month_name in enumerate(months_list, start=1):
+            m_key = f"Month{i}"
+            for section, prefix in [
+                ('Client Forecast', 'Client_Forecast'),
+                ('FTE Required', 'FTE_Required'),
+                ('FTE Avail', 'FTE_Avail'),
+                ('Capacity', 'Capacity'),
+            ]:
+                month_tuples.append((section, month_name))
+                month_flat_cols.append(f'{prefix}_{m_key}')
+
+        all_tuples = meta_tuples + month_tuples
+        all_flat = flat_cols + month_flat_cols
+
+        # Build output DataFrame
+        available = [c for c in all_flat if c in df_flat.columns]
+        available_tuples = [all_tuples[all_flat.index(c)] for c in available]
+
+        output = pd.DataFrame(index=df_flat.index, columns=pd.MultiIndex.from_tuples(available_tuples))
+        for flat_col, multi_col in zip(available, available_tuples):
+            output[multi_col] = df_flat[flat_col].values
+
+        output = output.fillna(0)
+        logger.info(f"Loaded {len(output)} demand rows from ForecastModel for {month} {year}")
+        return output
+
+    except Exception as e:
+        logger.error(f"Error loading forecast demand from DB for {month} {year}: {e}", exc_info=True)
+        return pd.DataFrame()
 
 def test_save_summary_stream_to_file(file_path: str = None, output_filename: str = "summary.xlsx"):
     """
