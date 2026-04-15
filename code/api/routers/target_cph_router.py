@@ -6,7 +6,7 @@ that is used in allocation logic for FTE calculations.
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 import logging
 
@@ -37,6 +37,8 @@ logger = get_logger(__name__)
 
 class TargetCPHRequest(BaseModel):
     """Request model for single Target CPH configuration creation."""
+    model_config = ConfigDict(extra="forbid")
+
     main_lob: str = Field(
         ...,
         min_length=1,
@@ -62,12 +64,11 @@ class TargetCPHRequest(BaseModel):
         description="Username of the person creating the record"
     )
 
-    class Config:
-        extra = "forbid"  # Reject unknown fields
-
 
 class TargetCPHUpdateRequest(BaseModel):
     """Request model for updating Target CPH configuration."""
+    model_config = ConfigDict(extra="forbid")
+
     target_cph: Optional[float] = Field(
         None,
         gt=0,
@@ -93,20 +94,16 @@ class TargetCPHUpdateRequest(BaseModel):
         description="Username of the person updating the record"
     )
 
-    class Config:
-        extra = "forbid"
-
 
 class BulkTargetCPHRequest(BaseModel):
     """Request model for bulk Target CPH configuration creation."""
+    model_config = ConfigDict(extra="forbid")
+
     configurations: List[TargetCPHRequest] = Field(
         ...,
         min_length=1,
         description="List of Target CPH configurations to add"
     )
-
-    class Config:
-        extra = "forbid"
 
 
 # ============ API Endpoints ============

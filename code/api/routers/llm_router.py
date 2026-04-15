@@ -4,7 +4,7 @@ Provides endpoints optimized for LLM consumption with rich metadata and context.
 """
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 from datetime import datetime, timezone
 import hashlib
@@ -1249,13 +1249,12 @@ class UpdateTargetCPHRequest(BaseModel):
         le=200,
         description="New target CPH value (must be >= 0 and <= 200)"
     )
+    model_config = ConfigDict(extra="forbid")
+
     user_notes: Optional[str] = Field(
         default=None,
         description="Optional description of why CPH changed"
     )
-
-    class Config:
-        extra = "forbid"
 
 
 @router.post("/api/llm/forecast/update-target-cph")

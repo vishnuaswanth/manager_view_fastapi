@@ -8,7 +8,7 @@ with preview/approval workflows.
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, TypeVar, Generic
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import SQLAlchemyError
 from code.logics.manager_view import get_available_report_months
 from code.logics.bench_allocation import allocate_bench_for_month
@@ -51,6 +51,8 @@ core_utils = get_core_utils()
 
 class MonthData(BaseModel):
     """Data for a single month in forecast modifications."""
+    model_config = ConfigDict(extra="forbid")
+
     forecast: float = Field(ge=0, description="Client forecast value")
     fte_req: int = Field(ge=0, description="FTE Required")
     fte_avail: int = Field(ge=0, description="FTE Available")
@@ -60,25 +62,21 @@ class MonthData(BaseModel):
     fte_avail_change: int = Field(default=0, description="Change in FTE Available")
     capacity_change: float = Field(default=0, description="Change in capacity")
 
-    class Config:
-        extra = "forbid"  # Reject extra fields
-
 
 class ModifiedForecastRecord(BaseModel):
     """Modified forecast record with month-specific data and changes."""
+    model_config = ConfigDict(extra="forbid")
+
     case_id: str = Field(min_length=1, description="Case/Forecast ID")
     main_lob: str = Field(min_length=1, description="Main Line of Business")
     state: str = Field(min_length=2, max_length=3, description="State code (2-letter) or 'N/A'")
     case_type: str = Field(min_length=1, description="Case Type")
     target_cph: float = Field(ge=0, le=200, description="Target Cases Per Hour")
     target_cph_change: float = Field(default=0, description="Change in Target CPH")
-    modified_fields: List[str] = Field(min_items=1, description="List of modified field paths")
+    modified_fields: List[str] = Field(min_length=1, description="List of modified field paths")
     months: Dict[str, MonthData] = Field(
         description="Month-specific data keyed by month label (e.g., 'Jun-25')"
     )
-
-    class Config:
-        extra = "forbid"  # Strict validation
 
     def model_dump(self, **kwargs):
         """
@@ -111,16 +109,14 @@ RecordType = TypeVar('RecordType')
 
 class BasePreviewRequest(BaseModel, Generic[RecordType]):
     """Base class for preview requests with common fields."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     month: str = Field(min_length=1, description="Report month name")
     year: int = Field(ge=2020, le=2050, description="Report year")
     modified_records: List[RecordType] = Field(
-        min_items=1,
+        min_length=1,
         description="List of records with modifications"
     )
-
-    class Config:
-        # Allow subclasses to be instantiated
-        arbitrary_types_allowed = True
 
 
 class BaseUpdateRequest(BaseModel, Generic[RecordType]):
@@ -133,22 +129,20 @@ class BaseUpdateRequest(BaseModel, Generic[RecordType]):
     - modified_records: Generic list of modified records (type specified by subclass)
     - user_notes: Optional description for history tracking
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     month: str = Field(min_length=1, description="Report month name")
     year: int = Field(ge=2020, le=2050, description="Report year")
     months: Dict[str, str] = Field(
-        min_items=6,
-        max_items=6,
+        min_length=6,
+        max_length=6,
         description="Month index mapping (e.g., {'month1': 'Jun-25'})"
     )
     modified_records: List[RecordType] = Field(
-        min_items=1,
+        min_length=1,
         description="List of modified records"
     )
     user_notes: Optional[str] = Field(None, max_length=1000, description="User notes/description")
-
-    class Config:
-        # Allow subclasses to be instantiated
-        arbitrary_types_allowed = True
 
 
 class BenchAllocationPreviewRequest(BaseModel):
@@ -192,31 +186,29 @@ class CPHUpdateRequest(BaseUpdateRequest[ModifiedForecastRecord]):
 
 class ForecastReallocationMonthInput(BaseModel):
     """Month input for forecast reallocation preview request - includes fte_avail_change."""
+    model_config = ConfigDict(extra="forbid")
+
     forecast: int = Field(ge=0, description="Client forecast value")
     fte_req: int = Field(ge=0, description="FTE Required")
     fte_avail: int = Field(ge=0, description="FTE Available")
     capacity: int = Field(ge=0, description="Capacity value")
     fte_avail_change: int = Field(default=0, description="Change in FTE Available")
 
-    class Config:
-        extra = "forbid"
-
 
 class ForecastReallocationPreviewRecord(BaseModel):
     """Record in forecast reallocation preview request."""
+    model_config = ConfigDict(extra="forbid")
+
     case_id: str = Field(min_length=1, description="Case/Forecast ID")
     main_lob: str = Field(min_length=1, description="Main Line of Business")
     state: str = Field(min_length=1, description="State code")
     case_type: str = Field(min_length=1, description="Case Type")
     target_cph: float = Field(ge=0, le=200, description="Target Cases Per Hour")
     target_cph_change: float = Field(default=0, description="Change in Target CPH")
-    modified_fields: List[str] = Field(min_items=1, description="List of modified field paths")
+    modified_fields: List[str] = Field(min_length=1, description="List of modified field paths")
     months: Dict[str, ForecastReallocationMonthInput] = Field(
         description="Month-specific data keyed by month label (e.g., 'Jun-25')"
     )
-
-    class Config:
-        extra = "forbid"
 
 
 class ForecastReallocationPreviewRequest(BaseModel):
@@ -224,7 +216,7 @@ class ForecastReallocationPreviewRequest(BaseModel):
     month: str = Field(min_length=1, description="Report month name")
     year: int = Field(ge=2020, le=2050, description="Report year")
     modified_records: List[ForecastReallocationPreviewRecord] = Field(
-        min_items=1,
+        min_length=1,
         description="List of records with modifications"
     )
 
