@@ -56,3 +56,4 @@ alembic/versions/__pycache__/
 # Keep migration files - DO commit these!
 # alembic/versions/*.py should be tracked
 .aider*
+NTT Forecast - Capacity HC - March_2026.xlsx

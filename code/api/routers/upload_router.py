@@ -35,7 +35,6 @@ from code.logics.db import (
     InValidSearchException,
     ForecastMonthsModel,
     ForecastModel,
-    RawData,
     UploadDataTimeDetails
 )
 from code.api.dependencies import get_core_utils, get_logger
@@ -337,6 +336,11 @@ async def upload_file(
     elif file_id == "forecast":
         try:
             dfs = pre_processor.process_forecast_file(io.BytesIO(contents))
+            sheet_summary = {k: list(v.keys()) for k, v in dfs.items() if v}
+            logger.info(
+                f"Forecast file '{file.filename}' parsed — sheets loaded: {sheet_summary} | "
+                f"month codes: {pre_processor.month_codes}"
+            )
         except HTTPException:
             raise  # Re-raise with original details
         except ValueError as ve:
@@ -350,32 +354,6 @@ async def upload_file(
             raise HTTPException(
                 status_code=500,
                 detail=error_response("Error processing forecast file", str(e))
-            )
-
-        try:
-            items = []
-            for data_model, model_type_dict in dfs.items():
-                for data_model_type, df in model_type_dict.items():
-                    raw_data = {
-                        'df': df,
-                        'data_model': data_model,
-                        'data_model_type': data_model_type,
-                        'month': meta_info.get("Month", ""),
-                        'year': meta_info.get("Year", ""),
-                        'created_by': user
-                    }
-                    items.append(raw_data)
-                    logger.info(f"Processed Data Model: {data_model} | Type: {data_model_type}")
-
-            db_manager = core_utils.get_db_manager(RawData)
-            db_manager.bulk_save_raw_data_with_history(items)
-        except HTTPException:
-            raise  # Re-raise with original details
-        except Exception as e:
-            logger.error(f"Error updating raw data: {e}", exc_info=True)
-            raise HTTPException(
-                status_code=500,
-                detail=error_response("Error saving forecast data to database", str(e))
             )
 
         try:

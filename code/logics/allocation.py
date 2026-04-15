@@ -32,8 +32,6 @@ from code.logics.export_utils import (
     get_latest_or_requested_dataframe,
     update_forecast_data,
     get_forecast_months_list,
-    get_all_model_dataframes_dict,
-    get_calculations_data,
     get_forecast_demand_from_db,
 )
 from code.logics.summary_utils import update_summary_data
@@ -118,67 +116,8 @@ def get_year_for_month(data_month: str, data_year: int, current_month: str) -> i
     return data_year + 1 if current_month_num < data_month_num else data_year
 
 
-def get_value(row, month, filetype, df:pd.DataFrame=None):
-    """
-    Retrieves a specific forecast value from a pre-loaded DataFrame based on file type.
-
-    This function is designed to look up values from different structured forecast files
-    (MMP, Non-MMP, Summary) that have been loaded into pandas DataFrames. It filters the
-    DataFrame based on state and month and then finds the corresponding value for a
-    specific work type.
-
-    Args:
-        row (pd.Series): A row from the main output DataFrame, containing context
-            like 'Main LOB', 'State', and 'Case type'.
-        month (str): The month (e.g., "January") for which to retrieve the forecast value.
-        filetype (str): The type of forecast file the DataFrame originated from.
-            Expected values: 'medicare_medicaid_nonmmp', 'medicare_medicaid_mmp',
-            'medicare_medicaid_summary'.
-        df (pd.DataFrame, optional): The pre-loaded DataFrame to search within.
-            If None or empty, the function returns 0. Defaults to None.
-
-    Returns:
-        int or float: The forecast value found in the DataFrame. Returns 0 if the
-        value is not found, the DataFrame is empty, or an error occurs during lookup.
-    """
-    if df is None or getattr(df, 'empty', True):
-        return 0
-
-    file_name = row[('Centene Capacity plan', 'Main LOB')]
-    state = row[('Centene Capacity plan', 'State')]
-    work_type = row[('Centene Capacity plan', 'Case type')]
-    try:
-        if filetype == 'medicare_medicaid_nonmmp':
-            filtered_df = df[(df[('', '', 'State')] == state) & (df[('', '', 'Month')] == month)]
-            if not filtered_df.empty:
-                for col in filtered_df.columns:
-                    if "WFM TO PROVIDE" in col[0].upper() and work_type in col:
-                        return filtered_df[col].values[0]
-            return 0
-        elif filetype == 'medicare_medicaid_mmp':
-            filtered_df = df[(df[('State', 'State')] == state) & (df[('Month', 'Month')] == month)]
-            if not filtered_df.empty:
-                for col in filtered_df.columns:
-                    if work_type == col[0]:
-                        return filtered_df[col].values[0]
-            return 0
-        elif filetype == 'medicare_medicaid_summary':
-            filtered_df = df[df[(file_name, "Vendor Eligible Forecast (WFM)", "Work Type", "")] == work_type]
-            if not filtered_df.empty:
-                return filtered_df[(file_name, "Vendor Eligible Forecast (WFM)", month, "")].values[0]
-            return 0
-    except KeyError as e:
-        logging.warning(f"Missing month column '{month}' in get_value for {file_name}, {filetype}, returning 0")
-        return 0
-    except Exception as e:
-        logging.warning(f"Error in get_value for {file_name}, {filetype}, {month}: {e}")
-        return 0
-
 class Calculations():
     def __init__(self, data_month: str = None, data_year: int = None) -> None:
-        self.target_cph: pd.DataFrame = pd.DataFrame()
-        self.month_data: pd.DataFrame = pd.DataFrame()
-
         # Store month and year for database lookups
         self.data_month = data_month
         self.data_year = data_year
@@ -191,11 +130,6 @@ class Calculations():
         from code.logics.target_cph_utils import get_all_target_cph_as_dict
         self._target_cph_lookup: Dict[Tuple[str, str], float] = get_all_target_cph_as_dict()
         logger.info(f"Loaded {len(self._target_cph_lookup)} Target CPH configurations from database")
-
-        # Fallback: Load from JSON blob if database is empty (for backward compatibility)
-        calculations = get_calculations_data()
-        self.month_data = calculations.get("month_data", pd.DataFrame)
-        self.target_cph = calculations.get("target_cph", pd.DataFrame)
 
     def get_config_for_worktype(self, month: str, year: int, work_type: str) -> Dict:
         """
@@ -249,10 +183,7 @@ class Calculations():
 
     def get_target_cph(self, row):
         """
-        Get Target CPH value for a given forecast row.
-
-        Uses database-backed lookup dict for O(1) performance per row.
-        Falls back to DataFrame lookup if database lookup is empty (backward compatibility).
+        Get Target CPH value for a given forecast row using database-backed lookup.
 
         Args:
             row: DataFrame row with ('Centene Capacity plan', 'Main LOB') and
@@ -265,24 +196,12 @@ class Calculations():
         worktype = row[('Centene Capacity plan', 'Case type')]
         logger.debug(f"~~ ENTER get_target_cph: lob={lob!r}, worktype={worktype!r}")
 
-        # Primary lookup: Database-backed dict (O(1) lookup)
         if self._target_cph_lookup:
             key = (lob.strip().lower(), worktype.strip().lower())
             target_cph = self._target_cph_lookup.get(key, None)
             if target_cph is not None:
                 return target_cph
 
-        # Fallback: DataFrame lookup (backward compatibility for migration period)
-        target_df = self.target_cph
-        if target_df is not None and not getattr(target_df, 'empty', True):
-            filtered_target_df = target_df[
-                (target_df['Main LOB'].str.strip().str.lower() == lob.strip().lower()) &
-                (target_df['Case type'].str.strip().str.lower() == worktype.strip().lower())
-            ]
-            if not filtered_target_df.empty:
-                return filtered_target_df['Target CPH'].iloc[0]
-
-        # Not found in either source
         logger.warning(f"Target CPH not found for lob={lob!r}, worktype={worktype!r}, returning 0")
         return 0
 

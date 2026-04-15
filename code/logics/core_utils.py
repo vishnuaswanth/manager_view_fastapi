@@ -656,6 +656,7 @@ class PreProcessing:
                     non_mmp[sheet_name] = self._read_multi_sheet(
                         file_stream, sheet_name, header_depth=3, skiprows=1
                     )
+                    logger.info(f"Parsed NonMMP sheet '{sheet_name}': {len(non_mmp[sheet_name])} rows")
                 except Exception as e:
                     logger.error(f"Failed to parse sheet '{sheet_name}': {e}", exc_info=True)
                     raise HTTPException(
@@ -702,6 +703,10 @@ class PreProcessing:
                 "AMISYS MMP Domestic": mmp_df.loc[domestic_mask].reset_index(drop=True),
                 "AMISYS MMP Global": mmp_df.loc[global_mask].reset_index(drop=True),
             }
+            logger.info(
+                f"Parsed MMP sheet '{mmp_sheet}': "
+                f"{domestic_mask.sum()} domestic rows, {global_mask.sum()} global rows"
+            )
         else:
             logger.warning(f"Sheet '{mmp_sheet}' not found in file — skipping")
         dfs["medicare_medicaid_mmp"] = mmp_parts
@@ -722,6 +727,11 @@ class PreProcessing:
                         f"Please verify the sheet layout has not changed (table headers, column structure). Error: {e}"
                     )
                 )
+            logger.info(
+                f"Parsed summary sheet '{summary_sheet}': "
+                f"{len(dfs['medicare_medicaid_summary'])} LOB table(s): "
+                f"{', '.join(dfs['medicare_medicaid_summary'].keys())}"
+            )
             for safe_filename in dfs["medicare_medicaid_summary"].keys():
                 lob_components = parse_main_lob(safe_filename)
                 if lob_components.get("platform") is None:
@@ -740,6 +750,13 @@ class PreProcessing:
         if aligned_dual_sheet in available:
             try:
                 dfs["medicare_medicaid_aligned_dual"] = self._read_aligned_dual_sheet(file_stream)
+                aligned_row_count = sum(
+                    len(df) for df in dfs["medicare_medicaid_aligned_dual"].values()
+                )
+                logger.info(
+                    f"Parsed Aligned Dual sheet '{aligned_dual_sheet}': "
+                    f"{len(dfs['medicare_medicaid_aligned_dual'])} segment(s), {aligned_row_count} rows"
+                )
             except Exception as e:
                 logger.error(f"Failed to parse Aligned Dual sheet '{aligned_dual_sheet}': {e}", exc_info=True)
                 raise HTTPException(
@@ -752,12 +769,14 @@ class PreProcessing:
 
         # ── Month code extraction: summary → nonmmp → mmp → aligned_dual ──────
         unique_months = []
+        month_source = None
 
         # 1. Try summary column headers (preferred)
         for _, df in dfs["medicare_medicaid_summary"].items():
             if not df.empty and df.columns.nlevels == 4:
                 unique_months = get_columns_between_column_names(df, 2, 'CPH', 'Work Type')
                 if unique_months:
+                    month_source = "summary sheet column headers"
                     break
 
         # 2. Fallback: month names from NonMMP data rows
@@ -770,6 +789,7 @@ class PreProcessing:
                     ]
                     if months_in_data:
                         unique_months = months_in_data
+                        month_source = "NonMMP sheet data rows"
                         break
 
         # 3. Fallback: month names from MMP data rows
@@ -782,6 +802,7 @@ class PreProcessing:
                     ]
                     if months_in_data:
                         unique_months = months_in_data
+                        month_source = "MMP sheet data rows"
                         break
 
         # 4. Fallback: month names from Aligned Dual data rows
@@ -794,6 +815,7 @@ class PreProcessing:
                     ]
                     if months_in_data:
                         unique_months = months_in_data
+                        month_source = "Aligned Dual sheet data rows"
                         break
 
         if not unique_months:
@@ -803,6 +825,11 @@ class PreProcessing:
         first_month = unique_months[0]
         consecutive_months = generate_consecutive_months(first_month, 6)
         month_codes = {f"Month{i+1}": month for i, month in enumerate(consecutive_months)}
+
+        logger.info(
+            f"Month codes derived from {month_source}: "
+            + ", ".join(f"{k}={v}" for k, v in month_codes.items())
+        )
 
         self.month_codes = month_codes
         return dfs
