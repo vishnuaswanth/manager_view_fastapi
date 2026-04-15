@@ -35,8 +35,11 @@ from code.logics.db import (
     InValidSearchException,
     ForecastMonthsModel,
     ForecastModel,
+    ProdTeamRosterModel,
     UploadDataTimeDetails
 )
+from code.cache import filters_cache
+from code.logics.cascade_filters import generate_cascade_cache_key
 from code.api.dependencies import get_core_utils, get_logger
 from code.api.utils.responses import success_response, error_response
 from code.api.utils.validators import validate_file_id
@@ -623,6 +626,107 @@ def get_record_history(
             result['records'].extend(model_result['records'])
 
     return result
+
+
+@router.get("/roster/filter-years")
+def get_roster_filter_years():
+    """
+    Get all years that have prod team roster data available.
+
+    Returns:
+        {"years": [{"value": "2025", "display": "2025"}, ...]}
+    """
+    cache_key = generate_cascade_cache_key("cascade:roster_years")
+
+    cached_response = filters_cache.get(cache_key)
+    if cached_response is not None:
+        logger.debug("[Cascade] Returning cached roster years response")
+        return cached_response
+
+    try:
+        db_manager = core_utils.get_db_manager(ProdTeamRosterModel, limit=1, skip=0, select_columns=None)
+        years = db_manager.get_distinct_values("Year")
+        years_list = [{"value": str(y), "display": str(y)} for y in sorted(years, reverse=True) if y is not None]
+        response = {"years": years_list}
+        filters_cache.set(cache_key, response)
+        logger.info(f"[Cascade] Roster filter years endpoint: {len(years_list)} years found")
+        return response
+    except Exception as e:
+        logger.error(f"[Cascade] Error in roster filter-years endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve available roster years")
+
+
+@router.get("/roster/filter-months")
+def get_roster_filter_months(year: int = None):
+    """
+    Get all months that have prod team roster data available, optionally filtered by year.
+
+    Query Parameters:
+        year: Optional year to filter months by
+
+    Returns:
+        {"months": [{"value": "January", "display": "January"}, ...]}
+    """
+    import calendar as _calendar
+    cache_key = generate_cascade_cache_key("cascade:roster_months", year=str(year) if year else "all")
+
+    cached_response = filters_cache.get(cache_key)
+    if cached_response is not None:
+        logger.debug("[Cascade] Returning cached roster months response")
+        return cached_response
+
+    try:
+        db_manager = core_utils.get_db_manager(ProdTeamRosterModel, limit=1, skip=0, select_columns=None)
+        months = db_manager.get_distinct_values("Month", year=year)
+        month_order = {m: i for i, m in enumerate(_calendar.month_name) if m}
+        months_sorted = sorted([m for m in months if m], key=lambda m: month_order.get(m, 13))
+        months_list = [{"value": m, "display": m} for m in months_sorted]
+        response = {"months": months_list}
+        filters_cache.set(cache_key, response)
+        logger.info(f"[Cascade] Roster filter months endpoint: {len(months_list)} months found")
+        return response
+    except Exception as e:
+        logger.error(f"[Cascade] Error in roster filter-months endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve available roster months")
+
+
+@router.get("/roster/filters")
+def get_roster_filters():
+    """
+    Get all available months and years for prod team roster data in a single call.
+
+    Returns:
+        {
+            "months": [{"value": "January", "display": "January"}, ...],
+            "years": [{"value": "2025", "display": "2025"}, ...]
+        }
+    """
+    import calendar as _calendar
+    cache_key = generate_cascade_cache_key("cascade:roster_filters")
+
+    cached_response = filters_cache.get(cache_key)
+    if cached_response is not None:
+        logger.debug("[Cascade] Returning cached roster filters response")
+        return cached_response
+
+    try:
+        db_manager = core_utils.get_db_manager(ProdTeamRosterModel, limit=1, skip=0, select_columns=None)
+
+        years = db_manager.get_distinct_values("Year")
+        years_list = [{"value": str(y), "display": str(y)} for y in sorted(years, reverse=True) if y is not None]
+
+        months = db_manager.get_distinct_values("Month")
+        month_order = {m: i for i, m in enumerate(_calendar.month_name) if m}
+        months_sorted = sorted([m for m in months if m], key=lambda m: month_order.get(m, 13))
+        months_list = [{"value": m, "display": m} for m in months_sorted]
+
+        response = {"months": months_list, "years": years_list}
+        filters_cache.set(cache_key, response)
+        logger.info(f"[Cascade] Roster filters endpoint: {len(months_list)} months, {len(years_list)} years found")
+        return response
+    except Exception as e:
+        logger.error(f"[Cascade] Error in roster filters endpoint: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to retrieve available roster filters")
 
 
 @router.get("/model_schema/{file_id}")
