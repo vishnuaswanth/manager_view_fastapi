@@ -429,9 +429,14 @@ class PreProcessing:
         """Processes the forecast DataFrame to ensure it has the correct columns and formats"""
         # Get the second level of the MultiIndex columns
         second_level = df.columns.get_level_values(1)
-        # Extract unique months in the order they appear in 'months'
-        unique_months = [m for m in self.abbr_to_full.values() if m in set(second_level)]
-        self.month_codes = {f"Month{i+1}":month  for i, month in enumerate(unique_months)}
+        # Extract unique months in calendar order, deduplicating abbr_to_full values
+        # (abbr_to_full maps both 'Sep' and 'Sept' to 'September', so without dedup
+        # 'September' would appear twice and create a spurious Month7 key).
+        _month_set = set(second_level)
+        unique_months = list(dict.fromkeys(
+            m for m in self.abbr_to_full.values() if m in _month_set
+        ))
+        self.month_codes = {f"Month{i+1}": month for i, month in enumerate(unique_months)}
 
 
         # df = pd.read_excel(path, header=list(range(header_rows)))
@@ -480,11 +485,42 @@ class PreProcessing:
 
         return df
 
-    def preprocess_forecast_df(self, df:pd.DataFrame) -> pd.DataFrame:
+    def preprocess_forecast_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = self._process_forecast_df(df)  # flattens MultiIndex, sets self.month_codes
+
+        # Name-based mapping — not positional — so column order of the MultiIndex doesn't matter.
+        # get_forecast_demand_from_db produces month-grouped columns; MAPPING is section-grouped.
+        # Positional assignment would put FTE_Required_April into Client_Forecast_Month2, etc.
+        month_name_to_key = {v: k for k, v in self.month_codes.items()}
+        _META_MAP = {
+            "Centene Capacity plan_Main LOB":     "Centene_Capacity_Plan_Main_LOB",
+            "Centene Capacity plan_State":        "Centene_Capacity_Plan_State",
+            "Centene Capacity plan_Case type":    "Centene_Capacity_Plan_Case_Type",
+            "Centene Capacity plan_Call Type ID": "Centene_Capacity_Plan_Call_Type_ID",
+            "Centene Capacity plan_Target CPH":   "Centene_Capacity_Plan_Target_CPH",
+        }
+        _SECTION_MAP = {
+            "Client Forecast": "Client_Forecast",
+            "FTE Required":    "FTE_Required",
+            "FTE Avail":       "FTE_Avail",
+            "Capacity":        "Capacity",
+        }
+        rename_dict = {}
+        for col in df.columns:
+            if col in _META_MAP:
+                rename_dict[col] = _META_MAP[col]
+            else:
+                for section_src, section_dst in _SECTION_MAP.items():
+                    if col.startswith(section_src + "_"):
+                        month_name = col[len(section_src) + 1:]
+                        m_key = month_name_to_key.get(month_name)
+                        if m_key:
+                            rename_dict[col] = f"{section_dst}_{m_key}"
+                        break
+        df = df.rename(columns=rename_dict)
+
         columns = self.MAPPING[self.file_id]
-        df = self._process_forecast_df(df)
-        df.columns = columns
-        return df
+        return df[columns]
 
     def preprocess_roster(self, df: pd.DataFrame) -> pd.DataFrame:
         expected = self.MAPPING["roster"]
