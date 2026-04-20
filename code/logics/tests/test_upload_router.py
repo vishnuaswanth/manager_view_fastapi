@@ -384,6 +384,102 @@ class TestAlteredForecastEndpoint:
                          or (c.args and len(c.args) > 1 and c.args[1] is True)]
         assert len(replace_calls) > 0, "save_to_db must be called with replace=True"
 
+    def test_column_mapping_routes_each_section_to_correct_db_column(self, client):
+        """
+        Excel flat headers (e.g. 'Client Forecast_April', 'FTE Required_May') must be
+        mapped to the correct DB columns by section AND by month position — not by
+        positional index.
+
+        Distinct sentinel values are assigned per (section, month) so that a
+        positional-assignment bug would produce the wrong value in a verifiable column.
+        """
+        c, mock_cu = client
+        mock_db = _make_mock_db_manager()
+        mock_cu.get_db_manager.return_value = mock_db
+
+        # month_codes: April=Month1 … September=Month6
+        month_codes = {
+            "Month1": "April", "Month2": "May", "Month3": "June",
+            "Month4": "July",  "Month5": "August", "Month6": "September",
+        }
+        months = list(month_codes.values())  # positional order
+
+        # Build a DataFrame exactly as _process_forecast produces after flattening
+        # a section-grouped 2-level header Excel.
+        # Use distinct sentinel values: CF section = 100s, FTE_Req = 200s,
+        # FTE_Avail = 300s, Capacity = 400s; month offset adds 1-6.
+        sections = [
+            ("Client Forecast",  100),
+            ("FTE Required",     200),
+            ("FTE Avail",        300),
+            ("Capacity",         400),
+        ]
+        row = {
+            "Centene Capacity plan_Main LOB": "Amisys Medicare",
+            "Centene Capacity plan_State": "TX",
+            "Centene Capacity plan_Case type": "FTC",
+            "Centene Capacity plan_Call Type ID": "amisys ftc",
+            "Centene Capacity plan_Target CPH": 50,
+        }
+        for section_name, base in sections:
+            for idx, month_name in enumerate(months, start=1):
+                row[f"{section_name}_{month_name}"] = base + idx
+
+        excel_df = pd.DataFrame([row])
+
+        forecast_cols = [
+            'Centene_Capacity_Plan_Main_LOB', 'Centene_Capacity_Plan_State',
+            'Centene_Capacity_Plan_Case_Type', 'Centene_Capacity_Plan_Call_Type_ID',
+            'Centene_Capacity_Plan_Target_CPH',
+            *[f'Client_Forecast_Month{i}' for i in range(1, 7)],
+            *[f'FTE_Required_Month{i}' for i in range(1, 7)],
+            *[f'FTE_Avail_Month{i}' for i in range(1, 7)],
+            *[f'Capacity_Month{i}' for i in range(1, 7)],
+        ]
+
+        with patch('code.api.routers.upload_router.PreProcessing') as MockPP, \
+             patch('code.api.routers.upload_router.invalidate_allocation') as mock_inv:
+            mock_pp = MagicMock()
+            mock_pp.get_month_year.return_value = {"Month": "March", "Year": "2026"}
+            mock_pp._process_forecast.return_value = excel_df
+            mock_pp.MAPPING = {"forecast": forecast_cols}
+            mock_pp.month_codes = month_codes
+            MockPP.return_value = mock_pp
+            mock_inv.return_value = {"success": True}
+
+            resp = self._post_altered(c, "forecast_March_2026.xlsx")
+
+        assert resp.status_code == 200
+
+        # Find the save_to_db call that received the forecast DataFrame
+        saved_df = None
+        for call_args in mock_db.save_to_db.call_args_list:
+            arg = call_args.args[0] if call_args.args else call_args.kwargs.get('df')
+            if isinstance(arg, pd.DataFrame) and 'Client_Forecast_Month1' in arg.columns:
+                saved_df = arg
+                break
+        assert saved_df is not None, "save_to_db was never called with a forecast DataFrame"
+
+        row_out = saved_df.iloc[0]
+
+        # Each section must contain its own sentinel base (100/200/300/400), not another section's
+        for m_idx in range(1, 7):
+            cf_val  = row_out[f'Client_Forecast_Month{m_idx}']
+            fte_val = row_out[f'FTE_Required_Month{m_idx}']
+            fav_val = row_out[f'FTE_Avail_Month{m_idx}']
+            cap_val = row_out[f'Capacity_Month{m_idx}']
+
+            assert 100 < cf_val  < 200, f"Client_Forecast_Month{m_idx}={cf_val} not in CF range (100–200)"
+            assert 200 < fte_val < 300, f"FTE_Required_Month{m_idx}={fte_val} not in FTE_Req range (200–300)"
+            assert 300 < fav_val < 400, f"FTE_Avail_Month{m_idx}={fav_val} not in FTE_Avail range (300–400)"
+            assert 400 < cap_val < 500, f"Capacity_Month{m_idx}={cap_val} not in Capacity range (400–500)"
+
+        # Month ordering: April → Month1, September → Month6
+        assert row_out['Client_Forecast_Month1'] == 101, "April CF should be 101"
+        assert row_out['Client_Forecast_Month6'] == 106, "September CF should be 106"
+        assert row_out['FTE_Required_Month1'] == 201, "April FTE_Req should be 201"
+        assert row_out['Capacity_Month6'] == 406, "September Capacity should be 406"
+
 
 # ─── Tests: get_forecast_demand_from_db ───────────────────────────────────────
 

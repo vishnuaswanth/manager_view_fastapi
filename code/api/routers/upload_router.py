@@ -139,25 +139,50 @@ async def upload_altered_forecast(
             )
 
         # Process forecast file with 2-level headers (downloaded format)
+        # After _process_forecast, columns are flat strings like "Client Forecast_April",
+        # "FTE Required_May", "Centene Capacity plan_Main LOB", etc.
         df = pre_processor._process_forecast(io.BytesIO(contents), header_rows=2)
 
+        # Map flat Excel column names to DB column names using month_codes (name-based, not positional)
+        month_name_to_key = {v: k for k, v in pre_processor.month_codes.items()}
+        _META_MAP = {
+            "Centene Capacity plan_Main LOB": "Centene_Capacity_Plan_Main_LOB",
+            "Centene Capacity plan_State": "Centene_Capacity_Plan_State",
+            "Centene Capacity plan_Case type": "Centene_Capacity_Plan_Case_Type",
+            "Centene Capacity plan_Call Type ID": "Centene_Capacity_Plan_Call_Type_ID",
+            "Centene Capacity plan_Target CPH": "Centene_Capacity_Plan_Target_CPH",
+        }
+        _SECTION_MAP = {
+            "Client Forecast": "Client_Forecast",
+            "FTE Required": "FTE_Required",
+            "FTE Avail": "FTE_Avail",
+            "Capacity": "Capacity",
+        }
+        rename_dict = {}
+        for col in df.columns:
+            if col in _META_MAP:
+                rename_dict[col] = _META_MAP[col]
+            else:
+                for section_src, section_dst in _SECTION_MAP.items():
+                    if col.startswith(section_src + "_"):
+                        month_name = col[len(section_src) + 1:]
+                        m_key = month_name_to_key.get(month_name)
+                        if m_key:
+                            rename_dict[col] = f"{section_dst}_{m_key}"
+                        break
+        df = df.rename(columns=rename_dict)
 
-
-        # Assign standard column names from MAPPING
         columns = pre_processor.MAPPING['forecast']
-        if len(df.columns) != len(columns):
+        missing_cols = [c for c in columns if c not in df.columns]
+        if missing_cols:
             raise HTTPException(
                 status_code=400,
                 detail=error_response(
-                    f"Column count mismatch. Expected {len(columns)} columns, got {len(df.columns)}",
-                    {
-                        "expected": len(columns),
-                        "actual": len(df.columns),
-                        "hint": "Ensure the file is in the correct downloaded forecast format"
-                    }
+                    f"Missing expected columns after mapping: {missing_cols}",
+                    {"hint": "Ensure the file is in the correct downloaded forecast format"}
                 )
             )
-        df.columns = columns
+        df = df[columns]
 
         # Remove totals row if present (detect "Total" in first column)
         if not df.empty and df.iloc[:, 0].dtype == object:
