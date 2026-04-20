@@ -232,13 +232,15 @@ def _build_multiindex_output(demand_df: pd.DataFrame, month_codes: dict) -> pd.D
 
     month_tuples = []
     month_flat = []
-    for m_key, month_name in month_codes.items():
-        for section, prefix in [
-            ("Client Forecast", "Client_Forecast"),
-            ("FTE Required", "FTE_Required"),
-            ("FTE Avail", "FTE_Avail"),
-            ("Capacity", "Capacity"),
-        ]:
+    # Sections outer, months inner → section-grouped columns so Excel merges
+    # each section header across all 6 months (Client Forecast ×6, FTE Required ×6, …)
+    for section, prefix in [
+        ("Client Forecast", "Client_Forecast"),
+        ("FTE Required", "FTE_Required"),
+        ("FTE Avail", "FTE_Avail"),
+        ("Capacity", "Capacity"),
+    ]:
+        for m_key, month_name in month_codes.items():
             month_tuples.append((section, month_name))
             month_flat.append(f"{prefix}_{m_key}")
 
