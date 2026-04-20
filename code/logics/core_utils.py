@@ -522,64 +522,180 @@ class PreProcessing:
         """
         Parse 'Amisys Aligned Dual State Level' sheet into normalized flat DataFrames.
 
-        Medicare section (col6=Area) and Medicaid section (col23=Area) each have
-        Global/Domestic rows per state. Returns up to 4 DataFrames keyed by LOB name.
+        Dynamically discovers:
+        - Data start row by finding the row that contains 'Month' and 'State' labels
+        - Medicare / Medicaid section boundaries by scanning header rows
+        - Work type columns (FTC, ADJ, COR, OMN, APP, ...) by name — picks up new
+          types automatically and is unaffected by column insertions/deletions
 
-        Columns in each returned DF: Month, State, Area, <case_type_1>, ..., <case_type_5>
+        Columns in each returned DF: Month, State, Area, <case_type_1>, ...
+        Case types are normalised to "<PREFIX> MCARE" or "<PREFIX> MCAID".
         """
-        df_raw = pd.read_excel(
+        # Work-type keyword prefixes to recognise in header cells
+        _WT_PREFIXES = ('ftc', 'adj', 'cor', 'omn', 'app')
+
+        def _normalize_case_type(raw: str, section: str) -> str:
+            """'FTC-Medicare Aligned Duals' → 'FTC MCARE', etc."""
+            suffix = 'MCARE' if 'medicare' in section.lower() else 'MCAID'
+            # prefix = first token before '-' or ' '
+            prefix = raw.strip().upper().replace('-', ' ').split()[0]
+            return f'{prefix} {suffix}'
+
+        # ── Read the entire sheet without skipping any rows ───────────────────
+        df_full = pd.read_excel(
             file_stream,
             sheet_name='Amisys Aligned Dual State Level',
-            header=None, skiprows=5, dtype=str
+            header=None, dtype=str
         )
 
-        mcare_types = [
-            'FTC-Medicare Aligned Duals', 'ADJ-Medicare Aligned Duals',
-            'COR-Medicare Aligned Duals', 'OMN-Medicare Aligned Duals',
-            'APP-Medicare Aligned Duals'
-        ]
-        mcaid_types = [
-            'FTC-Medicaid Aligned Duals', 'ADJ-Medicaid Aligned Duals',
-            'COR-Medicaid Aligned Duals', 'OMN-Medicaid Aligned Duals',
-            'APP-Medicaid Aligned Duals'
-        ]
+        if df_full.empty:
+            return {}
 
-        mcare_col_map = {
-            2: 'Month', 4: 'State', 6: 'Area',
-            7: mcare_types[0], 10: mcare_types[1],
-            13: mcare_types[2], 16: mcare_types[3], 19: mcare_types[4]
-        }
-        mcaid_col_map = {
-            2: 'Month', 4: 'State', 23: 'Area',
-            24: mcaid_types[0], 27: mcaid_types[1],
-            30: mcaid_types[2], 33: mcaid_types[3], 36: mcaid_types[4]
-        }
+        total_rows, total_cols = df_full.shape
 
-        def _build_section(col_map: dict) -> pd.DataFrame:
-            available_cols = [c for c in sorted(col_map.keys()) if c < len(df_raw.columns)]
-            sub = df_raw.iloc[:, available_cols].copy()
-            sub.columns = [col_map[c] for c in available_cols]
+        # ── 1. Find anchor row: last header row containing 'Month' + 'State' ──
+        # Data starts on the row immediately after this one.
+        anchor_row_idx = None
+        for i in range(min(10, total_rows)):
+            row_lower = [str(v).strip().lower() for v in df_full.iloc[i]]
+            if 'month' in row_lower and 'state' in row_lower:
+                anchor_row_idx = i
+                break
+
+        if anchor_row_idx is None:
+            logger.warning(
+                "Aligned Dual sheet: could not detect anchor row with 'Month'/'State' — "
+                "falling back to skiprows=5"
+            )
+            anchor_row_idx = 4
+        data_start_row = anchor_row_idx + 1
+
+        anchor_row = [str(v).strip().lower() for v in df_full.iloc[anchor_row_idx]]
+        month_col = next((j for j, v in enumerate(anchor_row) if v == 'month'), None)
+        state_col = next((j for j, v in enumerate(anchor_row) if v == 'state'), None)
+        # All 'area' columns (one per section)
+        area_cols = [j for j, v in enumerate(anchor_row) if v == 'area']
+
+        if month_col is None or state_col is None:
+            raise ValueError(
+                "Aligned Dual sheet: 'Month' and/or 'State' columns not found in "
+                f"header row {anchor_row_idx}."
+            )
+
+        # ── 2. Find section boundaries (Medicare / Medicaid) ─────────────────
+        # Scan ALL header rows for cells containing 'medicare'/'medicaid'.
+        section_positions: Dict[str, int] = {}  # section_name -> leftmost col
+        for i in range(data_start_row):
+            for j in range(total_cols):
+                cell = str(df_full.iloc[i, j]).strip().lower()
+                if not cell or cell == 'nan':
+                    continue
+                if 'medicare' in cell and 'medicaid' not in cell and 'Medicare' not in section_positions:
+                    section_positions['Medicare'] = j
+                elif 'medicaid' in cell and 'Medicaid' not in section_positions:
+                    section_positions['Medicaid'] = j
+
+        if not section_positions:
+            raise ValueError(
+                "Aligned Dual sheet: could not find Medicare/Medicaid section headers."
+            )
+
+        # Build column ranges per section (each section ends where the next begins)
+        sorted_sections = sorted(section_positions.items(), key=lambda x: x[1])
+        section_col_ranges: Dict[str, tuple] = {}
+        for idx, (sec_name, sec_start) in enumerate(sorted_sections):
+            sec_end = sorted_sections[idx + 1][1] if idx + 1 < len(sorted_sections) else total_cols
+            section_col_ranges[sec_name] = (sec_start, sec_end)
+
+        # ── 3. Find work-type header row ──────────────────────────────────────
+        # The row with the most cells that start with a known prefix.
+        wt_row_idx = None
+        best_count = 0
+        for i in range(data_start_row):
+            row_vals = [str(v).strip().lower() for v in df_full.iloc[i]]
+            count = sum(1 for v in row_vals if any(v.startswith(kw) for kw in _WT_PREFIXES))
+            if count > best_count:
+                best_count = count
+                wt_row_idx = i
+
+        if wt_row_idx is None or best_count < 1:
+            raise ValueError(
+                "Aligned Dual sheet: could not find a header row containing work-type "
+                f"names ({', '.join(_WT_PREFIXES).upper()}, ...)."
+            )
+
+        wt_row_vals = [str(v).strip() for v in df_full.iloc[wt_row_idx]]
+
+        # ── 4. Build a DataFrame for each section ────────────────────────────
+        df_data = df_full.iloc[data_start_row:].reset_index(drop=True)
+
+        def _build_section(sec_name: str, col_start: int, col_end: int) -> pd.DataFrame:
+            # Area column for this section: first 'area' within the section range
+            area_col = next((j for j in area_cols if col_start <= j < col_end), None)
+
+            # Work-type columns within this section
+            # Keep only the FIRST column for each normalized name to avoid
+            # duplicates when both forecast and capacity columns share a prefix
+            # (e.g. 'FTC-Medicare Aligned Duals' and 'FTC-Medicare Aligned Duals Capacity'
+            # both normalize to 'FTC MCARE').
+            work_type_cols: Dict[int, str] = {}
+            _seen_wt: set = set()
+            for j in range(col_start, min(col_end, len(wt_row_vals))):
+                raw = wt_row_vals[j]
+                if not raw or raw.lower() == 'nan':
+                    continue
+                if any(raw.lower().startswith(kw) for kw in _WT_PREFIXES):
+                    normalized = _normalize_case_type(raw, sec_name)
+                    if normalized not in _seen_wt:
+                        work_type_cols[j] = normalized
+                        _seen_wt.add(normalized)
+
+            if not work_type_cols:
+                logger.warning(f"Aligned Dual sheet: no work-type columns found for section '{sec_name}'")
+                return pd.DataFrame()
+
+            col_map: Dict[int, str] = {month_col: 'Month', state_col: 'State'}
+            if area_col is not None:
+                col_map[area_col] = 'Area'
+            col_map.update(work_type_cols)
+
+            available = [c for c in sorted(col_map.keys()) if c < total_cols]
+            sub = df_data.iloc[:, available].copy()
+            sub.columns = [col_map[c] for c in available]
+
+            # Drop rows without State/Month
+            sub = sub[sub['State'].astype(str).str.strip().str.lower().isin(
+                ['', 'nan']) == False]
+            sub = sub[sub['Month'].astype(str).str.strip().str.lower().isin(
+                ['', 'nan']) == False]
             sub = sub.dropna(subset=['State', 'Month'])
-            num_cols = [v for k, v in col_map.items() if v not in ('Month', 'State', 'Area') and k in available_cols]
-            for c in num_cols:
-                if c in sub.columns:
-                    sub[c] = pd.to_numeric(sub[c], errors='coerce').fillna(0)
+
+            # Numeric conversion for work-type value columns
+            for col_name in work_type_cols.values():
+                if col_name in sub.columns:
+                    sub[col_name] = pd.to_numeric(sub[col_name], errors='coerce').fillna(0)
+
             return sub.reset_index(drop=True)
 
-        def _split_by_area(df: pd.DataFrame, section: str) -> dict:
-            result = {}
-            if df.empty or 'Area' not in df.columns:
-                return result
+        # ── 5. Split each section by Global / Domestic area ──────────────────
+        parts: Dict[str, pd.DataFrame] = {}
+        for sec_name, (col_start, col_end) in section_col_ranges.items():
+            sec_df = _build_section(sec_name, col_start, col_end)
+            if sec_df.empty or 'Area' not in sec_df.columns:
+                logger.warning(f"Aligned Dual sheet: no data produced for section '{sec_name}'")
+                continue
             for area in ['Global', 'Domestic']:
-                mask = df['Area'].str.strip().str.lower() == area.lower()
-                subset = df[mask].reset_index(drop=True)
+                mask = sec_df['Area'].astype(str).str.strip().str.lower() == area.lower()
+                subset = sec_df[mask].reset_index(drop=True)
                 if not subset.empty:
-                    result[f'AMISYS Aligned Dual {section} {area}'] = subset
-            return result
+                    parts[f'AMISYS Aligned Dual {sec_name} {area}'] = subset
 
-        parts = {}
-        parts.update(_split_by_area(_build_section(mcare_col_map), 'Medicare'))
-        parts.update(_split_by_area(_build_section(mcaid_col_map), 'Medicaid'))
+        logger.info(
+            f"Aligned Dual sheet parsed dynamically: "
+            f"anchor_row={anchor_row_idx}, data_start={data_start_row}, "
+            f"sections={list(section_col_ranges.keys())}, "
+            f"wt_row={wt_row_idx}, segments={list(parts.keys())}"
+        )
         return parts
 
     @staticmethod
@@ -591,7 +707,12 @@ class PreProcessing:
         skiprows: int = 1,
         skipfooter: int = 0,
     ) -> pd.DataFrame:
-        """Read an Excel sheet with a multi-row header and normalize 'Unnamed'."""
+        """Read an Excel sheet with a multi-row header and normalize 'Unnamed'.
+
+        After reading, drops:
+        - Columns where every data cell is NaN (fully empty columns)
+        - Rows where every data cell is NaN (fully empty rows, e.g. spacer rows)
+        """
         headers = list(range(0, header_depth))
         df = pd.read_excel(
             file_stream, sheet_name=sheet, header=headers, dtype=str,
@@ -601,6 +722,9 @@ class PreProcessing:
             tuple("" if "Unnamed" in str(lvl) else lvl for lvl in tup)
             for tup in df.columns
         )
+        # Drop fully-empty columns and rows (spacers / totals that weren't caught by skipfooter)
+        df = df.dropna(how='all', axis=1)
+        df = df.dropna(how='all', axis=0).reset_index(drop=True)
         return df
 
     def process_forecast_file(
@@ -697,6 +821,8 @@ class PreProcessing:
                 )
             state_col = mmp_df[("State", "State")]
             state_series = state_col if isinstance(state_col, pd.Series) else state_col.iloc[:, 0]
+            # Strip whitespace and treat blank/'nan' strings as missing before matching
+            state_series = state_series.astype(str).str.strip().replace({'nan': pd.NA, '': pd.NA})
             domestic_mask = state_series.isin(domestic_states)
             global_mask = state_series.isin(global_states)
             mmp_parts = {
@@ -911,7 +1037,7 @@ class PreProcessing:
             except Exception:
                 val = 0
 
-            row[f'Client_Forecast_{m_key}'] = int(round(float(val))) if val else 0
+            row[f'Client_Forecast_{m_key}'] = int(round(float(val))) if val and pd.notna(val) else 0
             row[f'FTE_Required_{m_key}'] = 0
             row[f'FTE_Avail_{m_key}'] = 0
             row[f'Capacity_{m_key}'] = 0
@@ -925,14 +1051,26 @@ class PreProcessing:
     ) -> list:
         rows = []
         try:
+            # Normalize MultiIndex columns: if level 1 is blank (empty string from Unnamed
+            # normalization — common when Excel has merged/single-row headers), mirror
+            # level 0 into level 1 so downstream checks like ('State', 'State') work
+            # regardless of whether the file has 1 or 2 filled header rows.
+            df = df.copy()
+            df.columns = pd.MultiIndex.from_tuples(
+                (str(c[0]).strip(), str(c[0]).strip()) if len(c) >= 2 and not str(c[1]).strip() else c
+                for c in df.columns
+            )
+
             work_types = get_columns_between_column_names(df, 0, 'Mo St', 'Year')
             if ('State', 'State') not in df.columns:
+                logger.warning(f"MMP sheet for '{lob_name}': ('State','State') column not found after normalization. Columns: {list(df.columns)[:10]}")
                 return rows
             states = list(set(
                 s for s in df[('State', 'State')].dropna()
-                if s != 0 and isinstance(s, str)
+                if s != 0 and isinstance(s, str) and s.strip() not in ('', 'nan')
             ))
             if not work_types or not states:
+                logger.warning(f"MMP sheet for '{lob_name}': work_types={work_types}, states={states}")
                 return rows
             for state in states:
                 for work_type in work_types:
@@ -942,7 +1080,7 @@ class PreProcessing:
                         target_cph_lookup=target_cph_lookup, sheet_type='mmp'
                     ))
         except Exception as e:
-            logger.error(f"Error extracting MMP demand for {lob_name}: {e}")
+            logger.error(f"Error extracting MMP demand for {lob_name}: {e}", exc_info=True)
         return rows
 
     def _extract_nonmmp_demand(
@@ -960,7 +1098,10 @@ class PreProcessing:
             ))
             if ('', '', 'State') not in df.columns:
                 return rows
-            states = list(set(df[('', '', 'State')].dropna()))
+            states = [
+                s for s in df[('', '', 'State')].dropna().unique()
+                if isinstance(s, str) and s.strip() not in ('', 'nan')
+            ]
             if not work_types or not states:
                 return rows
             for state in states:
