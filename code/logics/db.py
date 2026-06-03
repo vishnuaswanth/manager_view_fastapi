@@ -969,6 +969,53 @@ class DBManager:
             session.close()
             logger.debug("[DBManager] Session closed.")
 
+    def upsert_forecast_months(self, forecast_data: dict) -> None:
+        """
+        Upsert a ForecastMonthsModel record by UploadedFile (filename).
+        - If a record with the same UploadedFile exists: UPDATE Month1-6, CreatedBy, CreatedDateTime.
+        - If no record exists: INSERT a new row.
+
+        Args:
+            forecast_data: dict with keys Month1..Month6, UploadedFile, CreatedBy.
+        """
+        session = self.SessionLocal()
+        try:
+            filename = forecast_data["UploadedFile"]
+            existing = session.query(ForecastMonthsModel).filter(
+                ForecastMonthsModel.UploadedFile == filename
+            ).order_by(
+                ForecastMonthsModel.CreatedDateTime.desc()
+            ).first()
+
+            if existing:
+                for i in range(1, 7):
+                    setattr(existing, f"Month{i}", forecast_data[f"Month{i}"])
+                existing.CreatedBy = forecast_data["CreatedBy"]
+                existing.CreatedDateTime = datetime.now()
+                logger.info(f"[DBManager] Updated ForecastMonthsModel for file: {filename}")
+            else:
+                new_record = ForecastMonthsModel(
+                    Month1=forecast_data["Month1"],
+                    Month2=forecast_data["Month2"],
+                    Month3=forecast_data["Month3"],
+                    Month4=forecast_data["Month4"],
+                    Month5=forecast_data["Month5"],
+                    Month6=forecast_data["Month6"],
+                    UploadedFile=filename,
+                    CreatedBy=forecast_data["CreatedBy"],
+                    CreatedDateTime=datetime.now(),
+                )
+                session.add(new_record)
+                logger.info(f"[DBManager] Inserted new ForecastMonthsModel for file: {filename}")
+
+            session.commit()
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"[DBManager] upsert_forecast_months failed. Rolled back. Error: {e}")
+            raise Exception(f"Error upserting ForecastMonthsModel: {str(e)}") from e
+        finally:
+            session.close()
+
     def bulk_save_raw_data_with_history(
         self,
         bulk_data: List[Dict],  # List of {df, summary_type, month, year, created_by, updated_by}

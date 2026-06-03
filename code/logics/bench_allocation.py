@@ -564,6 +564,8 @@ def get_month_mappings_from_db(
         with db_manager.SessionLocal() as session:
             months_record = session.query(ForecastMonthsModel).filter(
                 ForecastMonthsModel.UploadedFile == uploaded_file
+            ).order_by(
+                ForecastMonthsModel.CreatedDateTime.desc()
             ).first()
 
             if not months_record:
@@ -1492,6 +1494,8 @@ class BenchAllocator:
         with month_db.SessionLocal() as session:
             month_record = session.query(ForecastMonthsModel).filter(
                 ForecastMonthsModel.UploadedFile == self.uploaded_file
+            ).order_by(
+                ForecastMonthsModel.CreatedDateTime.desc()
             ).first()
 
             if not month_record:

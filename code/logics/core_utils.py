@@ -798,13 +798,13 @@ class PreProcessing:
         aligned_dual_sheet = "Amisys Aligned Dual State Level"
         summary_sheet = "Forecast v Capacity Summary"
 
-        # Discover available sheets — warn about missing ones, never hard-fail
+        # Discover available sheets
         xl = pd.ExcelFile(file_stream)
         available = set(xl.sheet_names)
-        all_known = [non_mmp_domestic_sheet, non_mmp_global_sheet, mmp_sheet, summary_sheet, aligned_dual_sheet]
-        missing = [s for s in all_known if s not in available]
-        if missing:
-            logger.warning(f"Sheet(s) not found in file (will be skipped): {', '.join(missing)}")
+        optional_sheets = [non_mmp_domestic_sheet, non_mmp_global_sheet, mmp_sheet, aligned_dual_sheet]
+        missing_optional = [s for s in optional_sheets if s not in available]
+        if missing_optional:
+            logger.warning(f"Optional sheet(s) not found in file (will be skipped): {', '.join(missing_optional)}")
 
         dfs = {}
 
@@ -873,39 +873,44 @@ class PreProcessing:
             logger.warning(f"Sheet '{mmp_sheet}' not found in file — skipping")
         dfs["medicare_medicaid_mmp"] = mmp_parts
 
-        # ── Summary sheet (missing = skip; present but bad = error) ───────────
+        # ── Summary sheet (missing = error; present but bad = error) ─────────
         dfs["medicare_medicaid_summary"] = {}
-        if summary_sheet in available:
-            try:
-                dfs["medicare_medicaid_summary"] = extract_summary_tables(file_stream)
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Failed to parse summary sheet '{summary_sheet}': {e}", exc_info=True)
+        if summary_sheet not in available:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Required sheet '{summary_sheet}' is missing from the uploaded file. "
+                    f"Please ensure the file contains this sheet before uploading."
+                )
+            )
+        try:
+            dfs["medicare_medicaid_summary"] = extract_summary_tables(file_stream)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to parse summary sheet '{summary_sheet}': {e}", exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Sheet '{summary_sheet}' could not be parsed. "
+                    f"Please verify the sheet layout has not changed (table headers, column structure). Error: {e}"
+                )
+            )
+        logger.info(
+            f"Parsed summary sheet '{summary_sheet}': "
+            f"{len(dfs['medicare_medicaid_summary'])} LOB table(s): "
+            f"{', '.join(dfs['medicare_medicaid_summary'].keys())}"
+        )
+        for safe_filename in dfs["medicare_medicaid_summary"].keys():
+            lob_components = parse_main_lob(safe_filename)
+            if lob_components.get("platform") is None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Sheet '{summary_sheet}' could not be parsed. "
-                        f"Please verify the sheet layout has not changed (table headers, column structure). Error: {e}"
+                        f"Could not determine platform (Amisys/Facets/Xcelys) for table '{safe_filename}' "
+                        f"in sheet '{summary_sheet}'. Please check the table header name."
                     )
                 )
-            logger.info(
-                f"Parsed summary sheet '{summary_sheet}': "
-                f"{len(dfs['medicare_medicaid_summary'])} LOB table(s): "
-                f"{', '.join(dfs['medicare_medicaid_summary'].keys())}"
-            )
-            for safe_filename in dfs["medicare_medicaid_summary"].keys():
-                lob_components = parse_main_lob(safe_filename)
-                if lob_components.get("platform") is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Could not determine platform (Amisys/Facets/Xcelys) for table '{safe_filename}' "
-                            f"in sheet '{summary_sheet}'. Please check the table header name."
-                        )
-                    )
-        else:
-            logger.warning(f"Sheet '{summary_sheet}' not found in file — summary LOBs will be skipped")
 
         # ── Aligned Dual sheet (missing = skip; present but bad = error) ──────
         dfs["medicare_medicaid_aligned_dual"] = {}
@@ -1345,8 +1350,15 @@ class PostProcessing:
             return {}
         filename = data['records'][0]['UploadedFile']
         db_manager = self.core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
-        tabs = db_manager.search_db(['UploadedFile'], [filename])
-        tab_months = {k:v for k, v in tabs["records"][0].items() if k not in {'CreatedBy', 'id', 'CreatedDateTime', 'UploadedFile'}}
+        with db_manager.SessionLocal() as session:
+            record = session.query(ForecastMonthsModel).filter(
+                ForecastMonthsModel.UploadedFile == filename
+            ).order_by(
+                ForecastMonthsModel.CreatedDateTime.desc()
+            ).first()
+        if not record:
+            return {}
+        tab_months = {f"Month{i}": getattr(record, f"Month{i}") for i in range(1, 7)}
         return tab_months
 
     def forecast_columns(self, forecast_month, forecast_year):

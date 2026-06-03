@@ -209,8 +209,7 @@ async def upload_altered_forecast(
         forecast_meta = pre_processor.month_codes
         forecast_meta["UploadedFile"] = file.filename
         forecast_meta["CreatedBy"] = user
-        forecast_df = pd.DataFrame([forecast_meta])
-        db_manager_forecast.save_to_db(forecast_df)
+        db_manager_forecast.upsert_forecast_months(forecast_meta)
 
         # Invalidate all forecast-related caches
         invalidate_forecast_cache(month_year["Month"], int(month_year["Year"]))
@@ -389,8 +388,7 @@ async def upload_file(
             forecast_meta = pre_processor.month_codes
             forecast_meta["UploadedFile"] = file.filename
             forecast_meta["CreatedBy"] = user
-            forecast_df = pd.DataFrame([forecast_meta])
-            db_manager_forecast.save_to_db(forecast_df)
+            db_manager_forecast.upsert_forecast_months(forecast_meta)
         except HTTPException:
             raise  # Re-raise with original details
         except Exception as e:
