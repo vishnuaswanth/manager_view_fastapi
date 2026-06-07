@@ -472,6 +472,71 @@ def delete_target_cph_configuration(config_id: int) -> Tuple[bool, str]:
         return False, error_msg
 
 
+def upsert_target_cph_configuration(
+    main_lob: str,
+    case_type: str,
+    target_cph: float,
+    updated_by: str = "system"
+) -> None:
+    """
+    Insert or update a Target CPH record.
+
+    If a record matching (MainLOB, CaseType) already exists:
+      - Updates TargetCPH if the value differs (logs the change).
+      - No-ops if the value is the same.
+    If no record exists: inserts a new one.
+
+    Args:
+        main_lob: Main line of business
+        case_type: Case type identifier
+        target_cph: Target CPH value from the forecast sheet (takes priority over DB)
+        updated_by: Actor label for audit columns
+    """
+    try:
+        core_utils = get_core_utils()
+        db_manager = core_utils.get_db_manager(TargetCPHModel, limit=1, skip=0, select_columns=None)
+
+        with db_manager.SessionLocal() as session:
+            from sqlalchemy import func
+            existing = session.query(TargetCPHModel).filter(
+                and_(
+                    func.lower(func.trim(TargetCPHModel.MainLOB)) == main_lob.strip().lower(),
+                    func.lower(func.trim(TargetCPHModel.CaseType)) == case_type.strip().lower(),
+                )
+            ).first()
+
+            if existing is None:
+                new_record = TargetCPHModel(
+                    MainLOB=main_lob.strip(),
+                    CaseType=case_type.strip(),
+                    TargetCPH=float(target_cph),
+                    CreatedBy=updated_by,
+                    UpdatedBy=updated_by,
+                )
+                session.add(new_record)
+                session.commit()
+                logger.info(
+                    f"Target CPH inserted: MainLOB='{main_lob}', CaseType='{case_type}', "
+                    f"TargetCPH={target_cph} (source: forecast sheet)"
+                )
+            elif abs(float(existing.TargetCPH) - float(target_cph)) > 0.001:
+                old_val = existing.TargetCPH
+                existing.TargetCPH = float(target_cph)
+                existing.UpdatedBy = updated_by
+                session.commit()
+                logger.info(
+                    f"Target CPH updated: MainLOB='{main_lob}', CaseType='{case_type}', "
+                    f"{old_val} → {target_cph} (source: forecast sheet)"
+                )
+            # else: values match — no-op
+
+    except Exception as e:
+        logger.error(
+            f"Error upserting Target CPH (MainLOB='{main_lob}', CaseType='{case_type}'): {e}",
+            exc_info=True,
+        )
+
+
 def get_target_cph_count() -> int:
     """
     Get the total count of Target CPH configurations.

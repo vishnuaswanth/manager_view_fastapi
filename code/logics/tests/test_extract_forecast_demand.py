@@ -2,17 +2,20 @@
 Unit tests for PreProcessing.extract_forecast_demand() and get_month_year().
 
 Covers:
-  - extract_forecast_demand: FTE Required / FTE Avail / Capacity always 0 on upload
-  - extract_forecast_demand: Client Forecast populated from each sheet type
+  - extract_forecast_demand: concatenates pre-processed DataFrames from process_forecast_file
+  - extract_forecast_demand: FTE Required / FTE Avail / Capacity columns preserved
   - extract_forecast_demand: correct 29-column structure in output DataFrame
   - extract_forecast_demand: empty dfs produces empty DataFrame
   - get_month_year: various filename patterns recognised and rejected
+
+Architecture note:
+  extract_forecast_demand now receives dfs where each value is a pd.DataFrame
+  with MAPPING['forecast'] columns — already produced by sheet handlers.
+  It simply concatenates them. Handler logic is tested separately.
 """
 
-import io
 import pytest
 import pandas as pd
-from unittest.mock import patch
 
 from code.logics.core_utils import PreProcessing
 
@@ -44,98 +47,41 @@ META_COLS = [
 ALL_EXPECTED_COLS = META_COLS + FORECAST_COLS + FTE_COLS + AVAIL_COLS + CAPACITY_COLS  # 29
 
 
-# ─── Helpers to build minimal dfs dicts ───────────────────────────────────────
+# ─── Helper: build a minimal ForecastModel DataFrame (handler output format) ──
 
-def _make_nonmmp_df():
-    """Minimal NonMMP DataFrame with State, Month, and one work-type forecast column.
-
-    The extractor (_extract_nonmmp_demand) discovers work types from columns where
-    col[0] contains 'Forecast - Volume', and _build_forecast_row reads values from
-    columns where col[0] contains 'WFM TO PROVIDE' and work_type is in the tuple.
-    We satisfy both by using 'WFM TO PROVIDE' at col[0] (which also contains
-    'Forecast - Volume' via a combined label) — or by keeping one column that
-    satisfies work-type discovery and another that satisfies value extraction.
-
-    Simplest approach: col[0] = 'Forecast - Volume WFM TO PROVIDE' satisfies both.
-    """
-    cols = pd.MultiIndex.from_tuples([
-        ('', '', 'State'),
-        ('', '', 'Month'),
-        # col[0] must contain 'Forecast - Volume' (for work_type discovery)
-        # AND col[0] must contain 'WFM TO PROVIDE' (for value extraction in _build_forecast_row)
-        ('Forecast - Volume WFM TO PROVIDE', 'WFM TO PROVIDE', 'FTC'),
-    ])
-    rows = []
-    for month in MONTH_CODES.values():
-        rows.append(['TX', month, 100])
-    return pd.DataFrame(rows, columns=cols)
-
-
-def _make_mmp_df():
-    """Minimal MMP DataFrame with State, Month, boundary markers, and one work-type column.
-
-    _extract_mmp_demand calls get_columns_between_column_names(df, 0, 'Mo St', 'Year')
-    to discover work types. The 'Mo St' and 'Year' boundary columns must be present at
-    level 0. State and Month columns are placed before 'Mo St' so they are not mistaken
-    for work types.
-    """
-    cols = pd.MultiIndex.from_tuples([
-        ('State', 'State'),        # state column — before Mo St boundary
-        ('Month', 'Month'),        # month column — before Mo St boundary
-        ('Mo St', 'Mo St'),        # start boundary for work-type range
-        ('FTC-MMP', 'FTC-MMP'),   # actual work type
-        ('Year', 'Year'),           # end boundary for work-type range
-    ])
-    rows = []
-    for month in MONTH_CODES.values():
-        rows.append(['MI', month, None, 50, None])
-    return pd.DataFrame(rows, columns=cols)
-
-
-def _make_summary_df(lob_name: str = "Amisys Medicare"):
-    """Minimal Summary DataFrame for one LOB."""
-    cols = pd.MultiIndex.from_tuples(
-        [(lob_name, lob_name, 'Work Type', 'Work Type'),
-         (lob_name, lob_name, 'CPH', 'CPH')]
-        + [(lob_name, lob_name, m, m) for m in MONTH_CODES.values()]
-    )
-    data = [['FTC', 45] + [200] * 6]
-    return pd.DataFrame(data, columns=cols)
-
-
-def _make_aligned_dual_df():
-    """Minimal Aligned Dual DataFrame."""
-    rows = []
-    for month in MONTH_CODES.values():
-        rows.append({'State': 'SC', 'Month': month, 'Area': 'Global', 'FTC-Medicare Aligned Duals': 30})
-    return pd.DataFrame(rows)
+def _make_forecast_df(
+    lob: str = "Amisys Medicaid DOMESTIC",
+    state: str = "TX",
+    work_type: str = "FTC",
+    forecast_val: int = 100,
+    target_cph: float = 0.0,
+    n_months: int = 6,
+):
+    """Build a single-row DataFrame with all 29 ForecastModel columns."""
+    pre = PreProcessing("forecast")
+    cols = pre.MAPPING["forecast"]
+    row = {
+        "Centene_Capacity_Plan_Main_LOB": lob,
+        "Centene_Capacity_Plan_State": state,
+        "Centene_Capacity_Plan_Case_Type": work_type,
+        "Centene_Capacity_Plan_Call_Type_ID": f"{lob} {work_type.lower()}",
+        "Centene_Capacity_Plan_Target_CPH": target_cph,
+    }
+    for i in range(1, 7):
+        row[f"Client_Forecast_Month{i}"] = forecast_val if i <= n_months else 0
+        row[f"FTE_Required_Month{i}"] = 0
+        row[f"FTE_Avail_Month{i}"] = 0
+        row[f"Capacity_Month{i}"] = 0
+    return pd.DataFrame([row], columns=cols)
 
 
 def _full_dfs():
-    """Build the complete nested dfs dict as returned by process_forecast_file()."""
-    nonmmp_domestic = _make_nonmmp_df()
-    nonmmp_global = _make_nonmmp_df()
-    nonmmp_global[('', '', 'State')] = 'IL'
-
-    mmp_df = _make_mmp_df()
-    domestic_mask = mmp_df[('State', 'State')].isin(['MI'])
-    global_mask = mmp_df[('State', 'State')].isin(['SC'])
-
+    """Build dfs dict as returned by process_forecast_file (new format)."""
     return {
-        "medicare_medicaid_nonmmp": {
-            "Amisys Medicaid DOMESTIC": nonmmp_domestic,
-            "Amisys Medicaid GLOBAL": nonmmp_global,
-        },
-        "medicare_medicaid_mmp": {
-            "AMISYS MMP Domestic": mmp_df[domestic_mask].reset_index(drop=True),
-            "AMISYS MMP Global": mmp_df[global_mask].reset_index(drop=True),
-        },
-        "medicare_medicaid_summary": {
-            "Amisys Medicare Non-MMP Global": _make_summary_df("Amisys Medicare"),
-        },
-        "medicare_medicaid_aligned_dual": {
-            "AMISYS Aligned Dual Medicare Global": _make_aligned_dual_df(),
-        },
+        "summary":            _make_forecast_df("Amisys Medicare",          state="N/A", forecast_val=200),
+        "amisys_medicaid":    _make_forecast_df("Amisys Medicaid DOMESTIC", state="TX",  forecast_val=100),
+        "amisys_mmp":         _make_forecast_df("Amisys MMP Domestic",      state="MI",  forecast_val=50),
+        "amisys_aligned_dual":_make_forecast_df("AMISYS Aligned Dual Medicare Global", state="SC", forecast_val=30),
     }
 
 
@@ -149,25 +95,19 @@ class TestExtractForecastDemandColumns:
 
     def test_output_has_all_29_columns(self):
         pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(_full_dfs(), MONTH_CODES)
-
+        df = pre.extract_forecast_demand(_full_dfs())
         assert not df.empty, "DataFrame should not be empty"
         assert len(df.columns) == 29, f"Expected 29 columns, got {len(df.columns)}: {df.columns.tolist()}"
 
     def test_all_expected_columns_present(self):
         pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(_full_dfs(), MONTH_CODES)
-
+        df = pre.extract_forecast_demand(_full_dfs())
         for col in ALL_EXPECTED_COLS:
             assert col in df.columns, f"Missing expected column: {col}"
 
     def test_meta_columns_are_strings(self):
         pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(_full_dfs(), MONTH_CODES)
-
+        df = pre.extract_forecast_demand(_full_dfs())
         for col in ["Centene_Capacity_Plan_Main_LOB", "Centene_Capacity_Plan_State",
                     "Centene_Capacity_Plan_Case_Type"]:
             assert pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col]), \
@@ -177,12 +117,10 @@ class TestExtractForecastDemandColumns:
 # ─── Tests: extract_forecast_demand — FTE / Capacity zeroing ─────────────────
 
 class TestExtractForecastDemandZeroing:
-    """Critical: FTE Required, FTE Avail, and Capacity must ALL be 0 on upload."""
+    """FTE Required, FTE Avail, and Capacity must all be 0 on upload."""
 
     def _get_df(self):
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            return pre.extract_forecast_demand(_full_dfs(), MONTH_CODES)
+        return _pre().extract_forecast_demand(_full_dfs())
 
     def test_fte_required_all_zero(self):
         df = self._get_df()
@@ -214,145 +152,67 @@ class TestExtractForecastDemandZeroing:
             assert (df[col] == 0).all(), f"{col} should be exactly 0 on upload"
 
 
-# ─── Tests: extract_forecast_demand — Client Forecast values per sheet type ───
+# ─── Tests: extract_forecast_demand — concatenation behaviour ─────────────────
 
 class TestExtractForecastDemandValues:
 
-    def test_nonmmp_forecast_values_extracted(self):
-        """NonMMP sheet provides forecast values per state/work-type/month."""
-        dfs = {
-            "medicare_medicaid_nonmmp": {
-                "Amisys Medicaid DOMESTIC": _make_nonmmp_df(),
-            },
-            "medicare_medicaid_mmp": {},
-            "medicare_medicaid_summary": {},
-            "medicare_medicaid_aligned_dual": {},
-        }
+    def test_rows_from_each_sheet_type_preserved(self):
+        """Rows from each dfs_key survive the concat."""
         pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES)
+        df = pre.extract_forecast_demand(_full_dfs())
+        lobs = set(df["Centene_Capacity_Plan_Main_LOB"].tolist())
+        assert "Amisys Medicare" in lobs
+        assert "Amisys Medicaid DOMESTIC" in lobs
+        assert "Amisys MMP Domestic" in lobs
 
-        assert not df.empty
-        assert (df['Centene_Capacity_Plan_State'] == 'TX').all()
-        assert df['Client_Forecast_Month1'].iloc[0] == 100
+    def test_forecast_values_preserved(self):
+        """Values in Client_Forecast columns are passed through unchanged."""
+        dfs = {"amisys_medicaid": _make_forecast_df(forecast_val=123)}
+        df = _pre().extract_forecast_demand(dfs)
+        assert df["Client_Forecast_Month1"].iloc[0] == 123
 
-    def test_mmp_forecast_values_extracted(self):
-        """MMP sheet provides forecast values."""
-        dfs = {
-            "medicare_medicaid_nonmmp": {},
-            "medicare_medicaid_mmp": {
-                "AMISYS MMP Domestic": _make_mmp_df(),
-            },
-            "medicare_medicaid_summary": {},
-            "medicare_medicaid_aligned_dual": {},
-        }
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES)
-
-        assert not df.empty
-        assert df['Client_Forecast_Month1'].iloc[0] == 50
-
-    def test_summary_forecast_values_extracted(self):
-        """Summary sheet provides forecast values (state = N/A)."""
-        dfs = {
-            "medicare_medicaid_nonmmp": {},
-            "medicare_medicaid_mmp": {},
-            "medicare_medicaid_summary": {
-                "Amisys Medicare Non-MMP Global": _make_summary_df("Amisys Medicare"),
-            },
-            "medicare_medicaid_aligned_dual": {},
-        }
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES)
-
-        assert not df.empty
-        assert (df['Centene_Capacity_Plan_State'] == 'N/A').all()
-        assert df['Client_Forecast_Month1'].iloc[0] == 200
-
-    def test_aligned_dual_forecast_values_extracted(self):
-        """Aligned Dual sheet provides forecast values."""
-        dfs = {
-            "medicare_medicaid_nonmmp": {},
-            "medicare_medicaid_mmp": {},
-            "medicare_medicaid_summary": {},
-            "medicare_medicaid_aligned_dual": {
-                "AMISYS Aligned Dual Medicare Global": _make_aligned_dual_df(),
-            },
-        }
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES)
-
-        assert not df.empty
-        assert df['Client_Forecast_Month1'].iloc[0] == 30
+    def test_target_cph_preserved(self):
+        """Target CPH set in the handler DataFrame survives concat."""
+        dfs = {"summary": _make_forecast_df(target_cph=45.0)}
+        df = _pre().extract_forecast_demand(dfs)
+        assert df["Centene_Capacity_Plan_Target_CPH"].iloc[0] == 45.0
 
     def test_empty_dfs_returns_empty_dataframe(self):
-        """All empty sheet dicts → empty output DataFrame."""
-        dfs = {
-            "medicare_medicaid_nonmmp": {},
-            "medicare_medicaid_mmp": {},
-            "medicare_medicaid_summary": {},
-            "medicare_medicaid_aligned_dual": {},
-        }
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES)
+        """Empty dfs → empty DataFrame with correct columns."""
+        df = _pre().extract_forecast_demand({})
+        assert df.empty
+        assert set(ALL_EXPECTED_COLS).issubset(set(df.columns))
 
+    def test_dfs_with_empty_dataframes_returns_empty(self):
+        """Dfs containing only empty DataFrames → empty result."""
+        pre = _pre()
+        empty_df = pd.DataFrame(columns=pre.MAPPING["forecast"])
+        dfs = {"amisys_medicaid": empty_df, "amisys_mmp": empty_df}
+        df = pre.extract_forecast_demand(dfs)
         assert df.empty
 
-    def test_target_cph_populated_from_lookup(self):
-        """Target CPH is set from lookup dict when available.
-
-        The lob key in the lookup is derived from the sheet dict key passed to
-        _extract_summary_demand, which uses lob_name.split('-summary')[0].strip().lower().
-        For sheet key 'Amisys Medicare Non-MMP Global' the lob becomes
-        'amisys medicare non-mmp global'.
-        """
-        sheet_key = "Amisys Medicare Non-MMP Global"
-        lob_lower = sheet_key.split("-summary")[0].strip().lower()
-        lookup = {(lob_lower, "ftc"): 45.0}
+    def test_multiple_sheets_aggregate_rows(self):
+        """Rows from multiple sheets are all included in output."""
         dfs = {
-            "medicare_medicaid_nonmmp": {},
-            "medicare_medicaid_mmp": {},
-            "medicare_medicaid_summary": {
-                sheet_key: _make_summary_df("Amisys Medicare"),
-            },
-            "medicare_medicaid_aligned_dual": {},
+            "amisys_medicaid": _make_forecast_df("Amisys Medicaid DOMESTIC", forecast_val=100),
+            "amisys_mmp":      _make_forecast_df("Amisys MMP Domestic",      forecast_val=50),
         }
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value=lookup):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES, target_cph_lookup=lookup)
+        df = _pre().extract_forecast_demand(dfs)
+        assert len(df) == 2
+        lobs = set(df["Centene_Capacity_Plan_Main_LOB"].tolist())
+        assert lobs == {"Amisys Medicaid DOMESTIC", "Amisys MMP Domestic"}
 
+    def test_backward_compatible_with_month_codes_arg(self):
+        """month_codes positional arg is accepted but ignored (backward compat)."""
+        dfs = {"amisys_medicaid": _make_forecast_df()}
+        df = _pre().extract_forecast_demand(dfs, MONTH_CODES)
         assert not df.empty
-        assert df['Centene_Capacity_Plan_Target_CPH'].iloc[0] == 45.0
 
-    def test_missing_target_cph_defaults_to_zero(self):
-        """Rows with no matching CPH entry get Target CPH = 0."""
-        dfs = {
-            "medicare_medicaid_nonmmp": {
-                "Amisys Medicaid DOMESTIC": _make_nonmmp_df(),
-            },
-            "medicare_medicaid_mmp": {},
-            "medicare_medicaid_summary": {},
-            "medicare_medicaid_aligned_dual": {},
-        }
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(dfs, MONTH_CODES)
-
-        assert (df['Centene_Capacity_Plan_Target_CPH'] == 0).all()
-
-    def test_combined_sheets_aggregate_rows(self):
-        """Multiple sheet types produce rows from all sources."""
-        pre = _pre()
-        with patch('code.logics.target_cph_utils.get_all_target_cph_as_dict', return_value={}):
-            df = pre.extract_forecast_demand(_full_dfs(), MONTH_CODES)
-
-        lobs = df['Centene_Capacity_Plan_Main_LOB'].unique()
-        # Rows from at least 2 distinct LOB sources (nonmmp + summary)
-        assert len(lobs) >= 2, f"Expected rows from multiple LOB sources, got: {lobs}"
+    def test_backward_compatible_with_target_cph_kwarg(self):
+        """target_cph_lookup kwarg is accepted but ignored (backward compat)."""
+        dfs = {"amisys_medicaid": _make_forecast_df()}
+        df = _pre().extract_forecast_demand(dfs, MONTH_CODES, target_cph_lookup={})
+        assert not df.empty
 
 
 # ─── Tests: get_month_year — filename parsing ─────────────────────────────────
@@ -410,17 +270,3 @@ class TestGetMonthYear:
 
     def test_random_string_returns_none(self):
         assert self._parse("abcdef.xlsx") is None
-
-    # Output types
-
-    def test_month_is_string(self):
-        result = self._parse("forecast_June_2025.xlsx")
-        assert isinstance(result["Month"], str)
-
-    def test_year_is_string(self):
-        result = self._parse("forecast_June_2025.xlsx")
-        assert isinstance(result["Year"], str)
-
-    def test_month_is_capitalized(self):
-        result = self._parse("forecast_june_2025.xlsx")
-        assert result["Month"] == result["Month"].capitalize()

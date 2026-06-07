@@ -150,10 +150,10 @@ class TestForecastUploadEndpoint:
             mock_pp = MagicMock()
             mock_pp.get_month_year.return_value = {"Month": "January", "Year": "2025"}
             mock_pp.process_forecast_file.return_value = {
-                "medicare_medicaid_summary": {},
-                "medicare_medicaid_nonmmp": {},
-                "medicare_medicaid_mmp": {},
-                "medicare_medicaid_aligned_dual": {},
+                "summary": {},
+                "amisys_medicaid": {},
+                "amisys_mmp": {},
+                "amisys_aligned_dual": {},
             }
             mock_pp.month_codes = {f"Month{i}": m for i, m in enumerate(
                 ["February", "March", "April", "May", "June", "July"], 1)}
@@ -190,10 +190,10 @@ class TestForecastUploadEndpoint:
             mock_pp = MagicMock()
             mock_pp.get_month_year.return_value = {"Month": "February", "Year": "2025"}
             mock_pp.process_forecast_file.return_value = {
-                "medicare_medicaid_summary": {},
-                "medicare_medicaid_nonmmp": {},
-                "medicare_medicaid_mmp": {},
-                "medicare_medicaid_aligned_dual": {},
+                "summary": {},
+                "amisys_medicaid": {},
+                "amisys_mmp": {},
+                "amisys_aligned_dual": {},
             }
             mock_pp.month_codes = {f"Month{i}": m for i, m in enumerate(
                 ["March", "April", "May", "June", "July", "August"], 1)}
@@ -219,10 +219,10 @@ class TestForecastUploadEndpoint:
             mock_pp = MagicMock()
             mock_pp.get_month_year.return_value = {"Month": "March", "Year": "2025"}
             mock_pp.process_forecast_file.return_value = {
-                "medicare_medicaid_summary": {},
-                "medicare_medicaid_nonmmp": {},
-                "medicare_medicaid_mmp": {},
-                "medicare_medicaid_aligned_dual": {},
+                "summary": {},
+                "amisys_medicaid": {},
+                "amisys_mmp": {},
+                "amisys_aligned_dual": {},
             }
             mock_pp.month_codes = {f"Month{i}": m for i, m in enumerate(
                 ["April", "May", "June", "July", "August", "September"], 1)}
@@ -633,7 +633,7 @@ class TestSummaryRawDataRoundtrip:
         call_args = mock_db.bulk_save_raw_data_with_history.call_args[0][0]
         assert len(call_args) == 1
         item = call_args[0]
-        assert item['data_model'] == 'medicare_medicaid_summary'
+        assert item['data_model'] == 'summary'
         assert item['data_model_type'] == 'Amisys Medicare'
         assert item['month'] == 'January'
         assert item['year'] == 2025
@@ -674,7 +674,7 @@ class TestSummaryRawDataRoundtrip:
 
         mock_cu.get_db_manager.assert_called_once()
         mock_db.get_raw_data_df_current.assert_called_once_with(
-            'medicare_medicaid_summary', 'Amisys Medicare', 'January', 2025
+            'summary', 'Amisys Medicare', 'January', 2025
         )
         pd.testing.assert_frame_equal(result, expected_df)
 
@@ -716,4 +716,4 @@ class TestSummaryRawDataRoundtrip:
         saved_types = {item['data_model_type'] for item in saved_items}
         assert saved_types == set(summaries.keys())
         # All must use the same data_model key
-        assert all(item['data_model'] == 'medicare_medicaid_summary' for item in saved_items)
+        assert all(item['data_model'] == 'summary' for item in saved_items)

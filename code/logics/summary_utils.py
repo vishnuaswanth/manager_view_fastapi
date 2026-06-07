@@ -395,14 +395,14 @@ def update_calculated_summary(summaries: Dict[str, pd.DataFrame], month:str, yea
         for model_type, df in summaries.items():
             raw_data = {
                 'df': df,
-                'data_model': 'medicare_medicaid_summary',
+                'data_model': 'summary',
                 'data_model_type': model_type,
                 'month': month,
                 'year': year,
                 'created_by': 'system'
             }
             items.append(raw_data)
-            logger.info(f"Processed Data Model: medicare_medicaid_summary | Data Model Type: {model_type} successfully.")
+            logger.info(f"Processed Data Model: summary | Data Model Type: {model_type} successfully.")
         db_manager = core_utils.get_db_manager(RawData)
         db_manager.bulk_save_raw_data_with_history(items)
     except Exception as e:

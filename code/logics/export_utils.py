@@ -197,8 +197,8 @@ def construct_grouped_summary_df(file_path: str) -> pd.DataFrame:
         header_ffill_rows=3
     )
 
-def construct_nonmmp_df(file_path: str) -> pd.DataFrame:
-    # For nonmmp: header rows 0:3, data rows 4:end, columns 1:60, ffill first 2 header rows
+def construct_amisys_medicaid_df(file_path: str) -> pd.DataFrame:
+    # For amisys_medicaid: header rows 0:3, data rows 4:end, columns 1:60, ffill first 2 header rows
     return construct_multiindex_df(
         file_path,
         header_rows=(0, 3),
@@ -208,7 +208,7 @@ def construct_nonmmp_df(file_path: str) -> pd.DataFrame:
     )
 
 def construct_mmp_df(file_path: str) -> pd.DataFrame:
-    # For nonmmp: header rows 0:3, data rows 4:end, columns 1:60, ffill first 2 header rows
+    # For amisys_medicaid: header rows 0:3, data rows 4:end, columns 1:60, ffill first 2 header rows
     return construct_multiindex_df(
         file_path,
         header_rows=(0, 2),
@@ -265,7 +265,7 @@ def get_summary_data_by_summary_type(month: str, year: int, summary_type:str) ->
     """
     try:
         db_manager = core_utils.get_db_manager(RawData)
-        df:pd.DataFrame = db_manager.get_raw_data_df_current('medicare_medicaid_summary',summary_type, month, year)
+        df:pd.DataFrame = db_manager.get_raw_data_df_current('summary',summary_type, month, year)
         if df.empty:
             logger.info(f"No data found for summary type: {summary_type} for {month} {year}")
             return pd.DataFrame()  # Return empty DataFrame if no data
@@ -298,7 +298,7 @@ def get_combined_summary_excel(month: str, year: int) -> BytesIO:
 
         # Retrieve summaries
         try:
-            summaries = db_manager.get_all_current_data_models_of_raw_data("medicare_medicaid_summary", month, year)
+            summaries = db_manager.get_all_current_data_models_of_raw_data("summary", month, year)
         except Exception as e:
             logger.error(f"Database error retrieving summaries for {month} {year}: {e}", exc_info=True)
             raise ValueError(f"Failed to retrieve summaries: {str(e)}") from e
@@ -424,7 +424,7 @@ def update_forecast_data(df:pd.DataFrame, month: str, year:int, uploaded_by: str
 def get_all_model_types(model:str, month:str=None, year:int=None):
     """
     A funtion to return model types (different summaries, non mmp/ mmp types)
-    model: ["medicare_medicaid_summary", "medicare_medicaid_nonmmp", "medicare_medicaid_mmp", "calculations", "worktypes", "combinations"]
+    model: ["summary", "amisys_medicaid", "amisys_mmp", "calculations", "worktypes", "combinations"]
     """
     try:
         db_manager = core_utils.get_db_manager(RawData)
@@ -441,9 +441,9 @@ def get_all_model_types(model:str, month:str=None, year:int=None):
     
 def get_all_summaries(month: str = None, year: int = None):
     """
-    Retrieve all medicare_medicaid_summary records from the database.
+    Retrieve all summary records from the database.
     """
-    return get_all_model_types('medicare_medicaid_summary', month, year)
+    return get_all_model_types('summary', month, year)
 
 def get_forecast_demand_from_db(month: str, year: int) -> pd.DataFrame:
     """
@@ -586,8 +586,8 @@ def process_and_upload_excel_files(
 # Usage replacements for previous functions:
 def test_update_summaries():
     process_and_upload_excel_files(
-        folder_path=os.path.join(BASE_DIR, "logics", "data", "constants", "medicare_medicaid_summary"),
-        data_model='medicare_medicaid_summary',
+        folder_path=os.path.join(BASE_DIR, "logics", "data", "constants", "summary"),
+        data_model='summary',
         sheet_name_cleaner=lambda fn: fn.replace("-summary.xlsx", "").strip(),
         df_constructor=construct_grouped_summary_df
     )

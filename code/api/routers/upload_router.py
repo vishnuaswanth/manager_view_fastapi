@@ -365,7 +365,9 @@ async def upload_file(
             dfs = pre_processor.process_forecast_file(io.BytesIO(contents))
             sheet_summary = {k: list(v.keys()) for k, v in dfs.items() if v}
             logger.info(
-                f"Forecast file '{file.filename}' parsed — sheets loaded: {sheet_summary} | "
+                f"Forecast file '{file.filename}' parsed — "
+                f"all sheets: {pre_processor.all_sheet_names} | "
+                f"sheets loaded: {sheet_summary} | "
                 f"month codes: {pre_processor.month_codes}"
             )
         except HTTPException:
@@ -454,7 +456,29 @@ async def upload_file(
         meta_info["Year"]
     )
 
-    return success_response(message="File uploaded and data saved successfully")
+    # Build response — include sheet metadata and warnings for forecast uploads
+    response_data = None
+    if file_id == "forecast":
+        warning = None
+        if pre_processor.unprocessed_referenced_sheets:
+            names = ", ".join(f"'{n}'" for n in pre_processor.unprocessed_referenced_sheets)
+            warning = (
+                f"The following sheet(s) are referenced in the summary but have no data processor "
+                f"— their data was not imported: {names}."
+            )
+            logger.warning(
+                f"Unhandled referenced sheets in '{file.filename}': "
+                f"{pre_processor.unprocessed_referenced_sheets}"
+            )
+        response_data = {
+            "all_sheets": pre_processor.all_sheet_names,
+            "warning": warning,
+        }
+
+    return success_response(
+        message="File uploaded and data saved successfully",
+        data=response_data,
+    )
 
 
 @router.get("/records/{file_id}")
