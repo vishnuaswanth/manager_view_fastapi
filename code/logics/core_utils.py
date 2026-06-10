@@ -29,6 +29,7 @@ from code.settings import  (
     BASE_DIR
 )
 from code.logics.manager_view import parse_main_lob
+from code.logics.month_code_utils import format_month_year_code, parse_month_year_code, is_month_year_code
 
 
 if MODE.upper() == "DEBUG":
@@ -843,7 +844,7 @@ class PreProcessing:
     def _handle_amisys_medicaid_sheet(
         self, file_stream, sheet_name: str,
         month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
-        target_cph_lookup: Dict
+        target_cph_lookup: Dict, month_year_map: Optional[Dict[str, int]] = None,
     ) -> pd.DataFrame:
         """Parse Medicaid sheet (3 header rows) and produce ForecastModel rows."""
         lob = sheet_name
@@ -876,6 +877,7 @@ class PreProcessing:
                     lob=lob, state=state, work_type=work_type,
                     df=df, month_codes=month_codes, month_name_to_key=month_name_to_key,
                     target_cph_lookup=target_cph_lookup, sheet_type='amisys_medicaid',
+                    month_year_map=month_year_map,
                 ))
         logger.info(f"Medicaid sheet '{sheet_name}': {len(rows)} forecast rows produced")
         return pd.DataFrame(rows, columns=self.MAPPING['forecast'])
@@ -883,7 +885,7 @@ class PreProcessing:
     def _handle_amisys_mmp_sheet(
         self, file_stream, sheet_name: str,
         month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
-        target_cph_lookup: Dict
+        target_cph_lookup: Dict, month_year_map: Optional[Dict[str, int]] = None,
     ) -> pd.DataFrame:
         """Parse MMP state-level sheet (3 header rows) and produce ForecastModel rows.
 
@@ -968,6 +970,7 @@ class PreProcessing:
                         sheet_type="amisys_mmp",
                         month_col=month_col,
                         value_col=wt_col,
+                        month_year_map=month_year_map,
                     ))
 
         logger.info(f"MMP sheet '{sheet_name}': {len(rows)} forecast rows produced")
@@ -976,7 +979,7 @@ class PreProcessing:
     def _handle_amisys_aligned_dual_sheet(
         self, file_stream, sheet_name: str,
         month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
-        target_cph_lookup: Dict
+        target_cph_lookup: Dict, month_year_map: Optional[Dict[str, int]] = None,
     ) -> pd.DataFrame:
         """Parse Aligned Dual sheet (dynamic structure) and produce ForecastModel rows."""
         result = self._read_aligned_dual_sheet(file_stream)
@@ -997,6 +1000,7 @@ class PreProcessing:
                         lob=lob_name, state=state, work_type=work_type,
                         df=state_df, month_codes=month_codes, month_name_to_key=month_name_to_key,
                         target_cph_lookup=target_cph_lookup, sheet_type='amisys_aligned_dual',
+                        month_year_map=month_year_map,
                     ))
         logger.info(f"Aligned Dual sheet '{sheet_name}': {len(rows)} forecast rows produced")
         return pd.DataFrame(rows, columns=self.MAPPING['forecast'])
@@ -1071,9 +1075,40 @@ class PreProcessing:
         logger.info(f"Summary sheet: {len(rows)} forecast rows produced")
         return pd.DataFrame(rows, columns=self.MAPPING['forecast'])
 
+    @staticmethod
+    def _compute_month_year_map(
+        month_codes: Dict[str, str],
+        upload_month: str,
+        upload_year: int,
+    ) -> Dict[str, int]:
+        """Return {m_key: year} for each forecast month in month_codes.
+
+        Handles year-boundary wrapping (e.g. November 2026 upload →
+        Month1=December 2026, Month3=February 2027).
+        """
+        from calendar import month_name as cal_month_name
+        month_names = list(cal_month_name)[1:]  # ['January', ..., 'December']
+        month_to_num = {m: i + 1 for i, m in enumerate(month_names)}
+        upload_month_num = month_to_num.get(upload_month)
+        first_month_num = month_to_num.get(month_codes.get("Month1", ""))
+        if not upload_month_num or not first_month_num:
+            return {}
+        # Month1 is in upload_year when it comes after the upload month; otherwise it
+        # falls in upload_year + 1 (e.g. upload=December → Month1=January next year).
+        first_forecast_year = upload_year if first_month_num > upload_month_num else upload_year + 1
+        result = {}
+        for m_key, month_name in month_codes.items():
+            m_num = month_to_num.get(month_name)
+            if m_num is None:
+                continue
+            result[m_key] = first_forecast_year if m_num >= first_month_num else first_forecast_year + 1
+        return result
+
     def process_forecast_file(
         self,
         file_stream: Union[str, BinaryIO],
+        upload_month: Optional[str] = None,
+        upload_year: Optional[int] = None,
     ) -> Dict[str, pd.DataFrame]:
         """
         Parse the forecast Excel file and produce ForecastModel-ready DataFrames.
@@ -1178,8 +1213,24 @@ class PreProcessing:
             )
         first_month = unique_months[0]
         consecutive_months = generate_consecutive_months(first_month, 6)
-        month_codes = {f"Month{i+1}": month for i, month in enumerate(consecutive_months)}
-        month_name_to_key = {v: k for k, v in month_codes.items()}
+        plain_codes = {f"Month{i+1}": month for i, month in enumerate(consecutive_months)}
+        # month_name_to_key uses plain names — needed for reverse lookups within this parse session
+        month_name_to_key = {v: k for k, v in plain_codes.items()}
+
+        # ── Compute year for each forecast month ──────────────────────────────────
+        month_year_map: Dict[str, int] = {}
+        if upload_month and upload_year:
+            month_year_map = self._compute_month_year_map(plain_codes, upload_month, upload_year)
+
+        # Build month_codes: embed year ("Apr-2026") when available, else plain names
+        if month_year_map:
+            month_codes = {
+                k: format_month_year_code(plain_codes[k], month_year_map[k])
+                for k in plain_codes
+            }
+        else:
+            month_codes = plain_codes
+
         logger.info(
             "Month codes derived from summary sheet: "
             + ", ".join(f"{k}={v}" for k, v in month_codes.items())
@@ -1216,7 +1267,8 @@ class PreProcessing:
                 continue
             try:
                 sheet_df = getattr(self, config["handler"])(
-                    file_stream, actual_sheet_name, month_codes, month_name_to_key, target_cph_lookup
+                    file_stream, actual_sheet_name, month_codes, month_name_to_key,
+                    target_cph_lookup,
                 )
                 dfs_key = config["dfs_key"]
                 if dfs_key in dfs and not dfs[dfs_key].empty:
@@ -1250,6 +1302,7 @@ class PreProcessing:
         df: pd.DataFrame, month_codes: Dict[str, str], month_name_to_key: Dict[str, str],
         target_cph_lookup: Dict, sheet_type: str,
         month_col=None, value_col=None,
+        month_year_map: Optional[Dict[str, int]] = None,
     ) -> Dict:
         """Build a single ForecastModel-compatible row dict with Client Forecast values."""
         target_cph = target_cph_lookup.get((lob.strip().lower(), work_type.strip().lower()), 0)
@@ -1263,18 +1316,32 @@ class PreProcessing:
             'Centene_Capacity_Plan_Target_CPH': target_cph,
         }
 
-        for m_key, month_name in month_codes.items():
+        for m_key, month_code in month_codes.items():
             val = 0
+            # Resolve plain month name + expected year from the code
+            if is_month_year_code(month_code):
+                month_name, expected_year = parse_month_year_code(month_code)
+            else:
+                month_name = month_code
+                expected_year = month_year_map.get(m_key) if month_year_map else None
             try:
                 if sheet_type == 'amisys_mmp':
                     # df is pre-filtered by state; month_col and value_col are 3-level MultiIndex keys
-                    filtered = df[df[month_col] == month_name]
+                    mask = df[month_col] == month_name
+                    if expected_year is not None:
+                        year_col = next((c for c in df.columns if str(c[2]).strip().lower() == 'year'), None)
+                        if year_col is not None:
+                            mask &= df[year_col].astype(str).str.strip() == str(expected_year)
+                    filtered = df[mask]
                     if not filtered.empty:
                         val = pd.to_numeric(filtered[value_col].values[0], errors='coerce') or 0
                 elif sheet_type == 'amisys_medicaid':
-                    filtered = df[
-                        (df[('', '', 'State')] == state) & (df[('', '', 'Month')] == month_name)
-                    ]
+                    mask = (df[('', '', 'State')] == state) & (df[('', '', 'Month')] == month_name)
+                    if expected_year is not None:
+                        year_col = ('', '', 'Year')
+                        if year_col in df.columns:
+                            mask &= df[year_col].astype(str).str.strip() == str(expected_year)
+                    filtered = df[mask]
                     if not filtered.empty:
                         for col in filtered.columns:
                             if 'forecast - volume' in str(col[0]).lower() and col[2] == work_type:
@@ -1282,7 +1349,10 @@ class PreProcessing:
                                 break
                 elif sheet_type == 'amisys_aligned_dual':
                     # df is pre-filtered by state
-                    filtered = df[df['Month'] == month_name]
+                    mask = df['Month'] == month_name
+                    if expected_year is not None and 'Year' in df.columns:
+                        mask &= df['Year'].astype(str).str.strip() == str(expected_year)
+                    filtered = df[mask]
                     if not filtered.empty and work_type in filtered.columns:
                         val = pd.to_numeric(filtered[work_type].values[0], errors='coerce') or 0
                 elif sheet_type == 'summary':

@@ -362,7 +362,11 @@ async def upload_file(
     # ============= FORECAST: Process and trigger allocation =============
     elif file_id == "forecast":
         try:
-            dfs = pre_processor.process_forecast_file(io.BytesIO(contents))
+            dfs = pre_processor.process_forecast_file(
+                io.BytesIO(contents),
+                upload_month=month_year["Month"],
+                upload_year=int(month_year["Year"]),
+            )
             sheet_summary = {k: len(v) for k, v in dfs.items() if v is not None and not (hasattr(v, 'empty') and v.empty)}
             logger.info(
                 f"Forecast file '{file.filename}' parsed — "

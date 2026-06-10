@@ -30,6 +30,7 @@ from code.logics.db import AllocationReportsModel, ForecastModel, MonthConfigura
 from code.logics.allocation import parse_main_lob, normalize_locality, Calculations
 from code.logics.allocation_validity import validate_allocation_is_current
 from code.logics.month_config_utils import get_specific_config
+from code.logics.month_code_utils import parse_month_year_code, is_month_year_code
 
 logger = logging.getLogger(__name__)
 
@@ -589,26 +590,27 @@ def get_month_mappings_from_db(
     missing_configs = []
 
     for i in range(1, 7):
-        month_name = getattr(months_record, f'Month{i}')
+        raw_code = getattr(months_record, f'Month{i}')
 
-        if month_name not in month_to_num:
-            raise ValueError(f"Invalid month name in ForecastMonthsModel.Month{i}: {month_name}")
-
-        forecast_month_num = month_to_num[month_name]
-
-        # CRITICAL: Year wrapping logic
-        # If report_month_num > forecast_month_num → wrapped to next year
-        if report_month_num > forecast_month_num:
-            year = report_year + 1
+        if is_month_year_code(raw_code):
+            # New format: "Apr-2026" — year is embedded, no arithmetic needed
+            month_name, year = parse_month_year_code(raw_code)
         else:
-            year = report_year
+            # Legacy plain name format — use report-month-based year wrapping
+            month_name = raw_code
+            if month_name not in month_to_num:
+                raise ValueError(f"Invalid month name in ForecastMonthsModel.Month{i}: {month_name}")
+            forecast_month_num = month_to_num[month_name]
+            if report_month_num > forecast_month_num:
+                year = report_year + 1
+            else:
+                year = report_year
 
         mappings[i] = MonthData(month=month_name, year=year)
 
         logger.debug(
             f"Month{i} → {month_name} {year} "
-            f"(report: {report_month} {report_year}, "
-            f"month_nums: {report_month_num} vs {forecast_month_num})"
+            f"(report: {report_month} {report_year})"
         )
 
         # CRITICAL: Validate month config exists for both Domestic and Global

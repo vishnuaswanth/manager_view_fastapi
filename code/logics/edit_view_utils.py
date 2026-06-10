@@ -544,3 +544,11 @@ def parse_month_label(month_label: str) -> tuple:
     full_year = 2000 + int(year_suffix)
 
     return (full_month, full_year)
+
+
+# Re-export month-year code utilities from the thin module (no circular-import risk)
+from code.logics.month_code_utils import (  # noqa: E402
+    parse_month_year_code,
+    format_month_year_code,
+    is_month_year_code,
+)

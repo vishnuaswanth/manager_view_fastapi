@@ -65,7 +65,7 @@ def run_forecast_test(file_path: str, output_path: Optional[str] = None) -> str:
 
     # ─── 2. Parse all sheets (same as upload endpoint) ───────────────────────
     print("Parsing forecast file sheets...")
-    dfs = pre.process_forecast_file(file_path)
+    dfs = pre.process_forecast_file(file_path, upload_month=month, upload_year=int(year))
     month_codes = pre.month_codes  # {"Month1": "April", ..., "Month6": "September"}
     print(f"Months: {list(month_codes.values())}")
     print(f"Sheet models found: {list(dfs.keys())}")
@@ -156,7 +156,11 @@ def validate_forecast_file(file_path: str) -> Dict:
 
     # Parse sheets
     try:
-        dfs = pre.process_forecast_file(file_path)
+        dfs = pre.process_forecast_file(
+            file_path,
+            upload_month=month_year["Month"],
+            upload_year=int(month_year["Year"]),
+        )
         month_codes = pre.month_codes
     except ValueError as ve:
         errors.append(f"Sheet validation error: {ve}")

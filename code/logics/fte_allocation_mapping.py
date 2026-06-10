@@ -19,6 +19,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from code.logics.db import FTEAllocationMappingModel
 from code.logics.bench_allocation import parse_vendor_skills
 from code.api.dependencies import get_core_utils, get_logger
+from code.logics.month_code_utils import parse_month_year_code, is_month_year_code
 
 logger = get_logger(__name__)
 
@@ -223,8 +224,12 @@ def populate_fte_mapping_from_primary(
             case_type = allocation_details.get('worktype', '')
 
             # Calculate forecast year and month label
-            forecast_year = _get_year_for_month(month, year, forecast_month)
-            forecast_month_label = _get_month_label(forecast_month, forecast_year)
+            if is_month_year_code(forecast_month):
+                _plain_month, forecast_year = parse_month_year_code(forecast_month)
+                forecast_month_label = _get_month_label(_plain_month, forecast_year)
+            else:
+                forecast_year = _get_year_for_month(month, year, forecast_month)
+                forecast_month_label = _get_month_label(forecast_month, forecast_year)
             month_index = _get_month_index(month_headers, forecast_month)
 
             record = FTEAllocationMappingModel(

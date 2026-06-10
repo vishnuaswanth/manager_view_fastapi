@@ -43,8 +43,8 @@ def db_manager():
 
 def _sample_data(**overrides) -> dict:
     base = {
-        "Month1": "January", "Month2": "February", "Month3": "March",
-        "Month4": "April",   "Month5": "May",      "Month6": "June",
+        "Month1": "Jan-2025", "Month2": "Feb-2025", "Month3": "Mar-2025",
+        "Month4": "Apr-2025", "Month5": "May-2025", "Month6": "Jun-2025",
         "UploadedFile": "forecast_Jan_2025.xlsx",
         "CreatedBy": "user_a",
     }
@@ -61,7 +61,7 @@ class TestUpsertForecastMonths:
             records = session.query(ForecastMonthsModel).all()
 
         assert len(records) == 1
-        assert records[0].Month1 == "January"
+        assert records[0].Month1 == "Jan-2025"
         assert records[0].UploadedFile == "forecast_Jan_2025.xlsx"
         assert records[0].CreatedBy == "user_a"
 
@@ -69,8 +69,8 @@ class TestUpsertForecastMonths:
         db_manager.upsert_forecast_months(_sample_data())
 
         updated = _sample_data(
-            Month1="July", Month2="August", Month3="September",
-            Month4="October", Month5="November", Month6="December",
+            Month1="Jul-2025", Month2="Aug-2025", Month3="Sep-2025",
+            Month4="Oct-2025", Month5="Nov-2025", Month6="Dec-2025",
             CreatedBy="user_b"
         )
         db_manager.upsert_forecast_months(updated)
@@ -79,8 +79,8 @@ class TestUpsertForecastMonths:
             records = session.query(ForecastMonthsModel).all()
 
         assert len(records) == 1, "Must not create a duplicate row for the same filename"
-        assert records[0].Month1 == "July"
-        assert records[0].Month6 == "December"
+        assert records[0].Month1 == "Jul-2025"
+        assert records[0].Month6 == "Dec-2025"
         assert records[0].CreatedBy == "user_b"
 
     def test_update_refreshes_created_datetime(self, db_manager):

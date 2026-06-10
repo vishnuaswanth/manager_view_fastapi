@@ -27,6 +27,7 @@ from code.logics.manager_view import parse_main_lob
 from code.logics.month_config_utils import get_specific_config
 from code.logics.export_utils import get_forecast_months_list
 from code.api.dependencies import get_core_utils, get_logger
+from code.logics.month_code_utils import parse_month_year_code, is_month_year_code
 from code.cache import data_cache, filters_cache
 
 # Initialize router and dependencies
@@ -206,9 +207,13 @@ def get_llm_forecast_filter_options(
         month_labels_list = get_forecast_months_list(month_normalized, year, uploaded_file)
 
         forecast_month_labels = []
-        for i, month_name in enumerate(month_labels_list, start=1):
-            if month_name:
-                forecast_year = _get_year_for_month(month_normalized, year, month_name)
+        for i, raw_code in enumerate(month_labels_list, start=1):
+            if raw_code:
+                if is_month_year_code(raw_code):
+                    month_name, forecast_year = parse_month_year_code(raw_code)
+                else:
+                    month_name = raw_code
+                    forecast_year = _get_year_for_month(month_normalized, year, raw_code)
                 month_label = _get_month_label(month_name, forecast_year)
                 forecast_month_labels.append(month_label)
 
@@ -415,10 +420,13 @@ def get_llm_forecast_data(
         # Create month mapping dictionary (Month1 -> "Apr-25", etc.)
         months_mapping = {}
         month_labels = []
-        for i, month_name in enumerate(month_labels_list, start=1):
-            if month_name:
-                # Determine the correct year for this forecast month
-                forecast_year = _get_year_for_month(month_normalized, year, month_name)
+        for i, raw_code in enumerate(month_labels_list, start=1):
+            if raw_code:
+                if is_month_year_code(raw_code):
+                    month_name, forecast_year = parse_month_year_code(raw_code)
+                else:
+                    month_name = raw_code
+                    forecast_year = _get_year_for_month(month_normalized, year, raw_code)
                 month_label = _get_month_label(month_name, forecast_year)
                 months_mapping[f"Month{i}"] = month_label
                 month_labels.append((month_label, month_name, forecast_year))
@@ -1032,9 +1040,13 @@ def get_available_ftes(
 
         # Build forecast months mapping
         forecast_months = []
-        for i, month_name in enumerate(month_labels_list, start=1):
-            if month_name:
-                forecast_year = _get_year_for_month(report_month, report_year, month_name)
+        for i, raw_code in enumerate(month_labels_list, start=1):
+            if raw_code:
+                if is_month_year_code(raw_code):
+                    month_name, forecast_year = parse_month_year_code(raw_code)
+                else:
+                    month_name = raw_code
+                    forecast_year = _get_year_for_month(report_month, report_year, raw_code)
                 month_label = _get_month_label(month_name, forecast_year)
                 forecast_months.append({
                     "label": month_label,

@@ -13,6 +13,7 @@ from code.logics.db import (
     DBManager,
     AllocationValidityModel
 )
+from code.logics.month_code_utils import parse_month_year_code, is_month_year_code
 
 logger = logging.getLogger(__name__)
 
@@ -429,24 +430,33 @@ def get_forecast_months_from_db(db_manager:DBManager, month: str, year: int) -> 
             logger.warning(f"[ManagerView] No forecast months found for {month} {year}")
             return []
 
-        # Convert month names to YYYY-MM format
+        # Convert month names/codes to YYYY-MM format
         result = []
         current_year = year
 
-        for month_name_str in months_list:
-            if not month_name_str:
+        for raw_code in months_list:
+            if not raw_code:
                 continue
 
-            # Get month number from name
-            try:
-                month_num = list(month_name).index(month_name_str.strip())
-                # Handle year rollover
-                if month_num < list(month_name).index(month):
-                    current_year = year + 1
-                result.append(f"{current_year}-{month_num:02d}")
-            except ValueError:
-                logger.warning(f"[ManagerView] Invalid month name: {month_name_str}")
-                continue
+            if is_month_year_code(raw_code):
+                # New format: "Apr-2026" — year is embedded
+                try:
+                    month_name_str, yr = parse_month_year_code(raw_code)
+                    month_num = list(month_name).index(month_name_str)
+                    result.append(f"{yr}-{month_num:02d}")
+                except (ValueError, IndexError) as e:
+                    logger.warning(f"[ManagerView] Could not parse month-year code {raw_code!r}: {e}")
+                    continue
+            else:
+                # Legacy plain name — use year rollover arithmetic
+                try:
+                    month_num = list(month_name).index(raw_code.strip())
+                    if month_num < list(month_name).index(month):
+                        current_year = year + 1
+                    result.append(f"{current_year}-{month_num:02d}")
+                except ValueError:
+                    logger.warning(f"[ManagerView] Invalid month name: {raw_code}")
+                    continue
 
         return result
     except Exception as e:
