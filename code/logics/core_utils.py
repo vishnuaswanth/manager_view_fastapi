@@ -1213,9 +1213,15 @@ class PreProcessing:
                 logger.warning(f"Sheet '{ref_name}' referenced in summary but not found in file — skipping")
                 continue
             try:
-                dfs[config["dfs_key"]] = getattr(self, config["handler"])(
+                sheet_df = getattr(self, config["handler"])(
                     file_stream, actual_sheet_name, month_codes, month_name_to_key, target_cph_lookup
                 )
+                dfs_key = config["dfs_key"]
+                if dfs_key in dfs and not dfs[dfs_key].empty:
+                    # Multiple sheets share the same dfs_key (e.g. Amisys Medicaid DOMESTIC + GLOBAL)
+                    dfs[dfs_key] = pd.concat([dfs[dfs_key], sheet_df], ignore_index=True)
+                else:
+                    dfs[dfs_key] = sheet_df
             except HTTPException:
                 raise
             except Exception as e:
