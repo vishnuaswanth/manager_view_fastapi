@@ -363,7 +363,7 @@ async def upload_file(
     elif file_id == "forecast":
         try:
             dfs = pre_processor.process_forecast_file(io.BytesIO(contents))
-            sheet_summary = {k: list(v.keys()) for k, v in dfs.items() if v}
+            sheet_summary = {k: len(v) for k, v in dfs.items() if v is not None and not (hasattr(v, 'empty') and v.empty)}
             logger.info(
                 f"Forecast file '{file.filename}' parsed — "
                 f"all sheets: {pre_processor.all_sheet_names} | "

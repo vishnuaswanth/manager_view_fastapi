@@ -6,8 +6,8 @@ WITHOUT requiring database access or API calls. Use this to validate new forecas
 file variations locally before uploading.
 
 Usage:
-    python code/logics/tests/run_forecast_test.py "path/to/forecast.xlsx"
-    python code/logics/tests/run_forecast_test.py "path/to/forecast.xlsx" "output.xlsx"
+    python -m code.logics.tests.run_forecast_test "path/to/forecast.xlsx"
+    python -m code.logics.tests.run_forecast_test "path/to/forecast.xlsx" "output.xlsx"
 
 Or from Python:
     from code.logics.tests.run_forecast_test import run_forecast_test
