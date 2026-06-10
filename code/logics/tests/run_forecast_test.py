@@ -69,8 +69,8 @@ def run_forecast_test(file_path: str, output_path: Optional[str] = None) -> str:
     month_codes = pre.month_codes  # {"Month1": "April", ..., "Month6": "September"}
     print(f"Months: {list(month_codes.values())}")
     print(f"Sheet models found: {list(dfs.keys())}")
-    for model, subdict in dfs.items():
-        print(f"  {model}: {list(subdict.keys())}")
+    for model, df in dfs.items():
+        print(f"  {model}: {len(df)} rows")
 
     # ─── 3. Extract normalized demand (no DB needed) ─────────────────────────
     print("Extracting forecast demand...")
@@ -167,11 +167,10 @@ def validate_forecast_file(file_path: str) -> Dict:
 
     # Check each model
     total_rows = 0
-    for model, subdict in dfs.items():
-        lob_names = list(subdict.keys())
-        result["sheet_models"][model] = lob_names
-        if not lob_names:
-            warnings.append(f"Model '{model}' has no sub-tables.")
+    for model, df in dfs.items():
+        result["sheet_models"][model] = len(df)
+        if df.empty:
+            warnings.append(f"Model '{model}' has no rows.")
 
     # Extract demand
     try:
@@ -280,8 +279,8 @@ if __name__ == "__main__":
         for w in report["warnings"]:
             print(f"    - {w}")
     print(f"  Models:")
-    for model, lobs in report["sheet_models"].items():
-        print(f"    {model}: {lobs}")
+    for model, row_count in report["sheet_models"].items():
+        print(f"    {model}: {row_count} rows")
     print()
 
     # Generate Excel report
