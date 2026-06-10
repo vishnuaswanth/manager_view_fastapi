@@ -99,7 +99,8 @@ def get_model_or_all_models(file_id:str=None)-> Union[Dict[str, Type], Type]:
 def _safe_filename(text: str) -> str:
     """Trim at first asterisk and normalise characters for use as filenames and search query tokens."""
     text = re.match(r'^[^*]*', str(text)).group(0) if text else ""
-    text = text.replace('&', 'and').replace('/', 'or')
+    text = re.sub(r'\s*&\s*', ' and ', text)
+    text = re.sub(r'\s*/\s*', ' or ', text)
     return re.sub(r'[\/:*?"<>|]', '', text).strip()
 
 def convert_to_month(x):
