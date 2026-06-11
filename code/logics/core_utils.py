@@ -503,9 +503,18 @@ class PreProcessing:
         # (abbr_to_full maps both 'Sep' and 'Sept' to 'September', so without dedup
         # 'September' would appear twice and create a spurious Month7 key).
         _month_set = set(second_level)
+        # Try plain month names first (legacy format)
         unique_months = list(dict.fromkeys(
             m for m in self.abbr_to_full.values() if m in _month_set
         ))
+        if not unique_months:
+            # "Apr-2026" format — preserve column appearance order
+            seen: set = set()
+            for m in second_level:
+                m_str = str(m)
+                if is_month_year_code(m_str) and m_str not in seen:
+                    seen.add(m_str)
+                    unique_months.append(m_str)
         self.month_codes = {f"Month{i+1}": month for i, month in enumerate(unique_months)}
 
 

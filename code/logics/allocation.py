@@ -36,6 +36,7 @@ from code.logics.export_utils import (
 )
 from code.logics.summary_utils import update_summary_data
 from code.logics.manager_view import parse_main_lob
+from code.logics.month_code_utils import parse_month_year_code, is_month_year_code
 from code.logics.forecast_upload_history import (
     capture_forecast_snapshot,
     create_forecast_upload_history_log
@@ -240,8 +241,13 @@ def get_fte_required(row, month, calculations: Calculations):
             work_type = 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
 
         # Get work-type-specific configuration
-        year = get_year_for_month(calculations.data_month, calculations.data_year, month)
-        config = calculations.get_config_for_worktype(month, year, work_type)
+        # Resolve plain month name + year — handle "Apr-2026" format and legacy plain names
+        if is_month_year_code(month):
+            plain_month, year = parse_month_year_code(month)
+        else:
+            plain_month = month
+            year = get_year_for_month(calculations.data_month, calculations.data_year, month)
+        config = calculations.get_config_for_worktype(plain_month, year, work_type)
 
         no_of_days = config['working_days']
         shrinkage = config['shrinkage']
@@ -1275,8 +1281,13 @@ def get_capacity(row, month, calculations: Calculations):
             work_type = 'Domestic' if 'domestic' in str(lob_locality).lower() else 'Global'
 
         # Get work-type-specific configuration
-        year = get_year_for_month(calculations.data_month, calculations.data_year, month)
-        config = calculations.get_config_for_worktype(month, year, work_type)
+        # Resolve plain month name + year — handle "Apr-2026" format and legacy plain names
+        if is_month_year_code(month):
+            plain_month, year = parse_month_year_code(month)
+        else:
+            plain_month = month
+            year = get_year_for_month(calculations.data_month, calculations.data_year, month)
+        config = calculations.get_config_for_worktype(plain_month, year, work_type)
 
         no_of_days = config['working_days']
         shrinkage = config['shrinkage']
