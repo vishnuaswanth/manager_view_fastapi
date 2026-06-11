@@ -7,7 +7,7 @@ and other common operations to eliminate code duplication across modules.
 
 import logging
 from typing import Dict, List, Optional
-from code.logics.db import ForecastMonthsModel
+from code.logics.db import ForecastModel
 from code.logics.core_utils import CoreUtils
 
 logger = logging.getLogger(__name__)
@@ -49,8 +49,8 @@ def get_months_dict(month: str, year: int, core_utils: CoreUtils) -> Dict[str, s
 
     logger.debug(f"[Cache MISS] Month mappings for {month} {year}, querying database")
 
-    # Use the shared DB helper — handles both filename-based and month/year-based lookup
-    db_manager = core_utils.get_db_manager(ForecastMonthsModel, limit=1, skip=0)
+    # Use ForecastModel so filter_by_month_and_year can filter on Month/Year columns
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0)
     months_list = db_manager.get_forecast_months_list(month, year)
 
     if not months_list or len(months_list) < 6 or all(m is None for m in months_list):
