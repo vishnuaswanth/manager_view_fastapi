@@ -81,8 +81,8 @@ def run_forecast_test(file_path: str, output_path: Optional[str] = None) -> str:
         raise ValueError("No forecast demand extracted from file. Check sheet structure.")
 
     print(f"Extracted {len(demand_df)} demand rows")
-    print(f"LOBs (first 10): {demand_df['Centene_Capacity_Plan_Main_LOB'].unique()[:10].tolist()}")
-    print(f"States (first 10): {demand_df['Centene_Capacity_Plan_State'].unique()[:10].tolist()}")
+    print(f"LOBs : {demand_df['Centene_Capacity_Plan_Main_LOB'].unique().tolist()}")
+    print(f"States : {demand_df['Centene_Capacity_Plan_State'].unique().tolist()}")
 
     # ─── 4. Build MultiIndex output DataFrame ─────────────────────────────────
     output_df = _build_multiindex_output(demand_df, month_codes)

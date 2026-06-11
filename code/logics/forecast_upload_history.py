@@ -97,11 +97,11 @@ def capture_forecast_snapshot(
             data = []
             for record in records:
                 row = {
-                    'Main_LOB': record.Main_LOB,
-                    'State': record.State,
-                    'Case_Type': record.Case_Type,
-                    'Case_ID': record.Case_ID,
-                    'Target_CPH': record.Target_CPH,
+                    'Main_LOB': record.Centene_Capacity_Plan_Main_LOB,
+                    'State': record.Centene_Capacity_Plan_State,
+                    'Case_Type': record.Centene_Capacity_Plan_Case_Type,
+                    'Case_ID': record.Centene_Capacity_Plan_Call_Type_ID,
+                    'Target_CPH': record.Centene_Capacity_Plan_Target_CPH,
                 }
 
                 # Add Month1-Month6 fields
