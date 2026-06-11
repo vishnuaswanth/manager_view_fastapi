@@ -1272,8 +1272,16 @@ class PreProcessing:
                 continue
             actual_sheet_name = sheet_lookup.get(ref_name.strip().lower())
             if not actual_sheet_name:
-                logger.warning(f"Sheet '{ref_name}' referenced in summary but not found in file — skipping")
-                continue
+                available_sheets = list(xl.sheet_names)
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Sheet '{ref_name}' is referenced in the summary sheet and has a registered handler, "
+                        f"but the tab was not found in the uploaded file. "
+                        f"Available tabs: {available_sheets}. "
+                        f"Fix the tab name in the summary sheet to match exactly (case-insensitive)."
+                    )
+                )
             try:
                 sheet_df = getattr(self, config["handler"])(
                     file_stream, actual_sheet_name, month_codes, month_name_to_key,
