@@ -620,6 +620,137 @@ def get_all_ramps_for_report_period(year: int, month: str) -> Dict:
     return {"success": True, "ramps": ramps, "forecast_count": len(id_to_meta)}
 
 
+def delete_ramp_by_name(forecast_id: int, month_key: str, ramp_name: str) -> Dict:
+    """
+    Delete all weeks of a named ramp for a month and subtract its contribution
+    from ForecastModel.
+
+    Scope: ALL RampModel rows matching (forecast_id, month_key, ramp_name).
+    Idempotent: returns success even when no rows exist.
+    """
+    db_manager = core_utils.get_db_manager(ForecastModel, limit=1, skip=0, select_columns=None)
+
+    # ── Phase 1: reads ────────────────────────────────────────────────────────
+
+    with db_manager.SessionLocal() as session:
+        row = _get_forecast_row(forecast_id, session)
+        suffix, month_label = _resolve_month_suffix(row, month_key)
+
+        target_cph   = float(row.Centene_Capacity_Plan_Target_CPH or 0)
+        main_lob     = row.Centene_Capacity_Plan_Main_LOB or ""
+        case_type    = row.Centene_Capacity_Plan_Case_Type or ""
+        report_month = row.Month
+        report_year  = row.Year
+        row_state    = row.Centene_Capacity_Plan_State or ""
+        row_case_id  = str(row.Centene_Capacity_Plan_Call_Type_ID or row.id)
+
+        fte_avail_col = get_forecast_column_name("fte_avail", suffix)
+        capacity_col  = get_forecast_column_name("capacity", suffix)
+
+        snapshot_before = {col: (getattr(row, col) or 0) for col in METRIC_COLUMNS}
+        before_fte = snapshot_before[fte_avail_col]
+        before_cap = snapshot_before[capacity_col]
+
+        # Load rows for this specific ramp_name via shared helper
+        all_rows = _load_ramp_rows_as_dicts(session, forecast_id, month_key)
+        ramp_rows = [r for r in all_rows if r["ramp_name"] == ramp_name]
+
+    if not ramp_rows:
+        return {
+            "success": True,
+            "forecast_id": forecast_id,
+            "month_key": month_key,
+            "ramp_name": ramp_name,
+            "message": "Ramp not found; nothing to delete.",
+            "already_deleted": True,
+        }
+
+    config = _get_ramp_month_config(month_label, main_lob, case_type)
+
+    # ── Phase 2: compute contribution to subtract (inline formula) ────────────
+
+    old_fte = max((r["employee_count"] for r in ramp_rows), default=0)
+    old_cap = sum(
+        r["employee_count"] * (r["ramp_percent"] / 100) * target_cph
+        * config["work_hours"] * (1 - config["shrinkage"]) * r["working_days"]
+        for r in ramp_rows
+    )
+    final_fte = max(0, before_fte - old_fte)
+    final_cap = max(0.0, before_cap - old_cap)
+
+    # ── Phase 3: atomic write ─────────────────────────────────────────────────
+
+    with db_manager.SessionLocal() as session:
+        session.query(RampModel).filter(
+            RampModel.forecast_id == forecast_id,
+            RampModel.month_key   == month_key,
+            RampModel.ramp_name   == ramp_name,
+        ).delete(synchronize_session=False)
+
+        row = _get_forecast_row(forecast_id, session)
+        setattr(row, fte_avail_col, final_fte)
+        setattr(row, capacity_col,  final_cap)
+        session.add(row)
+        session.commit()
+
+    # ── Step 4: history log ───────────────────────────────────────────────────
+
+    months_dict = get_months_dict(report_month, report_year, core_utils)
+
+    snapshot_after = dict(snapshot_before)
+    snapshot_after[fte_avail_col] = final_fte
+    snapshot_after[capacity_col]  = final_cap
+
+    months_data, modified_fields = _build_record_months_data(
+        months_dict, snapshot_before, snapshot_after
+    )
+
+    record = {
+        "main_lob":        main_lob,
+        "state":           row_state,
+        "case_type":       case_type,
+        "case_id":         row_case_id,
+        "modified_fields": modified_fields,
+        "months":          months_data,
+    }
+
+    summary_data = _compute_report_totals(
+        report_month=report_month,
+        report_year=report_year,
+        months_dict=months_dict,
+        changed_forecast_id=forecast_id,
+        snapshot_before=snapshot_before,
+        snapshot_after=snapshot_after,
+    )
+
+    try:
+        history_log_id = create_complete_history_log(
+            month=report_month,
+            year=report_year,
+            change_type=CHANGE_TYPE_RAMP_CALCULATION,
+            user="system",
+            user_notes=f"Ramp deleted: {ramp_name}",
+            modified_records=[record],
+            months_dict=months_dict,
+            summary_data=summary_data,
+        )
+    except Exception as e:
+        logger.error(f"History log failed (ramp was deleted): {e}", exc_info=True)
+        history_log_id = None
+
+    clear_all_caches()
+
+    return {
+        "success": True,
+        "forecast_id": forecast_id,
+        "month_key": month_key,
+        "ramp_name": ramp_name,
+        "fte_removed": old_fte,
+        "capacity_removed": round(old_cap, 2),
+        "history_log_id": history_log_id,
+    }
+
+
 def preview_ramp(
     forecast_id: int,
     month_key: str,

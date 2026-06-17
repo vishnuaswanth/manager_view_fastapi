@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from code.api.dependencies import get_core_utils, get_logger
-from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp, _generate_ramp_name, get_all_ramps_for_report_period
+from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp, _generate_ramp_name, get_all_ramps_for_report_period, delete_ramp_by_name
 
 logger = get_logger(__name__)
 
@@ -454,4 +454,37 @@ async def get_ramps_for_report_period(
         raise HTTPException(status_code=500, detail={"success": False, "error": "Database operation failed"})
     except Exception as e:
         logger.critical(f"Unexpected error in get_ramps_for_report_period: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"success": False, "error": "An unexpected error occurred"})
+
+
+@router.delete(
+    "/forecasts/{forecast_id}/months/{month_key}/ramp/{ramp_name}",
+    summary="Delete a named ramp",
+    response_description="Result of deleting all weeks of the named ramp for the given month"
+)
+async def delete_ramp_endpoint(
+    forecast_id: int,
+    month_key: str = Path(..., pattern=r"^\d{4}-\d{2}$", description="Target month in YYYY-MM format"),
+    ramp_name: str = Path(..., min_length=1, max_length=100, description="Name of the ramp to delete")
+):
+    """
+    Delete all RampModel rows for (forecast_id, month_key, ramp_name) and subtract
+    the ramp's contribution from ForecastModel. Idempotent — succeeds if ramp not found.
+    """
+    try:
+        result = delete_ramp_by_name(forecast_id, month_key, ramp_name)
+        return result
+    except HTTPException:
+        raise
+    except (ValueError, KeyError, AttributeError) as e:
+        logger.error(f"Validation error in delete_ramp: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "error": str(e), "recommendation": "Check forecast_id, month_key and ramp_name"}
+        )
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in delete_ramp: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"success": False, "error": "Database operation failed"})
+    except Exception as e:
+        logger.critical(f"Unexpected error in delete_ramp: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail={"success": False, "error": "An unexpected error occurred"})
