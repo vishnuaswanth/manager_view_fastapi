@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import SQLAlchemyError
 
 from code.api.dependencies import get_core_utils, get_logger
-from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp, _generate_ramp_name
+from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp, _generate_ramp_name, get_all_ramps_for_report_period
 
 logger = get_logger(__name__)
 
@@ -418,4 +418,40 @@ async def bulk_apply_ramp_endpoint(
         raise HTTPException(status_code=500, detail={"success": False, "error": "Database operation failed"})
     except Exception as e:
         logger.critical(f"Unexpected error in bulk_apply_ramp: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"success": False, "error": "An unexpected error occurred"})
+
+
+@router.get(
+    "/ramps/report/{year}/{month}",
+    summary="Bulk fetch all ramps for a report period",
+    response_description="All existing ramp data for forecast rows matching the report year and month"
+)
+async def get_ramps_for_report_period(
+    year: int = Path(..., ge=2000, le=2100, description="Report year, e.g. 2026"),
+    month: str = Path(..., min_length=3, max_length=9, description="Report month full name, e.g. 'January'")
+):
+    """
+    Fetch all existing ramp rows for every forecast record in a report period.
+
+    Resolves the relevant forecast IDs via a ForecastModel join (Year + Month),
+    deduplicates records from multiple uploads by keeping the highest-id record
+    per (main_lob, state, case_type) combo, then fetches all RampModel rows in
+    one query.
+
+    Used by the Campaign Manager modal to lazy-load existing ramps after opening.
+    """
+    try:
+        result = get_all_ramps_for_report_period(year, month)
+        return result
+    except (ValueError, KeyError, AttributeError) as e:
+        logger.error(f"Validation error in get_ramps_for_report_period: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail={"success": False, "error": str(e), "recommendation": "Check year and month parameters"}
+        )
+    except SQLAlchemyError as e:
+        logger.error(f"Database error in get_ramps_for_report_period: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail={"success": False, "error": "Database operation failed"})
+    except Exception as e:
+        logger.critical(f"Unexpected error in get_ramps_for_report_period: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail={"success": False, "error": "An unexpected error occurred"})

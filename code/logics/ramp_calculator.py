@@ -531,6 +531,95 @@ def get_applied_ramp(forecast_id: int, month_key: str) -> Dict:
         }
 
 
+def get_all_ramps_for_report_period(year: int, month: str) -> Dict:
+    """
+    Bulk-fetch all ramp rows for a report period in two queries.
+
+    Finds all ForecastModel records for the given Year/Month, deduplicates
+    them by (main_lob, state, case_type) keeping the highest id (most recent
+    upload), then fetches all RampModel rows for those ids in one IN query.
+
+    Args:
+        year: Report year (ForecastModel.Year)
+        month: Report month full name, e.g. "January" (ForecastModel.Month)
+
+    Returns:
+        Dict with success flag and flat list of ramp dicts, each containing:
+        {forecast_id, main_lob, state, case_type, month_key, ramp_name, weeks}
+    """
+    forecast_db_manager = core_utils.get_db_manager(ForecastModel, limit=100000, skip=0, select_columns=None)
+    ramp_db_manager = core_utils.get_db_manager(RampModel, limit=100000, skip=0, select_columns=None)
+
+    with forecast_db_manager.SessionLocal() as fsession:
+        forecast_rows = fsession.query(ForecastModel).filter(
+            ForecastModel.Year == year,
+            ForecastModel.Month == month,
+        ).all()
+
+        if not forecast_rows:
+            return {"success": True, "ramps": [], "forecast_count": 0}
+
+        # Deduplicate: for each (main_lob, state, case_type) combo keep highest id
+        best: Dict[tuple, object] = {}
+        for f in forecast_rows:
+            key = (
+                f.Centene_Capacity_Plan_Main_LOB or '',
+                f.Centene_Capacity_Plan_State or '',
+                f.Centene_Capacity_Plan_Case_Type or '',
+            )
+            if key not in best or f.id > best[key].id:
+                best[key] = f
+
+        id_to_meta = {
+            f.id: {
+                'main_lob': f.Centene_Capacity_Plan_Main_LOB or '',
+                'state': f.Centene_Capacity_Plan_State or '',
+                'case_type': f.Centene_Capacity_Plan_Case_Type or '',
+            }
+            for f in best.values()
+        }
+
+    forecast_ids = list(id_to_meta.keys())
+
+    with ramp_db_manager.SessionLocal() as rsession:
+        ramp_rows = rsession.query(RampModel).filter(
+            RampModel.forecast_id.in_(forecast_ids)
+        ).order_by(
+            RampModel.forecast_id,
+            RampModel.month_key,
+            RampModel.ramp_name,
+            RampModel.start_date,
+        ).all()
+
+        # Group into flat list: one entry per (forecast_id, month_key, ramp_name)
+        grouped: Dict[tuple, list] = defaultdict(list)
+        for r in ramp_rows:
+            key = (r.forecast_id, r.month_key, r.ramp_name)
+            grouped[key].append({
+                "week_label": r.week_label,
+                "start_date": r.start_date,
+                "end_date": r.end_date,
+                "working_days": r.working_days,
+                "ramp_percent": r.ramp_percent,
+                "employee_count": r.employee_count,
+            })
+
+        ramps = []
+        for (fid, mk, rname), weeks in grouped.items():
+            meta = id_to_meta.get(fid, {})
+            ramps.append({
+                "forecast_id": fid,
+                "main_lob": meta.get('main_lob', ''),
+                "state": meta.get('state', ''),
+                "case_type": meta.get('case_type', ''),
+                "month_key": mk,
+                "ramp_name": rname,
+                "weeks": weeks,
+            })
+
+    return {"success": True, "ramps": ramps, "forecast_count": len(id_to_meta)}
+
+
 def preview_ramp(
     forecast_id: int,
     month_key: str,
