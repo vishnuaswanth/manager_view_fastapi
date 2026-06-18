@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from code.api.dependencies import get_core_utils, get_logger
+from code.cache import data_cache
 from code.logics.ramp_calculator import apply_ramp, get_applied_ramp, preview_ramp, bulk_preview_ramp, bulk_apply_ramp, _generate_ramp_name, get_all_ramps_for_report_period, delete_ramp_by_name
 
 logger = get_logger(__name__)
@@ -358,6 +359,7 @@ async def apply_ramp_endpoint(
             user_notes=request.user_notes,
             ramp_name=ramp_name,
         )
+        data_cache.delete_pattern("llm:forecast:")
         return result
     except HTTPException:
         raise
@@ -458,6 +460,7 @@ async def bulk_apply_ramp_endpoint(
             if ramp.ramp_name is None:
                 ramp.ramp_name = _generate_ramp_name()
         result = bulk_apply_ramp(forecast_id, month_key, request.ramps, user_notes=request.user_notes)
+        data_cache.delete_pattern("llm:forecast:")
         return result
     except HTTPException:
         raise
@@ -527,6 +530,7 @@ async def delete_ramp_endpoint(
     """
     try:
         result = delete_ramp_by_name(forecast_id, month_key, ramp_name)
+        data_cache.delete_pattern("llm:forecast:")
         return result
     except HTTPException:
         raise
