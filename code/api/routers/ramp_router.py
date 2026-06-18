@@ -8,10 +8,11 @@ Provides three endpoints for weekly staffing ramp calculations on forecast rows:
 """
 
 import logging
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Path
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import SQLAlchemyError
 
 from code.api.dependencies import get_core_utils, get_logger
@@ -34,9 +35,38 @@ class RampWeek(BaseModel):
     label: str = Field(min_length=1, description="Week label, e.g. 'Jan-1-2026'")
     startDate: str = Field(min_length=10, description="Week start date 'YYYY-MM-DD'")
     endDate: str = Field(min_length=10, description="Week end date 'YYYY-MM-DD'")
-    workingDays: int = Field(ge=0, description="Number of working days in this week")
+    workingDays: int = Field(ge=1, description="Number of working days in this week (minimum 1)")
     rampPercent: float = Field(ge=0, le=100, description="Ramp percentage 0-100")
     rampEmployees: int = Field(ge=0, description="Number of employees ramping this week")
+
+    @model_validator(mode="after")
+    def validate_working_days_within_week_span(self) -> "RampWeek":
+        """
+        Validate workingDays does not exceed the actual calendar span of the week.
+
+        A week spanning startDate to endDate has (endDate - startDate).days + 1 total
+        calendar days. Working days cannot exceed that span — you cannot work more days
+        than the week contains.
+        """
+        try:
+            start = datetime.strptime(self.startDate, "%Y-%m-%d")
+            end   = datetime.strptime(self.endDate,   "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(
+                f"startDate '{self.startDate}' or endDate '{self.endDate}' "
+                "is not a valid YYYY-MM-DD date."
+            )
+        if end < start:
+            raise ValueError(
+                f"endDate '{self.endDate}' must not be before startDate '{self.startDate}'."
+            )
+        span_days = (end - start).days + 1
+        if self.workingDays > span_days:
+            raise ValueError(
+                f"workingDays ({self.workingDays}) exceeds the total calendar days "
+                f"in this week ({span_days}: {self.startDate} to {self.endDate})."
+            )
+        return self
 
 
 class RampPreviewRequest(BaseModel):
