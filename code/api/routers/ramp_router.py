@@ -8,7 +8,7 @@ Provides three endpoints for weekly staffing ramp calculations on forecast rows:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Path
@@ -42,29 +42,53 @@ class RampWeek(BaseModel):
     @model_validator(mode="after")
     def validate_working_days_within_week_span(self) -> "RampWeek":
         """
-        Validate workingDays does not exceed the actual calendar span of the week.
+        Validate workingDays <= min(span_days, mon_fri + 2).
 
-        A week spanning startDate to endDate has (endDate - startDate).days + 1 total
-        calendar days. Working days cannot exceed that span — you cannot work more days
-        than the week contains.
+        Agents can work up to Mon-Fri days + 2 weekend days, but cannot exceed
+        the actual calendar span of the week (partial weeks at month boundaries
+        are clipped so May 1-2 do not appear in an April week, for example).
         """
         try:
             start = datetime.strptime(self.startDate, "%Y-%m-%d")
             end   = datetime.strptime(self.endDate,   "%Y-%m-%d")
         except ValueError:
             raise ValueError(
-                f"startDate '{self.startDate}' or endDate '{self.endDate}' "
-                "is not a valid YYYY-MM-DD date."
+                f"Invalid date format — expected YYYY-MM-DD "
+                f"(got startDate='{self.startDate}', endDate='{self.endDate}')."
             )
         if end < start:
             raise ValueError(
                 f"endDate '{self.endDate}' must not be before startDate '{self.startDate}'."
             )
+
         span_days = (end - start).days + 1
-        if self.workingDays > span_days:
+        mon_fri   = sum(
+            1 for i in range(span_days)
+            if (start + timedelta(days=i)).weekday() < 5  # Monday=0 … Friday=4
+        )
+        max_allowed = min(span_days, mon_fri + 2)
+
+        if self.workingDays > max_allowed:
+            if span_days <= mon_fri + 2:
+                # Partial week — the calendar span is the binding constraint
+                if mon_fri == span_days:
+                    reason = (
+                        f"this week only spans {span_days} calendar day(s) "
+                        f"({self.startDate} to {self.endDate}) — "
+                        f"no weekend days fall within this period"
+                    )
+                else:
+                    reason = (
+                        f"this week spans {span_days} calendar day(s) "
+                        f"({self.startDate} to {self.endDate})"
+                    )
+            else:
+                # Full week — Mon-Fri + 2 is the binding constraint
+                reason = f"{mon_fri} Mon-Fri day(s) + 2 extra days for weekend shifts"
+
             raise ValueError(
-                f"workingDays ({self.workingDays}) exceeds the total calendar days "
-                f"in this week ({span_days}: {self.startDate} to {self.endDate})."
+                f"Working days ({self.workingDays}) exceeds the maximum of {max_allowed} "
+                f"for this week: {reason}."
             )
         return self
 
