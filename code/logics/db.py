@@ -1354,6 +1354,7 @@ class DBManager:
                 filters = [
                     or_(*[getattr(self.Model, field).ilike(f"%{keyword}%") for field in searchable_fields])
                     for keyword in keywords
+                    if keyword is not None
                 ]
 
                 query = query.filter(and_(*filters))
@@ -1558,9 +1559,9 @@ class DBManager:
         Model = self.Model
 
         # Trim incoming inputs; keep case as-is (case-sensitive comparison)
-        month_val = month.strip()
-        lob_val = main_lob.strip().lower()
-        case_type_val = case_type.strip().lower()
+        month_val = (month or '').strip()
+        lob_val = (main_lob or '').strip().lower()
+        case_type_val = (case_type or '').strip().lower()
 
         logger.info("[DBManager] sum_metrics start")
         logger.debug(
@@ -1581,13 +1582,21 @@ class DBManager:
                 # NOTE: func.trim() on columns ensures whitespace-insensitive match;
                 # it may bypass an index if one exists on those columns. For max performance,
                 # consider normalizing data at write-time or adding generated/functional indexes.
+                lob_filter = or_(
+                    func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)) == lob_val,
+                    func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)).like(lob_val + ' %')
+                )
+                case_type_filter = (
+                    [func.lower(func.trim(Model.Centene_Capacity_Plan_Case_Type)) == case_type_val]
+                    if case_type_val else []
+                )
                 result_row = (
                     session.query(*agg_exprs, rowcount_expr)
                     .filter(
                         func.trim(Model.Month) == month_val,
                         Model.Year == year,
-                        func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)) == lob_val,
-                        func.lower(func.trim(Model.Centene_Capacity_Plan_Case_Type)) == case_type_val,
+                        lob_filter,
+                        *case_type_filter,
                     )
                     .one()
                 )
