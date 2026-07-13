@@ -803,7 +803,12 @@ def preview_ramp(
     # Load existing rows for THIS ramp_name only
     with ramp_db_manager.SessionLocal() as session:
         old_rows_data = [
-            {"ramp_name": r.ramp_name, "employee_count": r.employee_count, "working_days": r.working_days}
+            {
+                "ramp_name": r.ramp_name,
+                "employee_count": r.employee_count,
+                "ramp_percent": r.ramp_percent,
+                "working_days": r.working_days,
+            }
             for r in session.query(RampModel).filter(
                 RampModel.forecast_id == forecast_id,
                 RampModel.month_key == month_key,
@@ -814,8 +819,8 @@ def preview_ramp(
     # Compute old contribution for this ramp_name
     old_fte = max((r["employee_count"] for r in old_rows_data), default=0)
     old_cap = sum(
-        r["employee_count"] * target_cph * config["work_hours"]
-        * (1 - config["shrinkage"]) * r["working_days"]
+        r["employee_count"] * (r["ramp_percent"] / 100) * target_cph
+        * config["work_hours"] * (1 - config["shrinkage"]) * r["working_days"]
         for r in old_rows_data
     )
 
@@ -951,7 +956,11 @@ def apply_ramp(
     # Read only THIS ramp_name's existing rows (other ramps are untouched)
     with ramp_db_manager.SessionLocal() as session:
         old_rows_data = [
-            {"employee_count": r.employee_count, "working_days": r.working_days}
+            {
+                "employee_count": r.employee_count,
+                "ramp_percent": r.ramp_percent,
+                "working_days": r.working_days,
+            }
             for r in session.query(RampModel).filter(
                 RampModel.forecast_id == forecast_id,
                 RampModel.month_key == month_key,
@@ -963,8 +972,8 @@ def apply_ramp(
 
     old_fte = max((r["employee_count"] for r in old_rows_data), default=0)
     old_cap = sum(
-        r["employee_count"] * target_cph * config["work_hours"]
-        * (1 - config["shrinkage"]) * r["working_days"]
+        r["employee_count"] * (r["ramp_percent"] / 100) * target_cph
+        * config["work_hours"] * (1 - config["shrinkage"]) * r["working_days"]
         for r in old_rows_data
     )
     new_cap, new_fte = _compute_ramp_totals(weeks, config, target_cph)
