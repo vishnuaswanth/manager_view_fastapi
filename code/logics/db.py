@@ -915,7 +915,7 @@ class DBManager:
             records = records[self.skip:self.skip+self.limit]
         else:
             total = query.count()
-            query = query.order_by(self.Model.id)
+            query = query.order_by(self.Model.id.desc())
             records = query.offset(self.skip).limit(self.limit)
             records = records.all()
             record_dicts = [OrderedDict((column.name, getattr(row, column.name)) for column in row.__table__.columns) for row in records]
@@ -935,7 +935,7 @@ class DBManager:
             # Step 1: delete existing rows if needed
             if replace and "Month" in df.columns and "Year" in df.columns:
 
-                month = df["Month"].iloc[0].strip().capitalize()
+                month = normalize_month(df["Month"].iloc[0])
                 year = int(df["Year"].iloc[0])
 
                 # month = df["Month"].iloc[0]
@@ -1385,6 +1385,8 @@ class DBManager:
             query = session.query(self.Model)
             if month and year:
                 query=self.filter_by_month_and_year(query, month, year)
+            if hasattr(self.Model, 'CreatedDateTime'):
+                query = query.order_by(self.Model.CreatedDateTime.desc())
             return self._execute_query(query)
 
     def get_distinct_values(
@@ -1582,9 +1584,12 @@ class DBManager:
                 # NOTE: func.trim() on columns ensures whitespace-insensitive match;
                 # it may bypass an index if one exists on those columns. For max performance,
                 # consider normalizing data at write-time or adding generated/functional indexes.
-                lob_filter = or_(
-                    func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)) == lob_val,
-                    func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)).like(lob_val + ' %')
+                lob_filter = (
+                    [or_(
+                        func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)) == lob_val,
+                        func.lower(func.trim(Model.Centene_Capacity_Plan_Main_LOB)).like(lob_val + ' %')
+                    )]
+                    if lob_val else []
                 )
                 case_type_filter = (
                     [func.lower(func.trim(Model.Centene_Capacity_Plan_Case_Type)) == case_type_val]
@@ -1595,7 +1600,7 @@ class DBManager:
                     .filter(
                         func.trim(Model.Month) == month_val,
                         Model.Year == year,
-                        lob_filter,
+                        *lob_filter,
                         *case_type_filter,
                     )
                     .one()
@@ -1641,8 +1646,8 @@ class DBManager:
         with self.SessionLocal() as session:
             try:
                 latest = session.query(self.Model.Month, self.Model.Year).order_by(
-                    self.Model.Year.desc(),
-                    self.Model.Month.desc()
+                    self.Model.CreatedDateTime.desc(),
+                    self.Model.id.desc()
                 ).first()
 
                 if not latest:
@@ -1993,12 +1998,16 @@ class DBManager:
                     forecast_months_record = session.query(ForecastMonthsModel).filter(
                         ForecastMonthsModel.UploadedFile == filename
                     ).order_by(
-                        ForecastMonthsModel.CreatedDateTime.desc()
+                        ForecastMonthsModel.CreatedDateTime.desc(),
+                        ForecastMonthsModel.id.desc()
                     ).first()
                 else:
                     query = session.query(ForecastModel)
                     query=self.filter_by_month_and_year(query, month, year)
-                    query = query.order_by(ForecastModel.UpdatedDateTime.desc()).limit(1)
+                    query = query.order_by(
+                        ForecastModel.UpdatedDateTime.desc(),
+                        ForecastModel.id.desc()
+                    ).limit(1)
                     forecast_record = query.first()
 
 
@@ -2009,7 +2018,8 @@ class DBManager:
                     forecast_months_record = session.query(ForecastMonthsModel).filter(
                         ForecastMonthsModel.UploadedFile == forecast_record.UploadedFile
                     ).order_by(
-                        ForecastMonthsModel.CreatedDateTime.desc()
+                        ForecastMonthsModel.CreatedDateTime.desc(),
+                        ForecastMonthsModel.id.desc()
                     ).first()
 
         except Exception as e:

@@ -319,7 +319,9 @@ def list_executions(
                     'uploaded_by': exec.UploadedBy,
                     'forecast_filename': exec.ForecastFilename,
                     'allocation_success_rate': exec.AllocationSuccessRate,
-                    'error_type': exec.ErrorType
+                    'error_type': exec.ErrorType,
+                    'records_processed': exec.RecordsProcessed,
+                    'records_failed': exec.RecordsFailed
                 })
 
             return records, total
