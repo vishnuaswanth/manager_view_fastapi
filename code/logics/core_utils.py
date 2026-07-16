@@ -790,9 +790,6 @@ class PreProcessing:
                 ['', 'nan']) == False]
             sub = sub.dropna(subset=['State', 'Month'])
 
-            if area_col is None:
-                sub['Area'] = sub['State'].apply(PreProcessing._categorize_area_by_state)
-
             # Numeric conversion for work-type value columns
             for col_name in work_type_cols.values():
                 if col_name in sub.columns:
@@ -943,21 +940,40 @@ class PreProcessing:
         area_col_idx = next(
             (i for i, col in enumerate(raw.columns) if col[2].strip().lower() == "area"), None
         )
+        month_col_idx = next(
+            (i for i, col in enumerate(raw.columns) if col[2].strip().lower() == "month"), None
+        )
+        state_col_idx = next(
+            (i for i, col in enumerate(raw.columns) if col[2].strip().lower() == "state"), None
+        )
 
-        df = raw.iloc[:, :area_col_idx + 1].copy() if area_col_idx is not None else raw.copy()
-        df = df.dropna(how="all").reset_index(drop=True)
-
-        month_col = next((c for c in df.columns if c[2].strip().lower() == "month"), None)
-        state_col  = next((c for c in df.columns if c[2].strip().lower() == "state"), None)
-
-        if not month_col or not state_col:
+        if month_col_idx is None or state_col_idx is None:
             raise HTTPException(
                 status_code=400,
                 detail=f"Sheet '{sheet_name}': 'Month' or 'State' column not found in 3rd header row.",
             )
 
+        forecast_col_idxs = [
+            i for i, col in enumerate(raw.columns) if col[2].strip().lower() == "forecast"
+        ]
+
+        # Table 1 (forecast data) ends at Area if present, otherwise at the last Forecast
+        # column. This deliberately excludes Table 2 (Capacity/Vendor HC), which repeats
+        # Year/Month/Mo ID/State column labels right after Table 1 and would otherwise make
+        # the MultiIndex non-unique when Area is missing and there's no boundary to stop at.
+        table1_end_idx = (
+            area_col_idx if area_col_idx is not None
+            else max(forecast_col_idxs + [month_col_idx, state_col_idx])
+        )
+
+        df = raw.iloc[:, :table1_end_idx + 1].copy()
+        df = df.dropna(how="all").reset_index(drop=True)
+
+        month_col = raw.columns[month_col_idx]
+        state_col = raw.columns[state_col_idx]
+
         if area_col_idx is not None:
-            area_col = df.columns[area_col_idx]
+            area_col = raw.columns[area_col_idx]
         else:
             area_col = ("", "", "Area")
             df[area_col] = df[state_col].apply(self._categorize_area_by_state)
