@@ -371,6 +371,11 @@ class PreProcessing:
         # "New Sheet Name":                "new_category",
     }
 
+    # States classified as "Global" when a sheet has no explicit Area column.
+    # All other state codes default to "Domestic". Used only as a fallback —
+    # never overrides an Area value actually present in the source file.
+    GLOBAL_STATES: frozenset = frozenset({'KS', 'WI', 'SC', 'OR', 'NC', 'IL', 'NV', 'NE', 'AR'})
+
     # Summary sheet is mandatory and handled independently of the registry above.
     FORECAST_SUMMARY_SHEET = "Forecast v Capacity Summary"
 
@@ -785,6 +790,9 @@ class PreProcessing:
                 ['', 'nan']) == False]
             sub = sub.dropna(subset=['State', 'Month'])
 
+            if area_col is None:
+                sub['Area'] = sub['State'].apply(PreProcessing._categorize_area_by_state)
+
             # Numeric conversion for work-type value columns
             for col_name in work_type_cols.values():
                 if col_name in sub.columns:
@@ -841,6 +849,12 @@ class PreProcessing:
         df = df.dropna(how='all', axis=1)
         df = df.dropna(how='all', axis=0).reset_index(drop=True)
         return df
+
+    @staticmethod
+    def _categorize_area_by_state(state) -> str:
+        """Classify a state code as 'Global' or 'Domestic' using GLOBAL_STATES.
+        Fallback only, used when a sheet has no Area column."""
+        return 'Global' if str(state).strip().upper() in PreProcessing.GLOBAL_STATES else 'Domestic'
 
     # ── Sheet handler methods ──────────────────────────────────────────────────
     # Each handler parses its Excel sheet AND produces ForecastModel-ready rows.
@@ -929,23 +943,27 @@ class PreProcessing:
         area_col_idx = next(
             (i for i, col in enumerate(raw.columns) if col[2].strip().lower() == "area"), None
         )
-        if area_col_idx is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Sheet '{sheet_name}': 'Area' column not found in 3rd header row.",
-            )
 
-        df = raw.iloc[:, :area_col_idx + 1].copy()
+        df = raw.iloc[:, :area_col_idx + 1].copy() if area_col_idx is not None else raw.copy()
         df = df.dropna(how="all").reset_index(drop=True)
 
         month_col = next((c for c in df.columns if c[2].strip().lower() == "month"), None)
         state_col  = next((c for c in df.columns if c[2].strip().lower() == "state"), None)
-        area_col   = df.columns[area_col_idx]
 
         if not month_col or not state_col:
             raise HTTPException(
                 status_code=400,
                 detail=f"Sheet '{sheet_name}': 'Month' or 'State' column not found in 3rd header row.",
+            )
+
+        if area_col_idx is not None:
+            area_col = df.columns[area_col_idx]
+        else:
+            area_col = ("", "", "Area")
+            df[area_col] = df[state_col].apply(self._categorize_area_by_state)
+            logger.info(
+                f"Sheet '{sheet_name}': 'Area' column not found — derived Global/Domestic "
+                "from State via GLOBAL_STATES fallback."
             )
 
         work_type_cols = [c for c in df.columns if c[2].strip().lower() == "forecast"]

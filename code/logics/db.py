@@ -32,6 +32,7 @@ from calendar import month_name, month_abbr
 from sqlalchemy.exc import SQLAlchemyError
 
 import logging
+import threading
 from code.logics.types import DataFrameJSON
 from code.logics.cache_utils import TTLCache
 # from code.settings import setup_logging
@@ -44,6 +45,60 @@ logger = logging.getLogger(__name__)
 # Example: When cascading through filters, Main_LOB query is reused across 4 endpoints
 # TTL: 5 minutes (same as filters_cache), Max: 50 entries
 _distinct_values_cache = TTLCache(max_size=50, ttl_seconds=300)
+
+# Cache of SQLAlchemy Engine + sessionmaker per database_url, so that repeated DBManager(...)
+# construction (which happens routinely across routers/CoreUtils) reuses one connection pool per
+# URL instead of leaking a brand-new Engine (and re-running metadata.create_all) on every call.
+#
+# Cache key is the raw database_url string (exact equality). This is safe because settings.py
+# resolves exactly one canonical URL per process from MODE (never regenerated per call) — if a
+# second/dynamic URL source is ever introduced, revisit this key (e.g. normalize via
+# sqlalchemy.engine.url.make_url()) since two textually-different strings for the same logical DB
+# would silently create two uncoordinated engines with no error.
+_engine_cache: Dict[str, Dict[str, object]] = {}
+_engine_cache_lock = threading.Lock()
+
+_BARE_INMEMORY_SQLITE_URLS = ("sqlite://", "sqlite:///:memory:")
+
+
+def _get_or_create_engine(database_url: str):
+    """Return the cached (engine, SessionLocal) pair for database_url, creating it on first use.
+    Prevents DBManager(...) — constructed fresh on every call throughout the app — from leaking
+    a new connection pool each time; all instances sharing a URL share one engine/pool instead.
+
+    Note: bare in-memory sqlite URLs are rejected (see guard below) because caching them would
+    silently share one in-memory DB across unrelated callers instead of giving each an isolated
+    instance. Tests needing an isolated in-memory DB must bypass __init__ via __new__ (see
+    code/logics/tests/test_forecast_months_upsert.py) or use a real temp-file URL instead.
+    """
+    if database_url in _BARE_INMEMORY_SQLITE_URLS:
+        raise ValueError(
+            f"DBManager cannot be constructed with a bare in-memory sqlite URL ({database_url!r}) "
+            "because its engine is now cached/shared per URL for the process lifetime, which would "
+            "silently share state across unrelated callers instead of isolating them. Use a "
+            "temp-file sqlite URL, or bypass __init__ via DBManager.__new__ for isolated tests."
+        )
+
+    cached = _engine_cache.get(database_url)
+    if cached is not None:
+        return cached["engine"], cached["SessionLocal"]
+
+    with _engine_cache_lock:
+        cached = _engine_cache.get(database_url)  # re-check: another thread may have populated it
+        if cached is not None:
+            return cached["engine"], cached["SessionLocal"]
+
+        connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+        engine = create_engine(database_url, connect_args=connect_args)
+        SQLModel.metadata.create_all(bind=engine)
+        session_local = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+        _engine_cache[database_url] = {"engine": engine, "SessionLocal": session_local}
+        logger.info(
+            f"[DBManager] Created new engine (dialect={engine.dialect.name}, "
+            f"cache_size={len(_engine_cache)})"
+        )
+        return engine, session_local
 
 
 def normalize_month(month_str):
@@ -833,12 +888,16 @@ class DBManager:
         """
         Initialize the DBManager with a database URL.
 
+        The Engine (and its bound sessionmaker) are cached per database_url at module scope via
+        _get_or_create_engine, so repeated DBManager(...) construction against the same URL reuses
+        one connection pool instead of creating (and leaking) a brand-new Engine every time. Only
+        the engine/session-factory are shared; Model/limit/skip/select_columns below remain
+        per-instance as before.
+
         Args:
             database_url (str): The database connection string.
         """
-        self.engine = create_engine(database_url, connect_args={"check_same_thread": False})
-        SQLModel.metadata.create_all(bind=self.engine)
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.engine, self.SessionLocal = _get_or_create_engine(database_url)
         self.Model = Model
         self.skip = skip
         self.limit = limit
