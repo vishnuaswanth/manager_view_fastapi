@@ -953,14 +953,27 @@ class PreProcessing:
                 detail=f"Sheet '{sheet_name}': 'Month' or 'State' column not found in 3rd header row.",
             )
 
+        # Table 2 (Capacity/Vendor HC) repeats Month/State column labels right after
+        # Table 1 ends. Find that repeat so forecast_col_idxs below can be bounded to
+        # Table 1 only — otherwise, if Table 2 also has a "Forecast"-labeled column,
+        # it gets pulled into work_type_cols and every row is parsed and emitted twice.
+        table2_start_idx = next(
+            (i for i, col in enumerate(raw.columns)
+             if i > max(month_col_idx, state_col_idx) and col[2].strip().lower() in ("month", "state")),
+            None
+        )
+
         forecast_col_idxs = [
-            i for i, col in enumerate(raw.columns) if col[2].strip().lower() == "forecast"
+            i for i, col in enumerate(raw.columns)
+            if col[2].strip().lower() == "forecast"
+            and (table2_start_idx is None or i < table2_start_idx)
         ]
 
         # Table 1 (forecast data) ends at Area if present, otherwise at the last Forecast
-        # column. This deliberately excludes Table 2 (Capacity/Vendor HC), which repeats
-        # Year/Month/Mo ID/State column labels right after Table 1 and would otherwise make
-        # the MultiIndex non-unique when Area is missing and there's no boundary to stop at.
+        # column (now bounded to before Table 2). This deliberately excludes Table 2
+        # (Capacity/Vendor HC), which repeats Year/Month/Mo ID/State column labels right
+        # after Table 1 and would otherwise make the MultiIndex non-unique when Area is
+        # missing and there's no boundary to stop at.
         table1_end_idx = (
             area_col_idx if area_col_idx is not None
             else max(forecast_col_idxs + [month_col_idx, state_col_idx])
@@ -1455,7 +1468,22 @@ class PreProcessing:
         ]
         if not sheets:
             return pd.DataFrame(columns=self.MAPPING['forecast'])
-        return pd.concat(sheets, ignore_index=True)
+
+        combined = pd.concat(sheets, ignore_index=True)
+
+        key_cols = [
+            'Centene_Capacity_Plan_Main_LOB', 'Centene_Capacity_Plan_State',
+            'Centene_Capacity_Plan_Case_Type', 'Centene_Capacity_Plan_Call_Type_ID',
+        ]
+        dup_count = combined.duplicated(subset=key_cols).sum()
+        if dup_count:
+            logger.warning(
+                f"extract_forecast_demand: dropped {dup_count} duplicate forecast rows "
+                "(same LOB/State/CaseType/CallTypeID)"
+            )
+            combined = combined.drop_duplicates(subset=key_cols, keep='first').reset_index(drop=True)
+
+        return combined
 
 
 def insert_file_id(db_manager:DBManager, file_id):

@@ -215,6 +215,61 @@ class TestExtractForecastDemandValues:
         assert not df.empty
 
 
+# ─── Tests: extract_forecast_demand — duplicate row safety net ────────────────
+
+class TestExtractForecastDemandDedup:
+    """Guards against a parser bug (e.g. the MMP fallback boundary leak) emitting
+    the same logical (LOB, State, CaseType, CallTypeID) row more than once."""
+
+    def test_duplicate_rows_across_sheets_are_dropped(self):
+        dfs = {
+            "amisys_mmp":       _make_forecast_df("Amisys MMP Domestic", state="MI", work_type="FTC MCARE", forecast_val=50),
+            "amisys_mmp_dup":   _make_forecast_df("Amisys MMP Domestic", state="MI", work_type="FTC MCARE", forecast_val=50),
+        }
+        df = _pre().extract_forecast_demand(dfs)
+        assert len(df) == 1
+
+    def test_duplicate_rows_within_a_single_sheet_are_dropped(self):
+        pre = _pre()
+        cols = pre.MAPPING["forecast"]
+        row = {
+            "Centene_Capacity_Plan_Main_LOB": "Amisys MMP Domestic",
+            "Centene_Capacity_Plan_State": "MI",
+            "Centene_Capacity_Plan_Case_Type": "FTC MCARE",
+            "Centene_Capacity_Plan_Call_Type_ID": "Amisys MMP Domestic ftc mcare",
+            "Centene_Capacity_Plan_Target_CPH": 0.0,
+        }
+        for i in range(1, 7):
+            row[f"Client_Forecast_Month{i}"] = 50
+            row[f"FTE_Required_Month{i}"] = 0
+            row[f"FTE_Avail_Month{i}"] = 0
+            row[f"Capacity_Month{i}"] = 0
+        doubled_sheet = pd.DataFrame([row, row], columns=cols)  # same row twice, e.g. Table 2 leak
+
+        df = pre.extract_forecast_demand({"amisys_mmp": doubled_sheet})
+        assert len(df) == 1
+
+    def test_dedup_keeps_first_and_logs_warning(self, caplog):
+        dfs = {
+            "amisys_mmp":     _make_forecast_df("Amisys MMP Domestic", state="MI", work_type="FTC MCARE", forecast_val=50),
+            "amisys_mmp_dup": _make_forecast_df("Amisys MMP Domestic", state="MI", work_type="FTC MCARE", forecast_val=999),
+        }
+        with caplog.at_level("WARNING"):
+            df = _pre().extract_forecast_demand(dfs)
+        assert len(df) == 1
+        assert df["Client_Forecast_Month1"].iloc[0] == 50  # first occurrence kept
+        assert any("duplicate forecast rows" in rec.message for rec in caplog.records)
+
+    def test_distinct_rows_are_not_dropped(self):
+        """Different LOB/State/CaseType/CallTypeID combos must not be treated as dupes."""
+        dfs = {
+            "amisys_medicaid": _make_forecast_df("Amisys Medicaid DOMESTIC", state="TX", forecast_val=100),
+            "amisys_mmp":      _make_forecast_df("Amisys MMP Domestic",      state="MI", forecast_val=50),
+        }
+        df = _pre().extract_forecast_demand(dfs)
+        assert len(df) == 2
+
+
 # ─── Tests: get_month_year — filename parsing ─────────────────────────────────
 
 class TestGetMonthYear:
