@@ -142,7 +142,19 @@ def get_reallocation_data(
         if case_types:
             query = query.filter(ForecastModel.Centene_Capacity_Plan_Case_Type.in_(case_types))
 
-        records = query.all()
+        records = query.order_by(ForecastModel.id.asc()).all()
+
+        # Dedupe by business key (Main_LOB, State, Case_Type) in case duplicate
+        # rows exist for the same month/year; keep the highest-id (latest) row.
+        deduped = {}
+        for r in records:
+            key = (
+                r.Centene_Capacity_Plan_Main_LOB,
+                r.Centene_Capacity_Plan_State,
+                r.Centene_Capacity_Plan_Case_Type,
+            )
+            deduped[key] = r
+        records = list(deduped.values())
 
         if not records:
             raise ValueError(f"No forecast data found for {month} {year}")
@@ -237,7 +249,7 @@ def calculate_reallocation_preview(
         db_records = session.query(ForecastModel).filter(
             ForecastModel.Month == month,
             ForecastModel.Year == year
-        ).all()
+        ).order_by(ForecastModel.id.asc()).all()
         db_lookup = {
             (r.Centene_Capacity_Plan_Main_LOB, r.Centene_Capacity_Plan_State, r.Centene_Capacity_Plan_Case_Type): r
             for r in db_records

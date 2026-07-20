@@ -30,6 +30,7 @@ from code.logics.export_utils import (
     download_forecast_excel
 )
 from code.logics.allocation import process_files
+from code.logics.allocation_tracker import list_executions
 from code.logics.allocation_validity import invalidate_allocation
 from code.logics.db import (
     InValidSearchException,
@@ -361,6 +362,27 @@ async def upload_file(
 
     # ============= FORECAST: Process and trigger allocation =============
     elif file_id == "forecast":
+        # Reject a new run if one is already in flight for this month/year.
+        # The forecast flow does a synchronous demand pre-population insert
+        # followed by an async background allocation task that later replaces
+        # those rows; overlapping runs race on that replace-then-insert and
+        # can leave duplicate ForecastModel rows behind.
+        _active_executions, _active_total = list_executions(
+            month=month_year["Month"],
+            year=int(month_year["Year"]),
+            status=["PENDING", "IN_PROGRESS"],
+            limit=1
+        )
+        if _active_total > 0:
+            raise HTTPException(
+                status_code=409,
+                detail=error_response(
+                    f"A forecast run for {month_year['Month']} {month_year['Year']} is already "
+                    "in progress. Please wait for it to complete before uploading again.",
+                    {"month": month_year["Month"], "year": int(month_year["Year"])}
+                )
+            )
+
         try:
             dfs = pre_processor.process_forecast_file(
                 io.BytesIO(contents),
