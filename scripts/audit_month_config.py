@@ -18,10 +18,11 @@ that doesn't retroactively fix rows written before that check existed, or rows
 written by some other path (a script, a direct DB edit, etc.). This script finds
 those rows.
 
-This script is READ-ONLY - it does not modify any data. Review its report and fix
-flagged rows deliberately (e.g. via the FastAPI update endpoint, or a one-off SQL
-UPDATE for the specific bad value), since duplicates in particular may need a human
-decision about which row is correct rather than a blind rewrite.
+By default this script is READ-ONLY - it only reports. Pass --execute to delete the
+rows that fail the per-row canonical checks below. Pairing problems (missing or
+duplicate Domestic/Global rows) are never auto-deleted, even with --execute, since
+picking which duplicate row is correct needs a human decision - those are reported
+only, same as before.
 
 Checks performed, per row:
     - Month is an exact, case-sensitive match against one of the 12 canonical full
@@ -36,6 +37,7 @@ Checks performed, per (Month, Year) group:
 Usage:
     python scripts/audit_month_config.py
     python scripts/audit_month_config.py --month February --year 2026
+    python scripts/audit_month_config.py --execute
 """
 
 import argparse
@@ -127,6 +129,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--month", type=str, default=None, help="Scope to a single Month value as stored, e.g. 'February'")
     parser.add_argument("--year", type=int, default=None, help="Scope to a single year, e.g. 2026")
+    parser.add_argument("--execute", action="store_true", help="Delete rows with per-row field inconsistencies (default is report-only)")
     args = parser.parse_args()
 
     db_manager = core_utils.get_db_manager(MonthConfigurationModel)
@@ -141,36 +144,63 @@ def main():
             MonthConfigurationModel.Year, MonthConfigurationModel.Month, MonthConfigurationModel.WorkType
         ).all()
 
-    if not records:
-        print("No MonthConfigurationModel rows found for the given scope.")
-        return
+        if not records:
+            print("No MonthConfigurationModel rows found for the given scope.")
+            return
 
-    print(f"Scanned {len(records)} row(s).\n")
+        print(f"Scanned {len(records)} row(s).\n")
 
-    row_problem_count = 0
-    for record in records:
-        problems = audit_row(record)
-        if problems:
-            row_problem_count += 1
-            print(f"[Row id={record.id}] Month={record.Month!r} Year={record.Year!r} WorkType={record.WorkType!r}")
-            for p in problems:
-                print(f"    - {p}")
+        row_problem_ids = []
+        for record in records:
+            problems = audit_row(record)
+            if problems:
+                row_problem_ids.append(record.id)
+                print(f"[Row id={record.id}] Month={record.Month!r} Year={record.Year!r} WorkType={record.WorkType!r}")
+                for p in problems:
+                    print(f"    - {p}")
 
-    pair_problems = audit_pairs(records)
+        pair_problems = audit_pairs(records)
 
-    if row_problem_count == 0:
-        print("No per-row field inconsistencies found.")
-    else:
-        print(f"\n{row_problem_count} row(s) with field inconsistencies.")
+        if not row_problem_ids:
+            print("No per-row field inconsistencies found.")
+        else:
+            print(f"\n{len(row_problem_ids)} row(s) with field inconsistencies.")
 
-    if pair_problems:
-        print(f"\n{len(pair_problems)} (Month, Year) group(s) not properly paired (need exactly one Domestic + one Global):")
-        for month, year, work_types, ids in pair_problems:
-            print(f"    - Month={month!r} Year={year!r}: work_types={work_types} row ids={ids}")
-    else:
-        print("\nAll (Month, Year) groups are properly paired.")
+        if pair_problems:
+            print(f"\n{len(pair_problems)} (Month, Year) group(s) not properly paired (need exactly one Domestic + one Global):")
+            for month, year, work_types, ids in pair_problems:
+                print(f"    - Month={month!r} Year={year!r}: work_types={work_types} row ids={ids}")
+        else:
+            print("\nAll (Month, Year) groups are properly paired.")
 
-    print("\nThis script made no changes. Review the rows above and fix deliberately.")
+        if not row_problem_ids:
+            print("\nNo changes made.")
+            return
+
+        if not args.execute:
+            print("\nThis script made no changes. Re-run with --execute to delete the "
+                  "non-canonical rows listed above, or fix them deliberately.")
+            return
+
+        confirm = input(
+            f"\nAbout to delete {len(row_problem_ids)} MonthConfigurationModel row(s) "
+            f"(ids={row_problem_ids}) against database mode '{MODE}'. "
+            "Make sure you have a backup. Type 'yes' to continue: "
+        )
+        if confirm.strip().lower() != "yes":
+            print("Aborted — no changes made.")
+            return
+
+        try:
+            session.query(MonthConfigurationModel).filter(
+                MonthConfigurationModel.id.in_(row_problem_ids)
+            ).delete(synchronize_session=False)
+            session.commit()
+            print(f"\nDone. Deleted {len(row_problem_ids)} non-canonical row(s).")
+        except Exception as e:
+            session.rollback()
+            print(f"\nError during deletion, rolled back: {e}")
+            raise
 
 
 if __name__ == "__main__":
