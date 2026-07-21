@@ -16,6 +16,7 @@ from code.logics.month_config_utils import (
     get_month_configuration,
     update_month_configuration,
     delete_month_configuration,
+    delete_month_configuration_pair,
     seed_initial_data,
     validate_all_pairs
 )
@@ -275,6 +276,54 @@ def update_month_configuration_endpoint(
         raise
     except Exception as e:
         logger.error(f"Error updating month configuration: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=error_response("Internal server error", str(e))
+        )
+
+
+@router.delete("/api/month-config/by-month")
+def delete_month_configuration_pair_endpoint(month: str, year: int):
+    """
+    Delete an entire month-year configuration (both Domestic and Global rows) in
+    one atomic operation.
+
+    This is the primary way to remove a month configuration - since Domestic and
+    Global are meant to always exist as a pair, deleting them together avoids the
+    orphan-prevention error that a single-row DELETE /api/month-config/{config_id}
+    would hit.
+
+    NOTE: registered before /api/month-config/{config_id} so the literal
+    "by-month" path segment is matched here rather than treated as a config_id.
+
+    Query Parameters:
+        month: Month name (e.g., "February")
+        year: Year (e.g., 2026)
+
+    Returns:
+        Success/error message
+
+    Error Codes:
+        404: No configuration found for that month-year
+        500: Internal server error
+    """
+    try:
+        success, message = delete_month_configuration_pair(month=month, year=year)
+
+        if success:
+            invalidate_month_config_cache()
+            logger.info(f"[Cache] Invalidated month config cache after pair deletion ({month} {year})")
+            return success_response(message=message)
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=error_response(message)
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting month configuration pair: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=error_response("Internal server error", str(e))

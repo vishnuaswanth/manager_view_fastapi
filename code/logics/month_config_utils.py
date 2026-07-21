@@ -14,8 +14,16 @@ from sqlalchemy import and_
 from code.logics.db import MonthConfigurationModel
 from code.settings import MODE, SQLITE_DATABASE_URL, MSSQL_DATABASE_URL
 from code.logics.core_utils import CoreUtils
+from code.logics.month_code_utils import get_month_abbreviation_map
 
 logger = logging.getLogger(__name__)
+
+# Single source of truth for valid month names - shared with the "Apr-2026" style
+# month-code parsing used by the forecast/allocation pipeline (month_code_utils.py).
+VALID_MONTH_NAMES = set(get_month_abbreviation_map().values())
+VALID_WORK_TYPES = {"Domestic", "Global"}
+MIN_CONFIG_YEAR = 2020
+MAX_CONFIG_YEAR = 2100
 
 # Determine database URL based on mode
 if MODE.upper() == "DEBUG":
@@ -57,8 +65,23 @@ def add_month_configuration(
     """
     try:
         # Validate inputs
-        if work_type not in ["Domestic", "Global"]:
+        if work_type not in VALID_WORK_TYPES:
             return False, f"Invalid work_type. Must be 'Domestic' or 'Global', got '{work_type}'"
+
+        # STRICT month validation: normalize casing/whitespace, then reject anything
+        # that isn't one of the 12 canonical full month names (e.g. "Feb", "february ",
+        # or garbage input). Previously this only normalized without rejecting, which
+        # let malformed values (like an abbreviation) silently get stored - those rows
+        # then fail exact-match lookups elsewhere (UI filters, allocation lookups).
+        month_normalized = str(month).strip().capitalize()
+        if month_normalized not in VALID_MONTH_NAMES:
+            return False, (
+                f"Invalid month name: '{month}'. Must be a full month name "
+                f"(e.g. 'February'), not an abbreviation."
+            )
+
+        if not (MIN_CONFIG_YEAR <= year <= MAX_CONFIG_YEAR):
+            return False, f"Year must be between {MIN_CONFIG_YEAR} and {MAX_CONFIG_YEAR}, got {year}"
 
         if not (0.0 <= occupancy <= 1.0):
             return False, f"Occupancy must be between 0.0 and 1.0, got {occupancy}"
@@ -74,7 +97,6 @@ def add_month_configuration(
 
         # PAIRING VALIDATION: Check if this configuration would orphan or be orphaned
         # For data integrity, both Domestic and Global must exist together for any month-year
-        month_normalized = month.strip().capitalize()
         current_count = count_configs_for_month_year(month_normalized, year)
 
         if current_count == 1:
@@ -98,7 +120,7 @@ def add_month_configuration(
 
         # Create DataFrame for database insertion
         df = pd.DataFrame([{
-            'Month': month.strip().capitalize(),
+            'Month': month_normalized,
             'Year': year,
             'WorkType': work_type,
             'WorkingDays': working_days,
@@ -490,6 +512,53 @@ def delete_month_configuration(config_id: int, allow_orphan: bool = False) -> Tu
 
     except Exception as e:
         error_msg = f"Error deleting configuration: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return False, error_msg
+
+
+def delete_month_configuration_pair(month: str, year: int) -> Tuple[bool, str]:
+    """
+    Delete an entire month-year configuration (both Domestic and Global rows)
+    in one atomic operation.
+
+    Month-year configurations are meant to exist as a Domestic+Global pair, so
+    deleting them together avoids the orphan-prevention check in
+    delete_month_configuration() and the multi-step "delete one, force delete
+    the other" workflow that requires.
+
+    Args:
+        month: Month name (e.g., "February")
+        year: Year (e.g., 2026)
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    try:
+        month_normalized = month.strip().capitalize()
+
+        db_manager = core_utils.get_db_manager(MonthConfigurationModel, limit=10, skip=0, select_columns=None)
+
+        with db_manager.SessionLocal() as session:
+            configs = session.query(MonthConfigurationModel).filter(
+                and_(
+                    MonthConfigurationModel.Month == month_normalized,
+                    MonthConfigurationModel.Year == year
+                )
+            ).all()
+
+            if not configs:
+                return False, f"No configuration found for {month_normalized} {year}"
+
+            deleted_count = len(configs)
+            for config in configs:
+                session.delete(config)
+            session.commit()
+
+            logger.info(f"Successfully deleted {deleted_count} configuration(s) for {month_normalized} {year}")
+            return True, f"Deleted {deleted_count} configuration(s) for {month_normalized} {year}"
+
+    except Exception as e:
+        error_msg = f"Error deleting configuration for {month} {year}: {str(e)}"
         logger.error(error_msg, exc_info=True)
         return False, error_msg
 
